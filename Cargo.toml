@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/uvp-model",
+  "crates/uvp-hook-dsl",
+  "crates/uvp-ir",
+  "crates/uvp-compiler",
+  "crates/uvp-replay",
+  "crates/uvp-ffi",
+  "crates/uvp-node",
+  "crates/uvp-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/conucleus/uvp-core"
+
+[workspace.dependencies]
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde", "std"] }
+clap = { version = "4.5.53", features = ["derive"] }
+sha3 = "0.10.8"
+napi = { version = "3.5.2", default-features = false, features = ["napi4"] }
+napi-derive = "3.3.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.17"
+uvp-compiler = { path = "crates/uvp-compiler" }
+uvp-hook-dsl = { path = "crates/uvp-hook-dsl" }
+uvp-ir = { path = "crates/uvp-ir" }
+uvp-model = { path = "crates/uvp-model" }
+uvp-replay = { path = "crates/uvp-replay" }
