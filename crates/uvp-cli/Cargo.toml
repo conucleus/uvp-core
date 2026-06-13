@@ -1,0 +1,17 @@
+[package]
+name = "uvp-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "uvp-core"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde_json.workspace = true
+uvp-compiler.workspace = true
+uvp-hook-dsl.workspace = true
+uvp-replay.workspace = true

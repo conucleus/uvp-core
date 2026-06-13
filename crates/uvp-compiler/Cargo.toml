@@ -1,0 +1,14 @@
+[package]
+name = "uvp-compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uvp-hook-dsl.workspace = true
+uvp-ir.workspace = true
+uvp-model.workspace = true

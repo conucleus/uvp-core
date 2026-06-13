@@ -1,0 +1,68 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.private.env
+
+# Logs and temporary files
+logs/
+*.log
+*.tmp
+tmp/
+temp/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# C / FFI build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.lib
+*.dSYM/
+
+# Node / N-API / WASM tooling
+node_modules/
+dist/
+build/
+coverage/
+pkg/
+*.node
+
+# Test artifacts
+test-results/
+playwright-report/
+
+# Local AI assistant files
+.agents/
+agent.md
+agent_*.md
+agent-*.md
+AGENTS_*.md
+AGENTS-*.md
+CLAUDE*.md
+claude*.md
+.claude/
+.codex/
+.cursor/
