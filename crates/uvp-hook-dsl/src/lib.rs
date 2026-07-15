@@ -324,7 +324,7 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
             "empty source is only allowed for OUTSIDE or OUTSOURCE hooks".to_string(),
         ));
     }
-    reject_unsupported_syntax(condition_raw)?;
+    reject_unsupported_operators(condition_raw)?;
     let mut parser = Parser::new(condition_raw, profile);
     let condition = parser.parse()?;
     Ok(HookExpr {
@@ -338,12 +338,7 @@ fn starts_external(value: &str) -> bool {
     value.starts_with("OUTSIDE") || value.starts_with("OUTSOURCE")
 }
 
-fn reject_unsupported_syntax(condition: &str) -> Result<()> {
-    if condition.contains("+T") {
-        return Err(HookError::Message(format!(
-            "duration is required after + in {condition:?}"
-        )));
-    }
+fn reject_unsupported_operators(condition: &str) -> Result<()> {
     if condition.contains("&&") {
         return Err(HookError::Message(format!(
             "unsupported operator && in {condition:?}"
