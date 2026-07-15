@@ -268,7 +268,7 @@
     { "name": "empty signal segment", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task..cmp", "messageContains": "task.stage.signal" },
     { "name": "pure absence has no positive anchor", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::~task.cancel.cmp", "messageContains": "positive signal anchor" },
     { "name": "or branch must have positive anchor", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task.ok.cmp | ~task.cancel.cmp", "messageContains": "each OR branch" },
-    { "name": "legacy plus T is rejected", "profile": "cloud_compat", "hookName": "HOOK", "hook": "buyer::task.pay.cmp+T", "messageContains": "legacy +T" },
+    { "name": "plus T without duration is rejected", "profile": "cloud_compat", "hookName": "HOOK", "hook": "buyer::task.pay.cmp+T", "messageContains": "duration is required after +" },
     { "name": "zero delay is rejected", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task.pay.cmp +0s", "messageContains": "invalid duration" },
     { "name": "nested external is rejected", "profile": "cloud_compat", "hookName": "HOOK", "hook": "::OUTSOURCE@(seller::OUTSIDE@(buyer::task.main.cmp))", "messageContains": "nested OUTSIDE/OUTSOURCE" }
   ],

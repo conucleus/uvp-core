@@ -294,7 +294,7 @@ pub fn eval_hook(req: EvalHookRequest) -> Result<EvalHookOutput> {
         );
     }
 
-    let result = eval_expr(&hook.condition, &hook.source, &signals, now, profile)?;
+    let result = eval_expr(&hook.condition, &hook.source, &signals, now)?;
     Ok(EvalHookOutput {
         uvp_core_version: CORE_VERSION,
         semantic_version: SEMANTIC_VERSION,
@@ -324,7 +324,7 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
             "empty source is only allowed for OUTSIDE or OUTSOURCE hooks".to_string(),
         ));
     }
-    reject_unsupported_legacy_syntax(condition_raw)?;
+    reject_unsupported_syntax(condition_raw)?;
     let mut parser = Parser::new(condition_raw, profile);
     let condition = parser.parse()?;
     Ok(HookExpr {
@@ -338,10 +338,10 @@ fn starts_external(value: &str) -> bool {
     value.starts_with("OUTSIDE") || value.starts_with("OUTSOURCE")
 }
 
-fn reject_unsupported_legacy_syntax(condition: &str) -> Result<()> {
+fn reject_unsupported_syntax(condition: &str) -> Result<()> {
     if condition.contains("+T") {
         return Err(HookError::Message(format!(
-            "legacy +T syntax is not supported: {condition:?}"
+            "duration is required after + in {condition:?}"
         )));
     }
     if condition.contains("&&") {
@@ -821,19 +821,18 @@ fn eval_expr(
     source: &str,
     signals: &BTreeMap<String, SignalEntry>,
     now: DateTime<Utc>,
-    profile: Profile,
 ) -> Result<InternalEval> {
     match expr {
         Expr::Signal(signal) => eval_signal(source, signal, signals),
         Expr::External { mode, target } => {
             if let Some(target) = target {
-                eval_expr(&target.condition, &target.source, signals, now, profile)
+                eval_expr(&target.condition, &target.source, signals, now)
             } else {
                 eval_signal(source, mode.as_str(), signals)
             }
         }
         Expr::Not(inner) => {
-            let evaluated = eval_expr(inner, source, signals, now, profile)?;
+            let evaluated = eval_expr(inner, source, signals, now)?;
             match evaluated.state {
                 EvalState::Ready | EvalState::Wait => Ok(InternalEval {
                     state: EvalState::Impossible,
@@ -857,7 +856,7 @@ fn eval_expr(
             duration_seconds,
             ..
         } => {
-            let evaluated = eval_expr(expr, source, signals, now, profile)?;
+            let evaluated = eval_expr(expr, source, signals, now)?;
             match evaluated.state {
                 EvalState::Impossible | EvalState::NeedsMore => Ok(evaluated),
                 EvalState::Ready | EvalState::Wait => {
@@ -893,7 +892,7 @@ fn eval_expr(
             let mut waits = Vec::new();
             let mut needs_more = false;
             for term in terms {
-                let evaluated = eval_expr(term, source, signals, now, profile)?;
+                let evaluated = eval_expr(term, source, signals, now)?;
                 match evaluated.state {
                     EvalState::Impossible => return Ok(evaluated),
                     EvalState::NeedsMore => needs_more = true,
@@ -933,7 +932,7 @@ fn eval_expr(
             let mut has_open = false;
             let mut all_impossible = true;
             for term in terms {
-                let evaluated = eval_expr(term, source, signals, now, profile)?;
+                let evaluated = eval_expr(term, source, signals, now)?;
                 match evaluated.state {
                     EvalState::Ready => return Ok(evaluated),
                     EvalState::Wait => {

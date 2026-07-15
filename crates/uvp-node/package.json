@@ -14,5 +14,12 @@
     "index.cjs",
     "index.d.ts",
     "*.node"
-  ]
+  ],
+  "scripts": {
+    "build": "node ./scripts/build-native.mjs",
+    "build:release": "node ./scripts/build-native.mjs --release",
+    "pretest": "node ./scripts/build-native.mjs",
+    "prepack": "node ./scripts/build-native.mjs --release",
+    "test": "node --test ./test/*.test.mjs"
+  }
 }
