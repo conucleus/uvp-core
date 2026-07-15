@@ -1,0 +1,41 @@
+name: uvp-core-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  node-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build native package
+        working-directory: crates/uvp-node
+        run: node ./scripts/build-native.mjs --release
+      - name: Test native package
+        working-directory: crates/uvp-node
+        run: node --test ./test/*.test.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uvp-core-node-${{ runner.os }}-${{ runner.arch }}
+          path: crates/uvp-node/uvp_node.node
+          if-no-files-found: error

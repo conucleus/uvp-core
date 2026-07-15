@@ -5,6 +5,9 @@ const here = __dirname;
 const candidates = [
   join(here, "uvp_node.node"),
   join(here, "uvp-core-node.node"),
+  join(here, "../../target/release/libuvp_node.dylib"),
+  join(here, "../../target/release/libuvp_node.so"),
+  join(here, "../../target/release/uvp_node.dll"),
   join(here, "../../target/debug/libuvp_node.dylib"),
   join(here, "../../target/debug/libuvp_node.so"),
   join(here, "../../target/debug/uvp_node.dll")
@@ -22,7 +25,7 @@ for (const candidate of candidates) {
 }
 
 if (!native) {
-  throw new Error("uvp-core native module is not built; run `cargo build -p uvp-node`");
+  throw new Error("uvp-core native module is not built; run `pnpm --filter @conucleus/uvp-core-node build`");
 }
 
 function unwrap(raw) {
@@ -52,4 +55,8 @@ exports.replay = function replay(request) {
 
 exports.version = function version() {
   return native.version();
+};
+
+exports.semanticVersion = function semanticVersion() {
+  return native.semanticVersion();
 };
