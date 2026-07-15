@@ -24,8 +24,3 @@ pub fn replay_json(request_json: String) -> String {
 pub fn version() -> String {
     uvp_hook_dsl::CORE_VERSION.to_string()
 }
-
-#[napi]
-pub fn semantic_version() -> String {
-    uvp_hook_dsl::SEMANTIC_VERSION.to_string()
-}

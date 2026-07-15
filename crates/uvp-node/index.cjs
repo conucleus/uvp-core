@@ -56,7 +56,3 @@ exports.replay = function replay(request) {
 exports.version = function version() {
   return native.version();
 };
-
-exports.semanticVersion = function semanticVersion() {
-  return native.semanticVersion();
-};
