@@ -63,21 +63,6 @@
       }
     },
     {
-      "name": "cloud outside maps empty source to hook name",
-      "profile": "cloud_compat",
-      "hookName": "LINK_READY",
-      "hook": "::OUTSIDE",
-      "expect": {
-        "source": "",
-        "mode": "outside",
-        "runtimeCondition": "LINK_READY",
-        "normalizedExpression": "::OUTSIDE",
-        "dependencies": [
-          { "kind": "positive", "source": "", "signalName": "LINK_READY" }
-        ]
-      }
-    },
-    {
       "name": "cloud outside target keeps target source",
       "profile": "cloud_compat",
       "hookName": "REG_CHILD",
@@ -263,6 +248,8 @@
     { "name": "missing source separator", "profile": "evm_strict", "hookName": "HOOK", "hook": "task.main.cmp", "messageContains": "must contain" },
     { "name": "empty source only allowed for external hooks", "profile": "cloud_compat", "hookName": "HOOK", "hook": "::task.main.cmp", "messageContains": "empty source is only allowed" },
     { "name": "single segment short name", "profile": "cloud_compat", "hookName": "HOOK", "hook": "buyer::cmp", "messageContains": "task.stage.signal" },
+    { "name": "bare outside is removed", "profile": "cloud_compat", "hookName": "HOOK", "hook": "::OUTSIDE", "messageContains": "no longer supported" },
+    { "name": "bare outsource is removed", "profile": "cloud_compat", "hookName": "HOOK", "hook": "buyer::OUTSOURCE", "messageContains": "no longer supported" },
     { "name": "two segment short name", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::main.cmp", "messageContains": "task.stage.signal" },
     { "name": "four segment signal name", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task.stage.signal.extra", "messageContains": "task.stage.signal" },
     { "name": "empty signal segment", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task..cmp", "messageContains": "task.stage.signal" },

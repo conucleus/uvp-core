@@ -70,6 +70,8 @@ pub struct ZhixuStage {
     pub source: String,
     #[serde(default)]
     pub trigger: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_signals: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executor: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -132,9 +132,8 @@ A & B
 A | B
 (A)
 signal + duration
-::OUTSIDE
-::OUTSIDE@(...)
-::OUTSOURCE@(...)
+OUTSIDE@(source::task.stage.signal)
+OUTSOURCE@(source::task.stage.signal)
 ```
 
 Evaluation states:
@@ -174,7 +173,7 @@ Responsibilities:
 - Topology validation.
 - Cycle detection.
 - Cross-source rule validation.
-- `OUTSIDE` and `OUTSOURCE` validation.
+- Explicit `OUTSIDE@(…)` and `OUTSOURCE@(…)` validation.
 - Portable compatibility classification.
 
 Compatibility classes:
@@ -350,9 +349,9 @@ Hook fixtures should cover:
 - Nested expressions.
 - Delay.
 - Delay made impossible by negative signal.
-- Empty-source `OUTSIDE`.
-- `OUTSIDE@(...)`.
-- `OUTSOURCE@(...)`.
+- Removed bare `OUTSIDE` / `OUTSOURCE` syntax.
+- Explicit `OUTSIDE@(source::task.stage.signal)`.
+- Explicit `OUTSOURCE@(source::task.stage.signal)`.
 
 Zhixu fixtures should cover:
 

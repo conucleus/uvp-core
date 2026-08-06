@@ -28,7 +28,7 @@ pub enum Expr {
     Signal(String),
     External {
         mode: ExternalMode,
-        target: Option<Box<HookExpr>>,
+        target: Box<HookExpr>,
     },
     Not(Box<Expr>),
     And(Vec<Expr>),
@@ -116,7 +116,6 @@ pub enum Compatibility {
 #[serde(rename_all = "snake_case")]
 pub enum HookMode {
     Normal,
-    Outside,
     OutsideSpawn,
     Outsource,
 }
@@ -252,7 +251,7 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
         hook.source,
         normalize_condition(&hook.condition, NormalizeStyle::Tight)
     );
-    let dependencies = extract_dependencies(&hook, profile, &hook_name);
+    let dependencies = extract_dependencies(&hook, profile);
     let cloud_ast = cloud_ast_for(&hook, &hook_name, profile)?;
 
     Ok(ParseHookOutput {
@@ -268,7 +267,7 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
         raw_condition,
         runtime_condition,
         normalized_expression,
-        has_outside: matches!(mode, HookMode::Outside | HookMode::OutsideSpawn),
+        has_outside: matches!(mode, HookMode::OutsideSpawn),
         has_outsource: matches!(mode, HookMode::Outsource),
         dependencies,
         ast: hook_to_value(&hook),
@@ -321,17 +320,44 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
     }
     if source.is_empty() && !starts_external(condition_raw) {
         return Err(HookError::Message(
-            "empty source is only allowed for OUTSIDE or OUTSOURCE hooks".to_string(),
+            "empty source is only allowed for OUTSIDE@(…) or OUTSOURCE@(…) hooks".to_string(),
         ));
     }
     reject_unsupported_operators(condition_raw)?;
     let mut parser = Parser::new(condition_raw, profile);
     let condition = parser.parse()?;
+    validate_external_position(&condition, true)?;
     Ok(HookExpr {
         raw: raw.to_string(),
         source,
         condition,
     })
+}
+
+// External operators are cross-source wrappers, not backend/executor input
+// declarations. Backend/executor external inputs are declared by the
+// surrounding Stage contract and are sent to UVP only when backend explicitly
+// chooses to do so.
+fn validate_external_position(expr: &Expr, root: bool) -> Result<()> {
+    match expr {
+        Expr::External { .. } => {
+            if !root {
+                return Err(HookError::Message(
+                    "OUTSIDE/OUTSOURCE must be the complete hook condition; declare backend external inputs in externalSignals and reference the canonical signal in a normal expression".to_string(),
+                ));
+            }
+            Ok(())
+        }
+        Expr::Signal(_) => Ok(()),
+        Expr::Not(inner) => validate_external_position(inner, false),
+        Expr::And(terms) | Expr::Or(terms) => {
+            for term in terms {
+                validate_external_position(term, false)?;
+            }
+            Ok(())
+        }
+        Expr::Delay { expr, .. } => validate_external_position(expr, false),
+    }
 }
 
 fn starts_external(value: &str) -> bool {
@@ -446,10 +472,9 @@ fn normalize_condition(expr: &Expr, style: NormalizeStyle) -> String {
 fn normalize_tight(expr: &Expr) -> String {
     match expr {
         Expr::Signal(signal) => signal.clone(),
-        Expr::External { mode, target } => match target {
-            Some(target) => format!("{}@({})", mode.as_str(), normalize_hook_tight(target)),
-            None => mode.as_str().to_string(),
-        },
+        Expr::External { mode, target } => {
+            format!("{}@({})", mode.as_str(), normalize_hook_tight(target))
+        }
         Expr::Not(inner) => format!("~{}", normalize_for_unary_tight(inner)),
         Expr::Delay {
             expr, raw_duration, ..
@@ -491,10 +516,9 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
     let precedence = precedence(expr);
     let body = match expr {
         Expr::Signal(signal) => signal.clone(),
-        Expr::External { mode, target } => match target {
-            Some(target) => format!("{}@({})", mode.as_str(), normalize_hook_tight(target)),
-            None => mode.as_str().to_string(),
-        },
+        Expr::External { mode, target } => {
+            format!("{}@({})", mode.as_str(), normalize_hook_tight(target))
+        }
         Expr::Not(inner) => {
             let mut child = normalize_cloud(inner, precedence);
             if matches!(inner.as_ref(), Expr::And(_) | Expr::Or(_)) {
@@ -541,18 +565,14 @@ fn precedence(expr: &Expr) -> u8 {
     }
 }
 
-fn runtime_condition(hook: &HookExpr, hook_name: &str, profile: Profile) -> Result<String> {
+fn runtime_condition(hook: &HookExpr, _hook_name: &str, profile: Profile) -> Result<String> {
     if profile == Profile::EvmStrict {
         return Ok(normalize_condition(&hook.condition, NormalizeStyle::Tight));
     }
     match &hook.condition {
         Expr::External {
-            mode: ExternalMode::Outside,
-            target: None,
-        } => Ok(hook_name.to_string()),
-        Expr::External {
             mode: ExternalMode::Outside | ExternalMode::Outsource,
-            target: Some(target),
+            target,
         } => Ok(normalize_condition(
             &target.condition,
             NormalizeStyle::Cloud,
@@ -565,11 +585,7 @@ fn hook_mode(expr: &Expr) -> HookMode {
     match expr {
         Expr::External {
             mode: ExternalMode::Outside,
-            target: None,
-        } => HookMode::Outside,
-        Expr::External {
-            mode: ExternalMode::Outside,
-            target: Some(_),
+            ..
         } => HookMode::OutsideSpawn,
         Expr::External {
             mode: ExternalMode::Outsource,
@@ -581,10 +597,7 @@ fn hook_mode(expr: &Expr) -> HookMode {
 
 fn upstream_source(expr: &Expr) -> Option<String> {
     match expr {
-        Expr::External {
-            target: Some(target),
-            ..
-        } => Some(target.source.clone()),
+        Expr::External { target, .. } => Some(target.source.clone()),
         _ => None,
     }
 }
@@ -596,23 +609,8 @@ fn compatibility_for(_hook: &HookExpr, profile: Profile) -> Compatibility {
     }
 }
 
-fn extract_dependencies(hook: &HookExpr, profile: Profile, hook_name: &str) -> Vec<Dependency> {
+fn extract_dependencies(hook: &HookExpr, _profile: Profile) -> Vec<Dependency> {
     let mut deps = Vec::new();
-    if profile == Profile::CloudCompat {
-        if let Expr::External {
-            mode: ExternalMode::Outside,
-            target: None,
-        } = &hook.condition
-        {
-            deps.push(Dependency {
-                kind: DependencyKind::Positive,
-                source: hook.source.clone(),
-                signal_name: hook_name.to_string(),
-                delay_seconds: None,
-            });
-            return deps;
-        }
-    }
     collect_dependencies(&hook.condition, &hook.source, false, &mut deps);
     dedupe_dependencies(deps)
 }
@@ -629,21 +627,8 @@ fn collect_dependencies(expr: &Expr, source: &str, negated: bool, out: &mut Vec<
             signal_name: signal.clone(),
             delay_seconds: None,
         }),
-        Expr::External { mode, target } => {
-            if let Some(target) = target {
-                collect_dependencies(&target.condition, &target.source, negated, out);
-            } else {
-                out.push(Dependency {
-                    kind: if negated {
-                        DependencyKind::Negative
-                    } else {
-                        DependencyKind::Positive
-                    },
-                    source: source.to_string(),
-                    signal_name: mode.as_str().to_string(),
-                    delay_seconds: None,
-                });
-            }
+        Expr::External { target, .. } => {
+            collect_dependencies(&target.condition, &target.source, negated, out);
         }
         Expr::Not(inner) => collect_dependencies(inner, source, !negated, out),
         Expr::Delay {
@@ -720,11 +705,7 @@ fn expr_to_ts_value(expr: &Expr) -> Value {
     match expr {
         Expr::Signal(signal) => json!({ "kind": "signal", "signalName": signal }),
         Expr::External { mode, target } => {
-            if let Some(target) = target {
-                json!({ "kind": "external", "mode": mode.as_str(), "target": hook_to_value(target) })
-            } else {
-                json!({ "kind": "external", "mode": mode.as_str() })
-            }
+            json!({ "kind": "external", "mode": mode.as_str(), "target": hook_to_value(target) })
         }
         Expr::Not(inner) => json!({ "kind": "not", "expr": expr_to_ts_value(inner) }),
         Expr::And(terms) => {
@@ -746,16 +727,12 @@ fn expr_to_ts_value(expr: &Expr) -> Value {
     }
 }
 
-fn cloud_ast_for(hook: &HookExpr, hook_name: &str, profile: Profile) -> Result<Value> {
+fn cloud_ast_for(hook: &HookExpr, _hook_name: &str, profile: Profile) -> Result<Value> {
     let expr = if profile == Profile::CloudCompat {
         match &hook.condition {
             Expr::External {
-                mode: ExternalMode::Outside,
-                target: None,
-            } => Expr::Signal(hook_name.to_string()),
-            Expr::External {
                 mode: ExternalMode::Outside | ExternalMode::Outsource,
-                target: Some(target),
+                target,
             } => target.condition.clone(),
             _ => hook.condition.clone(),
         }
@@ -768,13 +745,7 @@ fn cloud_ast_for(hook: &HookExpr, hook_name: &str, profile: Profile) -> Result<V
 fn expr_to_cloud_value(expr: &Expr) -> Value {
     match expr {
         Expr::Signal(signal) => json!({ "type": "signal", "signal": signal }),
-        Expr::External { mode, target } => {
-            if let Some(target) = target {
-                expr_to_cloud_value(&target.condition)
-            } else {
-                json!({ "type": "signal", "signal": mode.as_str() })
-            }
-        }
+        Expr::External { target, .. } => expr_to_cloud_value(&target.condition),
         Expr::Not(inner) => json!({ "type": "neg", "expr": expr_to_cloud_value(inner) }),
         Expr::And(terms) => fold_cloud_terms("and", terms),
         Expr::Or(terms) => fold_cloud_terms("or", terms),
@@ -819,13 +790,7 @@ fn eval_expr(
 ) -> Result<InternalEval> {
     match expr {
         Expr::Signal(signal) => eval_signal(source, signal, signals),
-        Expr::External { mode, target } => {
-            if let Some(target) = target {
-                eval_expr(&target.condition, &target.source, signals, now)
-            } else {
-                eval_signal(source, mode.as_str(), signals)
-            }
-        }
+        Expr::External { target, .. } => eval_expr(&target.condition, &target.source, signals, now),
         Expr::Not(inner) => {
             let evaluated = eval_expr(inner, source, signals, now)?;
             match evaluated.state {
@@ -1119,7 +1084,11 @@ impl<'a> Parser<'a> {
     fn parse_external(&mut self, mode: ExternalMode) -> Result<Expr> {
         self.skip_ws();
         if !self.consume("@") {
-            return Ok(Expr::External { mode, target: None });
+            return Err(HookError::Message(format!(
+                "bare {} is no longer supported; declare external inputs in externalSignals or use {}@(source::task.stage.signal) for a cross-source wrapper",
+                mode.as_str(),
+                mode.as_str(),
+            )));
         }
         if !self.consume("(") {
             return Err(HookError::Message(format!(
@@ -1136,7 +1105,7 @@ impl<'a> Parser<'a> {
         }
         Ok(Expr::External {
             mode,
-            target: Some(Box::new(target)),
+            target: Box::new(target),
         })
     }
 
@@ -1346,11 +1315,45 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("task.stage.signal"));
 
-        let outside = parse_value("::OUTSIDE", Profile::CloudCompat, "TRIGGER");
-        assert_eq!(outside["runtimeCondition"], "TRIGGER");
-        assert_eq!(
-            outside["dependencies"],
-            json!([{ "kind": "positive", "source": "", "signalName": "TRIGGER" }])
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "TRIGGER".to_string(),
+            hook: "::OUTSIDE".to_string(),
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("no longer supported"));
+    }
+
+    #[test]
+    fn rejects_external_operator_inside_composite_condition() {
+        for hook in [
+            "buyer::OUTSIDE & task.main.cmp",
+            "buyer::task.main.cmp | OUTSIDE",
+            "buyer::~OUTSIDE",
+            "buyer::(task.main.cmp +5s) & OUTSOURCE",
+        ] {
+            let err = parse_hook(ParseHookRequest {
+                profile: Profile::CloudCompat,
+                hook_name: "HOOK".to_string(),
+                hook: hook.to_string(),
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("no longer supported"),
+                "unexpected error for {hook}: {err}"
+            );
+        }
+
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "HOOK".to_string(),
+            hook: "buyer::OUTSIDE@(seller::task.main.cmp) & task.other.cmp".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("must be the complete hook condition"),
+            "unexpected error for a composite cross-source wrapper: {err}"
         );
     }
 

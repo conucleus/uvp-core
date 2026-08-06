@@ -85,6 +85,7 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
         &stage_entries,
         &selected_stage_bindings,
     ));
+    validation_issues.extend(validate_external_signal_contracts(&stage_entries));
     validation_issues.extend(validate_trigger_references(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(&stage_entries));
     validation_issues.extend(validate_signal_maps(&stage_entries));
@@ -152,6 +153,12 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
     }
 
     let stage_entries = flatten_stages(&definition)?;
+    let mut validation_issues = Vec::new();
+    validation_issues.extend(validate_external_signal_contracts(&stage_entries));
+    validation_issues.extend(validate_trigger_references(&stage_entries));
+    if !validation_issues.is_empty() {
+        return Err(CompilerError::Issues(validation_issues.join("; ")));
+    }
     let mut stages = Vec::new();
     let mut hooks = Vec::new();
 
@@ -423,16 +430,53 @@ fn validate_trigger_references(entries: &[StageEntry]) -> Vec<String> {
         let trigger_keys = normalize_trigger_keys(&entry.stage.trigger);
         if trigger_keys.is_empty() {
             issues.push(format!(
-                "{}.trigger must contain at least one receiveSignals key",
+                "{}.trigger must contain at least one externalSignals or receiveSignals key",
                 entry.stage_identifier
             ));
             continue;
         }
         for trigger_key in trigger_keys {
-            if !entry.stage.receive_signals.contains_key(&trigger_key) {
+            if entry.stage.receive_signals.contains_key(&trigger_key)
+                || entry
+                    .stage
+                    .external_signals
+                    .iter()
+                    .any(|signal| signal.trim() == trigger_key)
+            {
+                continue;
+            }
+            issues.push(format!(
+                "{}.trigger references missing externalSignals or receiveSignals key {}",
+                entry.stage_identifier, trigger_key
+            ));
+        }
+    }
+    issues
+}
+
+fn validate_external_signal_contracts(entries: &[StageEntry]) -> Vec<String> {
+    let mut issues = Vec::new();
+    for entry in entries {
+        let mut seen = BTreeSet::new();
+        for signal in &entry.stage.external_signals {
+            let normalized = signal.trim();
+            if normalized.is_empty() {
                 issues.push(format!(
-                    "{}.trigger references missing receiveSignals key {}",
-                    entry.stage_identifier, trigger_key
+                    "{}.externalSignals cannot contain an empty signal",
+                    entry.stage_identifier
+                ));
+                continue;
+            }
+            if !seen.insert(normalized.to_string()) {
+                issues.push(format!(
+                    "{}.externalSignals contains duplicate signal {}",
+                    entry.stage_identifier, normalized
+                ));
+            }
+            if entry.stage.receive_signals.contains_key(normalized) {
+                issues.push(format!(
+                    "{}.signal {} cannot be declared in both externalSignals and receiveSignals",
+                    entry.stage_identifier, normalized
                 ));
             }
         }
@@ -563,9 +607,6 @@ fn validate_hook_dependency_references(
     for dependency in &hook.dependencies {
         let key = format!("{}::{}", dependency.source, dependency.signal_name);
         if !seen.insert(key) {
-            continue;
-        }
-        if dependency.signal_name == "OUTSIDE" || dependency.signal_name == "OUTSOURCE" {
             continue;
         }
         if !catalog.local_sources.contains(&dependency.source) {
@@ -742,6 +783,13 @@ fn cloud_stage_artifact(entry: &StageEntry) -> Result<Value> {
         stage.insert(
             "fileResources".to_string(),
             serde_json::to_value(&entry.stage.file_resources)
+                .map_err(|err| CompilerError::Message(err.to_string()))?,
+        );
+    }
+    if !entry.stage.external_signals.is_empty() {
+        stage.insert(
+            "externalSignals".to_string(),
+            serde_json::to_value(&entry.stage.external_signals)
                 .map_err(|err| CompilerError::Message(err.to_string()))?,
         );
     }
@@ -956,9 +1004,9 @@ mod tests {
         );
         assert_eq!(
             plan["planHash"],
-            "0x4964b6a9999d90aca565c1c555db99d428a606868439ecad7b4d8debde338a64"
+            "0x9a96febc07e2d254143a36c4ee3d57369083e8c6288478f1ddfc4656ade244f8"
         );
-        assert_eq!(plan["compiledHooks"].as_array().unwrap().len(), 5);
+        assert_eq!(plan["compiledHooks"].as_array().unwrap().len(), 4);
         assert_eq!(
             plan["compiledHooks"]
                 .as_array()
@@ -967,7 +1015,6 @@ mod tests {
                 .map(|hook| hook["hookId"].as_str().unwrap())
                 .collect::<Vec<_>>(),
             vec![
-                "selector.assign#TRIGGER",
                 "execution.main#signalMap.cmp",
                 "execution.main#signalMap.str",
                 "execution.main#START",
@@ -1016,8 +1063,8 @@ mod tests {
                         {
                             "name": "assign",
                             "source": "buyer",
-                            "trigger": ["TRIGGER"],
-                            "receiveSignals": { "TRIGGER": "::OUTSIDE" },
+                            "trigger": ["CREATE_ORDER_REQUEST"],
+                            "externalSignals": ["CREATE_ORDER_REQUEST"],
                             "selectedStages": ["execution.main"],
                             "sendSignals": ["executor_selected"],
                             "executor": { "supplierType": "organization", "supplierID": "selector-org" }
