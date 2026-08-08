@@ -5,3 +5,4 @@ export const parseHook = core.parseHook;
 export const evaluateHook = core.evaluateHook;
 export const replay = core.replay;
 export const version = core.version;
+export const semanticVersion = core.semanticVersion;
