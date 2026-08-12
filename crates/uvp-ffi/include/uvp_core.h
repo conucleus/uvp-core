@@ -7,7 +7,7 @@ extern "C" {
 
 char* uvp_compile_json(const char* request_json);
 char* uvp_parse_hook_json(const char* request_json);
-char* uvp_eval_hook_json(const char* request_json);
+char* uvp_eval_compiled_hook_json(const char* request_json);
 char* uvp_replay_json(const char* request_json);
 void uvp_free(char* ptr);
 const char* uvp_core_version(void);

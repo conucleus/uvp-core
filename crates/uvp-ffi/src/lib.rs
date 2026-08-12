@@ -27,8 +27,10 @@ pub extern "C" fn uvp_parse_hook_json(request_json: *const c_char) -> *mut c_cha
 }
 
 #[no_mangle]
-pub extern "C" fn uvp_eval_hook_json(request_json: *const c_char) -> *mut c_char {
-    into_c_string(uvp_hook_dsl::eval_hook_json(&to_rust_string(request_json)))
+pub extern "C" fn uvp_eval_compiled_hook_json(request_json: *const c_char) -> *mut c_char {
+    into_c_string(uvp_hook_dsl::eval_compiled_hook_json(&to_rust_string(
+        request_json,
+    )))
 }
 
 #[no_mangle]

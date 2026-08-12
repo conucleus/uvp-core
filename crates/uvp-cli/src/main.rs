@@ -12,7 +12,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     ParseHook { request: String },
-    EvalHook { request: String },
+    EvalCompiledHook { request: String },
     Compile { request: String },
     Replay { request: String },
     Version,
@@ -22,7 +22,9 @@ fn main() {
     let cli = Cli::parse();
     let output = match cli.command {
         Command::ParseHook { request } => uvp_hook_dsl::parse_hook_json(&read_arg(&request)),
-        Command::EvalHook { request } => uvp_hook_dsl::eval_hook_json(&read_arg(&request)),
+        Command::EvalCompiledHook { request } => {
+            uvp_hook_dsl::eval_compiled_hook_json(&read_arg(&request))
+        }
         Command::Compile { request } => uvp_compiler::compile_json(&read_arg(&request)),
         Command::Replay { request } => uvp_replay::replay_json(&read_arg(&request)),
         Command::Version => uvp_hook_dsl::CORE_VERSION.to_string(),

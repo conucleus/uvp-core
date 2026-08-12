@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
-use uvp_hook_dsl::{eval_hook, parse_hook, EvalHookRequest, ParseHookRequest, Profile, SignalFact};
+use uvp_hook_dsl::{
+    eval_compiled_hook, parse_hook, EvalCompiledHookRequest, ParseHookRequest, Profile, SignalFact,
+};
 
 const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
 
@@ -115,14 +117,20 @@ fn parses_semantic_corpus() {
 #[test]
 fn evaluates_semantic_corpus() {
     for case in load_corpus().eval_cases {
-        let output = eval_hook(EvalHookRequest {
-            profile: profile(&case.profile),
+        let profile = profile(&case.profile);
+        let parsed = parse_hook(ParseHookRequest {
+            profile,
             hook_name: case.hook_name.clone(),
             hook: case.hook.clone(),
+        })
+        .unwrap_or_else(|err| panic!("{} failed to parse for eval: {err}", case.name));
+        let output = eval_compiled_hook(EvalCompiledHookRequest {
+            profile,
+            ast: parsed.cloud_ast,
             signals: case.signals,
             now: case.now,
         })
-        .unwrap_or_else(|err| panic!("{} failed to eval: {err}", case.name));
+        .unwrap_or_else(|err| panic!("{} failed to eval compiled AST: {err}", case.name));
         let output_value = serde_json::to_value(&output).expect("eval output should serialize");
 
         assert_eq!(output_value["state"], case.expect.state, "{}", case.name);

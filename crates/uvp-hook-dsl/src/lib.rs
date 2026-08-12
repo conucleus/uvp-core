@@ -6,6 +6,7 @@ use thiserror::Error;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.1";
+pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp/cloud-ast/v1";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,7 +123,7 @@ pub enum HookMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EvalHookOutput {
+pub struct EvalCompiledHookOutput {
     pub uvp_core_version: &'static str,
     pub semantic_version: &'static str,
     pub profile: Profile,
@@ -153,13 +154,12 @@ pub struct ParseHookRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
-pub struct EvalHookRequest {
+pub struct EvalCompiledHookRequest {
     #[serde(default)]
     pub profile: Profile,
-    #[serde(default)]
-    pub hook_name: String,
-    pub hook: String,
+    pub ast: Value,
     #[serde(default)]
     pub signals: Vec<SignalFact>,
     pub now: String,
@@ -196,10 +196,10 @@ pub fn parse_hook_json(input: &str) -> String {
     envelope_json(result)
 }
 
-pub fn eval_hook_json(input: &str) -> String {
-    let result = serde_json::from_str::<EvalHookRequest>(input)
-        .map_err(|err| HookError::Message(format!("invalid eval hook request: {err}")))
-        .and_then(eval_hook);
+pub fn eval_compiled_hook_json(input: &str) -> String {
+    let result = serde_json::from_str::<EvalCompiledHookRequest>(input)
+        .map_err(|err| HookError::Message(format!("invalid eval compiled hook request: {err}")))
+        .and_then(eval_compiled_hook);
     envelope_json(result)
 }
 
@@ -275,35 +275,94 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     })
 }
 
-pub fn eval_hook(req: EvalHookRequest) -> Result<EvalHookOutput> {
-    let profile = req.profile;
-    let hook = parse_hook_expr(&req.hook, profile)?;
-    validate_hook(&hook.condition, profile)?;
-    let now = parse_time(&req.now, profile)?;
-    let mut signals = BTreeMap::new();
-    for signal in req.signals {
-        let received_at = parse_time(&signal.received_at, profile)?;
-        signals.insert(
-            signal_key(&signal.source, &signal.signal_name),
-            SignalEntry {
-                source: signal.source.clone(),
-                signal_name: signal.signal_name.clone(),
-                received_at,
-            },
-        );
+pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHookOutput> {
+    let ast_object = req
+        .ast
+        .as_object()
+        .ok_or_else(|| HookError::Message("compiled hook AST must be an object".to_string()))?;
+    reject_unknown_keys(
+        ast_object,
+        &["schemaVersion", "source", "mode", "upstreamSource", "root"],
+        "compiled hook AST",
+    )?;
+    let schema_version = req
+        .ast
+        .get("schemaVersion")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            HookError::Message("compiled hook AST is missing schemaVersion".to_string())
+        })?;
+    if schema_version != CLOUD_AST_SCHEMA_VERSION {
+        return Err(HookError::Message(format!(
+            "unsupported compiled hook AST schemaVersion: {schema_version}"
+        )));
     }
+    let mode = req
+        .ast
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or_else(|| HookError::Message("compiled hook AST is missing mode".to_string()))?;
+    if !matches!(mode, "normal" | "outside_spawn" | "outsource") {
+        return Err(HookError::Message(format!(
+            "unsupported compiled hook AST mode: {mode}"
+        )));
+    }
+    if mode != "normal"
+        && req
+            .ast
+            .get("upstreamSource")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        return Err(HookError::Message(
+            "compiled external hook AST is missing upstreamSource".to_string(),
+        ));
+    }
+    let now = parse_time(&req.now, req.profile)?;
+    let source = req
+        .ast
+        .get("source")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| HookError::Message("compiled hook AST is missing source".to_string()))?;
+    let root = req
+        .ast
+        .get("root")
+        .ok_or_else(|| HookError::Message("compiled hook AST root is missing".to_string()))?;
+    let expr = expr_from_cloud_value(root)?;
+    let signals = signal_map(req.signals, req.profile)?;
+    let result = eval_expr(&expr, &source, &signals, now)?;
 
-    let result = eval_expr(&hook.condition, &hook.source, &signals, now)?;
-    Ok(EvalHookOutput {
+    Ok(EvalCompiledHookOutput {
         uvp_core_version: CORE_VERSION,
         semantic_version: SEMANTIC_VERSION,
-        profile,
+        profile: req.profile,
         state: result.state,
         ready_at: result
             .ready_at
             .map(|ts| ts.to_rfc3339_opts(SecondsFormat::Millis, true)),
         reason: result.reason,
     })
+}
+
+fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<String, SignalEntry>> {
+    let mut result = BTreeMap::new();
+    for signal in signals {
+        let received_at = parse_time(&signal.received_at, profile)?;
+        result.insert(
+            signal_key(&signal.source, &signal.signal_name),
+            SignalEntry {
+                source: signal.source,
+                signal_name: signal.signal_name,
+                received_at,
+            },
+        );
+    }
+    Ok(result)
 }
 
 fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
@@ -332,6 +391,127 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
         source,
         condition,
     })
+}
+
+fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| HookError::Message("compiled hook AST node is missing type".to_string()))?;
+
+    match kind {
+        "signal" => {
+            reject_unknown_keys(
+                value.as_object().ok_or_else(|| {
+                    HookError::Message("compiled signal AST node must be an object".to_string())
+                })?,
+                &["type", "signal"],
+                "compiled signal AST node",
+            )?;
+            value
+                .get("signal")
+                .and_then(Value::as_str)
+                .filter(|signal| !signal.trim().is_empty())
+                .map(|signal| Expr::Signal(signal.to_string()))
+                .ok_or_else(|| {
+                    HookError::Message("compiled signal AST node is missing signal".to_string())
+                })
+        }
+        "neg" => {
+            reject_unknown_keys(
+                value.as_object().ok_or_else(|| {
+                    HookError::Message("compiled neg AST node must be an object".to_string())
+                })?,
+                &["type", "expr"],
+                "compiled neg AST node",
+            )?;
+            Ok(Expr::Not(Box::new(expr_from_cloud_value(
+                value.get("expr").ok_or_else(|| {
+                    HookError::Message("compiled neg AST node is missing expr".to_string())
+                })?,
+            )?)))
+        }
+        "and" | "or" => {
+            reject_unknown_keys(
+                value.as_object().ok_or_else(|| {
+                    HookError::Message("compiled boolean AST node must be an object".to_string())
+                })?,
+                &["type", "left", "right"],
+                "compiled boolean AST node",
+            )?;
+            let left = expr_from_cloud_value(value.get("left").ok_or_else(|| {
+                HookError::Message("compiled boolean AST node is missing left".to_string())
+            })?)?;
+            let right = expr_from_cloud_value(value.get("right").ok_or_else(|| {
+                HookError::Message("compiled boolean AST node is missing right".to_string())
+            })?)?;
+            Ok(if kind == "and" {
+                Expr::And(vec![left, right])
+            } else {
+                Expr::Or(vec![left, right])
+            })
+        }
+        "delay" => {
+            reject_unknown_keys(
+                value.as_object().ok_or_else(|| {
+                    HookError::Message("compiled delay AST node must be an object".to_string())
+                })?,
+                &["type", "expr", "rawDuration", "durationSeconds"],
+                "compiled delay AST node",
+            )?;
+            let expr = expr_from_cloud_value(value.get("expr").ok_or_else(|| {
+                HookError::Message("compiled delay AST node is missing expr".to_string())
+            })?)?;
+            let raw_duration = value
+                .get("rawDuration")
+                .and_then(Value::as_str)
+                .filter(|duration| !duration.trim().is_empty())
+                .ok_or_else(|| {
+                    HookError::Message("compiled delay AST is missing rawDuration".to_string())
+                })?
+                .to_string();
+            let duration_seconds = value
+                .get("durationSeconds")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    HookError::Message(format!(
+                        "compiled delay AST has invalid duration: {raw_duration}"
+                    ))
+                })?;
+            if duration_seconds <= 0 {
+                return Err(HookError::Message(
+                    "compiled delay AST duration must be positive".to_string(),
+                ));
+            }
+            let parsed_seconds = duration_to_seconds(&raw_duration)?;
+            if parsed_seconds != duration_seconds {
+                return Err(HookError::Message(format!(
+                    "compiled delay AST duration mismatch: rawDuration={raw_duration}, durationSeconds={duration_seconds}"
+                )));
+            }
+            Ok(Expr::Delay {
+                expr: Box::new(expr),
+                raw_duration,
+                duration_seconds,
+            })
+        }
+        other => Err(HookError::Message(format!(
+            "unsupported compiled hook AST node type: {other}"
+        ))),
+    }
+}
+
+fn reject_unknown_keys(
+    object: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    label: &str,
+) -> Result<()> {
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(HookError::Message(format!(
+            "{label} contains unsupported field: {key}"
+        )));
+    }
+    Ok(())
 }
 
 // External operators are cross-source wrappers, not backend/executor input
@@ -727,19 +907,23 @@ fn expr_to_ts_value(expr: &Expr) -> Value {
     }
 }
 
-fn cloud_ast_for(hook: &HookExpr, _hook_name: &str, profile: Profile) -> Result<Value> {
-    let expr = if profile == Profile::CloudCompat {
-        match &hook.condition {
-            Expr::External {
-                mode: ExternalMode::Outside | ExternalMode::Outsource,
-                target,
-            } => target.condition.clone(),
-            _ => hook.condition.clone(),
-        }
-    } else {
-        hook.condition.clone()
+fn cloud_ast_for(hook: &HookExpr, _hook_name: &str, _profile: Profile) -> Result<Value> {
+    let mode = hook_mode(&hook.condition);
+    let upstream_source = upstream_source(&hook.condition);
+    let (source, expr) = match &hook.condition {
+        Expr::External {
+            mode: ExternalMode::Outside | ExternalMode::Outsource,
+            target,
+        } => (target.source.clone(), target.condition.clone()),
+        _ => (hook.source.clone(), hook.condition.clone()),
     };
-    Ok(json!({ "root": expr_to_cloud_value(&expr) }))
+    Ok(json!({
+        "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+        "source": source,
+        "mode": mode,
+        "upstreamSource": upstream_source,
+        "root": expr_to_cloud_value(&expr)
+    }))
 }
 
 fn expr_to_cloud_value(expr: &Expr) -> Value {
@@ -750,8 +934,15 @@ fn expr_to_cloud_value(expr: &Expr) -> Value {
         Expr::And(terms) => fold_cloud_terms("and", terms),
         Expr::Or(terms) => fold_cloud_terms("or", terms),
         Expr::Delay {
-            expr, raw_duration, ..
-        } => json!({ "type": "delay", "expr": expr_to_cloud_value(expr), "delay": raw_duration }),
+            expr,
+            raw_duration,
+            duration_seconds,
+        } => json!({
+            "type": "delay",
+            "expr": expr_to_cloud_value(expr),
+            "rawDuration": raw_duration,
+            "durationSeconds": duration_seconds,
+        }),
     }
 }
 
@@ -1219,13 +1410,16 @@ fn duration_to_seconds(duration: &str) -> Result<i64> {
     if value <= 0 {
         return Err(HookError::Message(format!("invalid duration: {duration}")));
     }
-    match unit {
-        "s" => Ok(value),
-        "m" => Ok(value * 60),
-        "h" => Ok(value * 60 * 60),
-        "d" => Ok(value * 60 * 60 * 24),
-        _ => Err(HookError::Message(format!("invalid duration unit: {unit}"))),
-    }
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 60 * 60,
+        "d" => 60 * 60 * 24,
+        _ => return Err(HookError::Message(format!("invalid duration unit: {unit}"))),
+    };
+    value
+        .checked_mul(multiplier)
+        .ok_or_else(|| HookError::Message(format!("duration is too large: {duration}")))
 }
 
 fn is_strict_signal_ref(value: &str) -> bool {
@@ -1248,6 +1442,28 @@ mod tests {
         serde_json::to_value(out).unwrap()
     }
 
+    fn evaluate_compiled(
+        hook_name: &str,
+        hook: &str,
+        profile: Profile,
+        signals: Vec<SignalFact>,
+        now: &str,
+    ) -> EvalCompiledHookOutput {
+        let parsed = parse_hook(ParseHookRequest {
+            profile,
+            hook_name: hook_name.to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap();
+        eval_compiled_hook(EvalCompiledHookRequest {
+            profile,
+            ast: parsed.cloud_ast,
+            signals,
+            now: now.to_string(),
+        })
+        .unwrap()
+    }
+
     #[test]
     fn evm_strict_parses_and_evaluates_positive_signal() {
         let out = parse_value("buyer::task.main.cmp", Profile::EvmStrict, "TRIGGER");
@@ -1257,38 +1473,125 @@ mod tests {
             json!([{ "kind": "positive", "source": "buyer", "signalName": "task.main.cmp" }])
         );
 
-        let eval = eval_hook(EvalHookRequest {
-            profile: Profile::EvmStrict,
-            hook_name: "TRIGGER".to_string(),
-            hook: "buyer::task.main.cmp".to_string(),
-            signals: vec![SignalFact {
+        let eval = evaluate_compiled(
+            "TRIGGER",
+            "buyer::task.main.cmp",
+            Profile::EvmStrict,
+            vec![SignalFact {
                 source: "buyer".to_string(),
                 signal_name: "task.main.cmp".to_string(),
                 received_at: "2026-04-27T00:00:00.900Z".to_string(),
             }],
-            now: "2026-04-27T00:00:00.999Z".to_string(),
-        })
-        .unwrap();
+            "2026-04-27T00:00:00.999Z",
+        );
         assert_eq!(eval.state, EvalState::Ready);
         assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:00.000Z"));
     }
 
     #[test]
     fn evm_strict_handles_delay_and_negative_guard() {
-        let eval = eval_hook(EvalHookRequest {
-            profile: Profile::EvmStrict,
-            hook_name: "TIMEOUT".to_string(),
-            hook: "buyer::(task.pay.cmp +5s) & ~task.refund.cmp".to_string(),
-            signals: vec![SignalFact {
+        let eval = evaluate_compiled(
+            "TIMEOUT",
+            "buyer::(task.pay.cmp +5s) & ~task.refund.cmp",
+            Profile::EvmStrict,
+            vec![SignalFact {
                 source: "buyer".to_string(),
                 signal_name: "task.pay.cmp".to_string(),
                 received_at: "2026-04-27T00:00:00.900Z".to_string(),
             }],
-            now: "2026-04-27T00:00:04.999Z".to_string(),
-        })
-        .unwrap();
+            "2026-04-27T00:00:04.999Z",
+        );
         assert_eq!(eval.state, EvalState::Wait);
         assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:05.000Z"));
+    }
+
+    #[test]
+    fn cloud_ast_preserves_delay_operand_and_source() {
+        let out = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "TIMEOUT".to_string(),
+            hook: "buyer::task.receive.cmp +14d".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(out.cloud_ast["source"], json!("buyer"));
+        assert_eq!(
+            out.cloud_ast["schemaVersion"],
+            json!(CLOUD_AST_SCHEMA_VERSION)
+        );
+        assert_eq!(out.cloud_ast["mode"], json!("normal"));
+        assert_eq!(out.cloud_ast["root"]["type"], json!("delay"));
+        assert_eq!(out.cloud_ast["root"].get("delay"), None);
+        assert_eq!(out.cloud_ast["root"]["rawDuration"], json!("14d"));
+        assert_eq!(
+            out.cloud_ast["root"]["durationSeconds"],
+            json!(14 * 24 * 60 * 60)
+        );
+    }
+
+    #[test]
+    fn compiled_cloud_ast_evaluates_without_reparsing_source_expression() {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "TIMEOUT".to_string(),
+            hook: "buyer::task.receive.cmp +14d".to_string(),
+        })
+        .unwrap();
+
+        let eval = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: parsed.cloud_ast,
+            signals: vec![SignalFact {
+                source: "buyer".to_string(),
+                signal_name: "task.receive.cmp".to_string(),
+                received_at: "2026-04-01T00:00:00Z".to_string(),
+            }],
+            now: "2026-04-15T00:00:00Z".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(eval.state, EvalState::Ready);
+        assert_eq!(eval.ready_at.as_deref(), Some("2026-04-15T00:00:00.000Z"));
+    }
+
+    #[test]
+    fn compiled_hook_evaluation_rejects_legacy_ast_shape() {
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: json!({
+                "source": "buyer",
+                "root": {
+                    "type": "delay",
+                    "expr": {"type": "signal", "signal": "task.receive.cmp"},
+                    "delay": "14d"
+                }
+            }),
+            signals: Vec::new(),
+            now: "2026-04-15T00:00:00Z".to_string(),
+        })
+        .expect_err("legacy AST must not be evaluated");
+        assert!(err.to_string().contains("schemaVersion"));
+    }
+
+    #[test]
+    fn compiled_hook_evaluation_rejects_legacy_node_fields() {
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "buyer",
+                "mode": "normal",
+                "root": {
+                    "type": "delay",
+                    "expr": {"type": "signal", "signal": "task.receive.cmp"},
+                    "delay": "14d"
+                }
+            }),
+            signals: Vec::new(),
+            now: "2026-04-15T00:00:00Z".to_string(),
+        })
+        .expect_err("legacy node fields must not be evaluated");
+        assert!(err.to_string().contains("unsupported field: delay"));
     }
 
     #[test]
@@ -1378,5 +1681,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rejects_duration_overflow() {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "TIMEOUT".to_string(),
+            hook: "buyer::task.receive.cmp +9223372036854775807d".to_string(),
+        })
+        .expect_err("duration overflow must be rejected");
+        assert!(err.to_string().contains("duration is too large"));
     }
 }

@@ -11,8 +11,8 @@ pub fn parse_hook_json(request_json: String) -> String {
 }
 
 #[napi]
-pub fn eval_hook_json(request_json: String) -> String {
-    uvp_hook_dsl::eval_hook_json(&request_json)
+pub fn eval_compiled_hook_json(request_json: String) -> String {
+    uvp_hook_dsl::eval_compiled_hook_json(&request_json)
 }
 
 #[napi]

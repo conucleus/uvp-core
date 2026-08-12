@@ -131,10 +131,70 @@ source::task.stage.signal
 A & B
 A | B
 (A)
-signal + duration
+signal + <positive integer><unit>
 OUTSIDE@(source::task.stage.signal)
 OUTSOURCE@(source::task.stage.signal)
 ```
+
+#### Delay operator contract
+
+The `+` operator is a postfix AST operator. It is not a fixed global `T` value and
+there is no `durationConstants` table in the semantic contract. Each user rule may
+choose its own positive duration literal:
+
+```text
+buyer::task.receive.cmp +48h
+buyer::task.receive.cmp +7d
+buyer::(task.a.cmp & task.b.cmp) +10s
+buyer::task.pay.cmp +5m & ~task.refund.cmp
+```
+
+The grammar is:
+
+```text
+condition    := orExpr
+orExpr       := andExpr ("|" andExpr)*
+andExpr      := unaryExpr ("&" unaryExpr)*
+unaryExpr    := "~" unaryExpr | postfixExpr
+postfixExpr  := primary ("+" duration)?
+primary      := signal | "(" condition ")" | externalHook
+duration     := positiveInteger ("s" | "m" | "h" | "d")
+```
+
+The parser accepts whitespace around the operator, but only lowercase `s`, `m`,
+`h`, and `d`. Durations must be positive integers without a leading zero; zero,
+negative, fractional, unknown-unit, and overflow values are rejected. A delayed
+expression must contain a positive signal anchor. To delay a compound expression,
+parenthesize it: `(A & B) +10s`; `A +10s & ~B` delays only `A`.
+
+For Cloud, the canonical compiled representation is:
+
+```json
+{
+  "schemaVersion": "uvp/cloud-ast/v1",
+  "source": "buyer",
+  "mode": "normal",
+  "upstreamSource": null,
+  "root": {
+    "type": "delay",
+    "expr": { "type": "signal", "signal": "task.receive.cmp" },
+    "rawDuration": "14d",
+    "durationSeconds": 1209600
+  }
+}
+```
+
+`rawDuration` preserves the literal and `durationSeconds` is its checked conversion;
+they must agree. Compiled-hook evaluation requires the schema version and rejects
+legacy delay nodes that use a `delay` field. It evaluates the AST, not the original
+raw expression. If the inner expression is true but the due time has not arrived,
+the result is `wait`; at or after the due time it is `ready`. Missing positive
+anchors produce `needs_more`, while an already-established negative guard produces
+`impossible`.
+
+The semantic core defines these results and timestamps. A Cloud adapter owns durable
+wait scheduling: it should persist `wait` and `due_at` and reclaim due records, rather
+than creating a thread or long-lived timer for every delayed hook.
 
 Evaluation states:
 
@@ -250,7 +310,7 @@ Initial API should be JSON-based to keep memory and compatibility simple:
 ```c
 char* uvp_compile_json(const char* request_json);
 char* uvp_parse_hook_json(const char* request_json);
-char* uvp_eval_hook_json(const char* request_json);
+char* uvp_eval_compiled_hook_json(const char* request_json);
 char* uvp_replay_json(const char* request_json);
 void uvp_free(char* ptr);
 const char* uvp_core_version(void);
@@ -267,7 +327,7 @@ Initial API:
 ```ts
 compile(request: CompileRequest): CompileOutput
 parseHook(request: ParseHookRequest): ParseHookOutput
-evaluateHook(request: EvaluateHookRequest): EvaluateHookOutput
+evaluateCompiledHook(request: EvalCompiledHookRequest): EvalCompiledHookOutput
 replay(request: ReplayRequest): ReplayOutput
 version(): string
 ```
@@ -297,7 +357,7 @@ Target commands:
 uvp-core compile --target cloud input.yaml
 uvp-core compile --target evm input.yaml
 uvp-core parse-hook 'buyer::pay.cmp & ~refund.cmp'
-uvp-core eval-hook --ast hook.json --signals signals.json --now 2026-01-01T00:00:00Z
+uvp-core eval-compiled-hook '{"profile":"cloud_compat","ast":{...},"signals":[],"now":"2026-01-01T00:00:00Z"}'
 uvp-core replay --artifact plan.json --events events.json
 uvp-core hash artifact.json
 ```
@@ -557,7 +617,7 @@ Implement:
 
 Completion criteria:
 
-- CLI supports compile, parse-hook, eval-hook, replay, and hash.
+- CLI supports compile, parse-hook, eval-compiled-hook, replay, and hash.
 - C header is generated through `cbindgen`.
 - Node package builds through `napi-rs`.
 - WASM package builds through `wasm-pack`.
