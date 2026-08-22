@@ -25,7 +25,11 @@
         "runtimeCondition": "task.main.cmp",
         "normalizedExpression": "buyer::task.main.cmp",
         "dependencies": [
-          { "kind": "positive", "source": "buyer", "signalName": "task.main.cmp" }
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.main.cmp"
+          }
         ]
       }
     },
@@ -40,25 +44,22 @@
         "runtimeCondition": "task.pay.cmp+5s&~task.refund.cmp",
         "normalizedExpression": "buyer::task.pay.cmp+5s&~task.refund.cmp",
         "dependencies": [
-          { "kind": "negative", "source": "buyer", "signalName": "task.refund.cmp" },
-          { "kind": "positive", "source": "buyer", "signalName": "task.pay.cmp" },
-          { "kind": "timer", "source": "buyer", "signalName": "task.pay.cmp", "delaySeconds": 5 }
-        ]
-      }
-    },
-    {
-      "name": "cross source outsource target",
-      "profile": "evm_strict",
-      "hookName": "CHILD_DONE",
-      "hook": "local::OUTSOURCE@(peer::child.close.cmp)",
-      "expect": {
-        "source": "local",
-        "mode": "outsource",
-        "upstreamSource": "peer",
-        "runtimeCondition": "OUTSOURCE@(peer::child.close.cmp)",
-        "normalizedExpression": "local::OUTSOURCE@(peer::child.close.cmp)",
-        "dependencies": [
-          { "kind": "positive", "source": "peer", "signalName": "child.close.cmp" }
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.refund.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.pay.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.pay.cmp",
+            "delaySeconds": 5
+          }
         ]
       }
     },
@@ -74,25 +75,56 @@
         "runtimeCondition": "dispatch.main.smart_contract",
         "normalizedExpression": "::OUTSIDE@(test_executor::dispatch.main.smart_contract)",
         "dependencies": [
-          { "kind": "positive", "source": "test_executor", "signalName": "dispatch.main.smart_contract" }
+          {
+            "kind": "positive",
+            "source": "test_executor",
+            "signalName": "dispatch.main.smart_contract"
+          }
         ]
       }
     },
     {
-      "name": "cloud outsource target with same source condition terms",
+      "name": "cloud merge entry fans cross-source events into match executor",
       "profile": "cloud_compat",
-      "hookName": "CALLBACK",
-      "hook": "::OUTSOURCE@(seller::task.a.cmp & task.b.cmp | task.c.cmp)",
+      "hookName": "MATCH",
+      "hook": "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
       "expect": {
         "source": "",
-        "mode": "outsource",
-        "upstreamSource": "seller",
-        "runtimeCondition": "task.a.cmp & task.b.cmp | task.c.cmp",
-        "normalizedExpression": "::OUTSOURCE@(seller::(task.a.cmp&task.b.cmp)|task.c.cmp)",
+        "mode": "merge",
+        "upstreamSource": null,
+        "runtimeCondition": "MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
+        "normalizedExpression": "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
         "dependencies": [
-          { "kind": "positive", "source": "seller", "signalName": "task.a.cmp" },
-          { "kind": "positive", "source": "seller", "signalName": "task.b.cmp" },
-          { "kind": "positive", "source": "seller", "signalName": "task.c.cmp" }
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "trade.intent.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "seller",
+            "signalName": "trade.listing.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cloud anchor entry refluxes child-order settlement into anchor executor",
+      "profile": "cloud_compat",
+      "hookName": "ANCHOR_SETTLE",
+      "hook": "::ANCHOR@(farmer.main.settle)",
+      "expect": {
+        "source": "",
+        "mode": "anchor",
+        "upstreamSource": null,
+        "runtimeCondition": "ANCHOR@(farmer.main.settle)",
+        "normalizedExpression": "::ANCHOR@(farmer.main.settle)",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "",
+            "signalName": "farmer.main.settle"
+          }
         ]
       }
     }
@@ -105,7 +137,9 @@
       "hook": "buyer::task.main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [],
-      "expect": { "state": "needs_more" }
+      "expect": {
+        "state": "needs_more"
+      }
     },
     {
       "name": "single positive signal ready",
@@ -114,9 +148,15 @@
       "hook": "buyer::task.main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.main.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "ready" }
+      "expect": {
+        "state": "ready"
+      }
     },
     {
       "name": "same signal name under another source does not satisfy evm hook",
@@ -125,9 +165,15 @@
       "hook": "buyer::task.main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "seller", "signalName": "task.main.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "seller",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "needs_more" }
+      "expect": {
+        "state": "needs_more"
+      }
     },
     {
       "name": "same signal name under another source does not satisfy cloud hook",
@@ -136,9 +182,15 @@
       "hook": "buyer::task.main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "seller", "signalName": "task.main.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "seller",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "needs_more" }
+      "expect": {
+        "state": "needs_more"
+      }
     },
     {
       "name": "source-less signal does not satisfy sourced cloud hook",
@@ -147,9 +199,15 @@
       "hook": "buyer::task.main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "", "signalName": "task.main.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "needs_more" }
+      "expect": {
+        "state": "needs_more"
+      }
     },
     {
       "name": "evm delay waits at chain second precision",
@@ -158,9 +216,16 @@
       "hook": "buyer::task.pay.cmp +5s",
       "now": "2026-04-27T00:00:04.999Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.pay.cmp", "receivedAt": "2026-04-27T00:00:00.900Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
       ],
-      "expect": { "state": "wait", "readyAt": "2026-04-27T00:00:05.000Z" }
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
     },
     {
       "name": "cloud delay preserves subsecond timestamp",
@@ -169,9 +234,16 @@
       "hook": "buyer::task.pay.cmp +5s",
       "now": "2026-04-27T00:00:05.899Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.pay.cmp", "receivedAt": "2026-04-27T00:00:00.900Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
       ],
-      "expect": { "state": "wait", "readyAt": "2026-04-27T00:00:05.900Z" }
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.900Z"
+      }
     },
     {
       "name": "delay ready after due time",
@@ -180,9 +252,16 @@
       "hook": "buyer::task.pay.cmp +5s",
       "now": "2026-04-27T00:00:05.001Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.pay.cmp", "receivedAt": "2026-04-27T00:00:00.900Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
       ],
-      "expect": { "state": "ready", "readyAt": "2026-04-27T00:00:05.000Z" }
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
     },
     {
       "name": "negative guard cancels monotonically",
@@ -191,10 +270,21 @@
       "hook": "buyer::task.pay.cmp & ~task.refund.cmp",
       "now": "2026-04-27T00:00:06.000Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.pay.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" },
-        { "source": "buyer", "signalName": "task.refund.cmp", "receivedAt": "2026-04-27T00:00:03.000Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.refund.cmp",
+          "receivedAt": "2026-04-27T00:00:03.000Z"
+        }
       ],
-      "expect": { "state": "impossible", "reasonContains": "negated condition exists: task.refund.cmp" }
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "negated condition exists: task.refund.cmp"
+      }
     },
     {
       "name": "and waits on latest delayed branch",
@@ -203,10 +293,21 @@
       "hook": "buyer::(task.a.cmp +5s) & (task.b.cmp +10s)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.a.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" },
-        { "source": "buyer", "signalName": "task.b.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "wait", "readyAt": "2026-04-27T00:00:10.000Z" }
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:10.000Z"
+      }
     },
     {
       "name": "or waits on earliest live delayed branch",
@@ -215,10 +316,21 @@
       "hook": "buyer::(task.a.cmp +5s) | (task.b.cmp +10s)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.a.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" },
-        { "source": "buyer", "signalName": "task.b.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "wait", "readyAt": "2026-04-27T00:00:05.000Z" }
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
     },
     {
       "name": "all or branches cancelled",
@@ -227,36 +339,173 @@
       "hook": "buyer::(task.a.cmp & ~task.cancel.cmp) | (task.b.cmp & ~task.fail.cmp)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "buyer", "signalName": "task.cancel.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" },
-        { "source": "buyer", "signalName": "task.fail.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.fail.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "impossible", "reasonContains": "all OR branches are cancelled" }
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "all OR branches are cancelled"
+      }
     },
     {
-      "name": "outsource target uses upstream source",
-      "profile": "evm_strict",
-      "hookName": "CHILD_DONE",
-      "hook": "local::OUTSOURCE@(peer::child.close.cmp)",
+      "name": "merge entry defers per-event delivery to state machine",
+      "profile": "cloud_compat",
+      "hookName": "MATCH",
+      "hook": "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
-        { "source": "peer", "signalName": "child.close.cmp", "receivedAt": "2026-04-27T00:00:00.000Z" }
+        {
+          "source": "seller",
+          "signalName": "trade.listing.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
       ],
-      "expect": { "state": "ready" }
+      "expect": {
+        "state": "needs_more",
+        "reasonContains": "merge hooks are delivered per contributing event"
+      }
+    },
+    {
+      "name": "anchor entry defers per-child delivery to state machine",
+      "profile": "cloud_compat",
+      "hookName": "ANCHOR_SETTLE",
+      "hook": "::ANCHOR@(farmer.main.settle)",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [],
+      "expect": {
+        "state": "needs_more",
+        "reasonContains": "anchor hooks are delivered per child-order event"
+      }
     }
   ],
   "invalidCases": [
-    { "name": "missing source separator", "profile": "evm_strict", "hookName": "HOOK", "hook": "task.main.cmp", "messageContains": "must contain" },
-    { "name": "empty source only allowed for external hooks", "profile": "cloud_compat", "hookName": "HOOK", "hook": "::task.main.cmp", "messageContains": "empty source is only allowed" },
-    { "name": "single segment short name", "profile": "cloud_compat", "hookName": "HOOK", "hook": "buyer::cmp", "messageContains": "task.stage.signal" },
-    { "name": "bare outside is removed", "profile": "cloud_compat", "hookName": "HOOK", "hook": "::OUTSIDE", "messageContains": "no longer supported" },
-    { "name": "bare outsource is removed", "profile": "cloud_compat", "hookName": "HOOK", "hook": "buyer::OUTSOURCE", "messageContains": "no longer supported" },
-    { "name": "two segment short name", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::main.cmp", "messageContains": "task.stage.signal" },
-    { "name": "four segment signal name", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task.stage.signal.extra", "messageContains": "task.stage.signal" },
-    { "name": "empty signal segment", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task..cmp", "messageContains": "task.stage.signal" },
-    { "name": "pure absence has no positive anchor", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::~task.cancel.cmp", "messageContains": "positive signal anchor" },
-    { "name": "or branch must have positive anchor", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task.ok.cmp | ~task.cancel.cmp", "messageContains": "each OR branch" },
-    { "name": "zero delay is rejected", "profile": "evm_strict", "hookName": "HOOK", "hook": "buyer::task.pay.cmp +0s", "messageContains": "invalid duration" },
-    { "name": "nested external is rejected", "profile": "cloud_compat", "hookName": "HOOK", "hook": "::OUTSOURCE@(seller::OUTSIDE@(buyer::task.main.cmp))", "messageContains": "nested OUTSIDE/OUTSOURCE" }
+    {
+      "name": "missing source separator",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "task.main.cmp",
+      "messageContains": "must contain"
+    },
+    {
+      "name": "empty source only allowed for external hooks",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::task.main.cmp",
+      "messageContains": "empty source is only allowed"
+    },
+    {
+      "name": "single segment short name",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::cmp",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "bare outside is removed",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::OUTSIDE",
+      "messageContains": "no longer supported"
+    },
+    {
+      "name": "bare outsource is removed",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::OUTSOURCE",
+      "messageContains": "OUTSOURCE has been retired"
+    },
+    {
+      "name": "two segment short name",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::main.cmp",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "four segment signal name",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.stage.signal.extra",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "empty signal segment",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task..cmp",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "pure absence has no positive anchor",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::~task.cancel.cmp",
+      "messageContains": "positive signal anchor"
+    },
+    {
+      "name": "or branch must have positive anchor",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.ok.cmp | ~task.cancel.cmp",
+      "messageContains": "each OR branch"
+    },
+    {
+      "name": "zero delay is rejected",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.pay.cmp +0s",
+      "messageContains": "invalid duration"
+    },
+    {
+      "name": "nested external is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::OUTSIDE@(seller::OUTSIDE@(buyer::task.main.cmp))",
+      "messageContains": "nested OUTSIDE"
+    },
+    {
+      "name": "headed merge entry is rejected",
+      "profile": "cloud_compat",
+      "hookName": "MATCH",
+      "hook": "wholesaler::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
+      "messageContains": "empty source header"
+    },
+    {
+      "name": "headed anchor entry is rejected",
+      "profile": "cloud_compat",
+      "hookName": "ANCHOR_SETTLE",
+      "hook": "wholesaler::ANCHOR@(farmer.main.settle)",
+      "messageContains": "empty source header"
+    },
+    {
+      "name": "anchor entry mixed with operators is rejected",
+      "profile": "cloud_compat",
+      "hookName": "ANCHOR_SETTLE",
+      "hook": "::ANCHOR@(farmer.main.settle) & farmer.main.pay",
+      "messageContains": "must be the complete hook condition"
+    },
+    {
+      "name": "bare anchor is removed",
+      "profile": "cloud_compat",
+      "hookName": "ANCHOR_SETTLE",
+      "hook": "::ANCHOR",
+      "messageContains": "bare ANCHOR is no longer supported"
+    },
+    {
+      "name": "anchor target with source namespace is rejected",
+      "profile": "cloud_compat",
+      "hookName": "ANCHOR_SETTLE",
+      "hook": "::ANCHOR@(farmer::task.main.settle)",
+      "messageContains": "bare task.stage.signal"
+    }
   ],
   "replayCases": [
     {

@@ -685,6 +685,7 @@ dependencies = [
 name = "uvp-ffi"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "uvp-compiler",
  "uvp-hook-dsl",
  "uvp-replay",

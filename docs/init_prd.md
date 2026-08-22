@@ -133,7 +133,9 @@ A | B
 (A)
 signal + <positive integer><unit>
 OUTSIDE@(source::task.stage.signal)
-OUTSOURCE@(source::task.stage.signal)
+MERGE@(a::task.stage.signal, b::task.stage.signal)
+ANCHOR@(task.stage.signal)
+OUTSOURCE@(source::task.stage.signal)  # retired, parse-time rejection with migration hint
 ```
 
 #### Delay operator contract
@@ -233,7 +235,7 @@ Responsibilities:
 - Topology validation.
 - Cycle detection.
 - Cross-source rule validation.
-- Explicit `OUTSIDE@(…)` and `OUTSOURCE@(…)` validation.
+- Explicit `OUTSIDE@(…)`, `MERGE@(…)` and `ANCHOR@(…)` validation; `OUTSOURCE` is retired with a parse-time migration hint.
 - Portable compatibility classification.
 
 Compatibility classes:
@@ -411,7 +413,9 @@ Hook fixtures should cover:
 - Delay made impossible by negative signal.
 - Removed bare `OUTSIDE` / `OUTSOURCE` syntax.
 - Explicit `OUTSIDE@(source::task.stage.signal)`.
-- Explicit `OUTSOURCE@(source::task.stage.signal)`.
+- Explicit `MERGE@(a::task.stage.signal, b::task.stage.signal)` match entry.
+- Explicit empty-header `ANCHOR@(task.stage.signal)` acquisition reflux entry.
+- `OUTSOURCE` retired with a parse-time migration hint.
 
 Zhixu fixtures should cover:
 
