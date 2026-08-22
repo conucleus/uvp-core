@@ -109,6 +109,26 @@
       }
     },
     {
+      "name": "cloud merge entry with single upstream acts as cross-order observation entry",
+      "profile": "cloud_compat",
+      "hookName": "OBSERVE",
+      "hook": "::MERGE@(child_ci::child.test.cmp)",
+      "expect": {
+        "source": "",
+        "mode": "merge",
+        "upstreamSource": null,
+        "runtimeCondition": "MERGE@(child_ci::child.test.cmp)",
+        "normalizedExpression": "::MERGE@(child_ci::child.test.cmp)",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "child_ci",
+            "signalName": "child.test.cmp"
+          }
+        ]
+      }
+    },
+    {
       "name": "cloud anchor entry refluxes child-order settlement into anchor executor",
       "profile": "cloud_compat",
       "hookName": "ANCHOR_SETTLE",

@@ -31,7 +31,10 @@ pub enum Expr {
         mode: ExternalMode,
         target: Box<HookExpr>,
     },
-    /// 撮合入口：≥2 路独立上游信号逐事件汇入静态执行器；配对与建单由执行器决定。
+    /// 撮合入口：k≥1 路独立上游信号逐事件携带溯源转交静态执行器，判定权归执行器。
+    /// k≥2 含跨源配对；k=1 退化为跨订单观察/聚合入口（单 source 的多张订单逐
+    /// 事件转交，"收到几个、收齐没有"仍由执行器裁决）。分馏 OUTSIDE@ 是同一
+    /// 管道上判定谓词退化为恒等、连建单都由引擎代行的极限形态。
     Merge {
         targets: Vec<HookExpr>,
     },
@@ -486,6 +489,9 @@ fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
                 .ok_or_else(|| {
                     HookError::Message("compiled merge AST node is missing targets".to_string())
                 })?;
+            // 求值器只做表达式裁决，从不执行投递：作为"汇合表达式"，少于两路
+            // 操作数没有求值意义。k=1 的运行时投递形态（跨订单观察入口）由
+            // 状态机在 decode 层短路处理，不经过这里。
             if targets.len() < 2 {
                 return Err(HookError::Message(
                     "compiled merge AST node requires at least two targets".to_string(),
@@ -1584,6 +1590,9 @@ impl<'a> Parser<'a> {
             }
             targets.push(target);
         }
+        // k≥1 而非 k≥2：k=1 是合法的跨订单观察/聚合入口（单 source 的多张订单
+        // 逐事件转交静态执行器，判定权仍在执行器）；求值器层的 ≥2 下限只约束
+        // 表达式形态，见 expr_from_cloud_value。
         if targets.is_empty() {
             return Err(HookError::Message(
                 "MERGE@ requires at least one upstream signal target".to_string(),
@@ -2075,8 +2084,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_entry_parses_targets_and_dependencies() {
-        let out = parse_value(
+    fn merge_entry_parses_targets_and_dependencies() {        let out = parse_value(
             "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
             Profile::CloudCompat,
             "MATCH",
@@ -2133,6 +2141,37 @@ mod tests {
                 "expected rejection for {hook}"
             );
         }
+    }
+
+    #[test]
+    fn merge_entry_with_single_upstream_is_observation_entry() {
+        // k=1 是合法的运行时投递形态：单 source 的多张订单逐事件转交静态执行
+        // 器（跨订单观察/聚合入口），判定权仍在执行器。钉住 parse 层 k≥1 下限，
+        // 防止被误"收紧"到 ≥2。
+        let out = parse_value(
+            "::MERGE@(child_ci::child.test.cmp)",
+            Profile::CloudCompat,
+            "OBSERVE",
+        );
+        assert_eq!(out["mode"], "merge");
+        assert_eq!(
+            out["mergeTargets"],
+            json!([{ "source": "child_ci", "signalName": "child.test.cmp" }])
+        );
+
+        // 求值器只做表达式裁决、从不执行投递：作为汇合表达式，k<2 在求值层
+        // 仍无意义。运行时投递由状态机在 decode 层短路完成，不经过求值器。
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: out["cloudAst"].clone(),
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .expect_err("merge expression with a single operand must not evaluate");
+        assert!(
+            err.to_string().contains("requires at least two targets"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
