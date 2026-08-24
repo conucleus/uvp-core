@@ -398,9 +398,12 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                 "compiled anchor hook AST root must be an anchor node".to_string(),
             ));
         }
-        "outside_spawn" if !matches!(expr, Expr::External { .. }) => {
+        // outside_spawn 的规范产物是 root=signal：委托关系由顶层 source +
+        // upstreamSource 表达，求值即以目标 source 解释该 signal。要求
+        // root 为 external 节点会拒绝编译器自己的合法产物。
+        "outside_spawn" if !matches!(expr, Expr::Signal(_)) => {
             return Err(HookError::Message(
-                "compiled external hook AST root must be an external node".to_string(),
+                "compiled external hook AST root must be a plain signal reference".to_string(),
             ));
         }
         "normal" if contains_nested_external(&expr) => {
@@ -2507,6 +2510,28 @@ mod tests {
         })
         .expect_err("duration overflow must be rejected");
         assert!(err.to_string().contains("duration is too large"));
+    }
+
+    #[test]
+    fn outside_spawn_evaluates_through_delegated_signal_root() {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "TRIGGER".to_string(),
+            hook: "::OUTSIDE@(seller::task.ship.cmp)".to_string(),
+        })
+        .unwrap();
+        let eval = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast: parsed.cloud_ast,
+            signals: vec![SignalFact {
+                source: "seller".to_string(),
+                signal_name: "task.ship.cmp".to_string(),
+                received_at: "2026-04-27T00:00:00.000Z".to_string(),
+            }],
+            now: "2026-04-27T00:00:00.000Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(eval.state, EvalState::Ready);
     }
 
     #[test]
