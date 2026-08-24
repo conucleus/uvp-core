@@ -123,6 +123,7 @@ struct OracleState {
     orders: BTreeMap<String, OracleOrderState>,
 }
 
+#[derive(Default)]
 struct OracleOrderState {
     plan_id: String,
     zhixu_id: String,
@@ -139,7 +140,7 @@ struct HookRuntime {
     ready_emitted: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct EvalValue {
     value: bool,
     wait: bool,
@@ -374,40 +375,58 @@ fn evaluate_instructions(
     let mut stack = Vec::new();
     for instruction in instructions {
         match value_str(instruction, "op")? {
-            "SIGNAL" => stack.push(signal_value(order, value_str(instruction, "signalKey")?)),
+            "SIGNAL" => stack.push(signal_value(order, value_str(instruction, "signalKey")?)?),
             "NOT" => {
-                let value = stack.pop().unwrap_or_else(false_value);
+                let Some(value) = stack.pop() else {
+                    return Err(ReplayError::Message(
+                        "malformed instruction plan: NOT requires one operand on the stack"
+                            .to_string(),
+                    ));
+                };
                 stack.push(not_value(value));
             }
             "DELAY" => {
-                let value = stack.pop().unwrap_or_else(false_value);
+                let Some(value) = stack.pop() else {
+                    return Err(ReplayError::Message(
+                        "malformed instruction plan: DELAY requires one operand on the stack"
+                            .to_string(),
+                    ));
+                };
                 stack.push(delay_value(
                     value,
                     value_i64(instruction, "delaySeconds")?,
                     now,
                 )?);
             }
-            "AND" => {
-                let arity = value_i64(instruction, "arity")?.max(0) as usize;
-                let split = stack.len().saturating_sub(arity);
-                let terms = stack.split_off(split);
-                stack.push(
-                    terms
-                        .into_iter()
-                        .reduce(and_value)
-                        .unwrap_or_else(false_value),
-                );
-            }
-            "OR" => {
-                let arity = value_i64(instruction, "arity")?.max(0) as usize;
-                let split = stack.len().saturating_sub(arity);
-                let terms = stack.split_off(split);
-                stack.push(
-                    terms
-                        .into_iter()
-                        .reduce(or_value)
-                        .unwrap_or_else(false_value),
-                );
+            "AND" | "OR" => {
+                let is_and = value_str(instruction, "op")? == "AND";
+                let arity = value_i64(instruction, "arity")?;
+                if arity <= 0 {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: {} arity must be positive",
+                        if is_and { "AND" } else { "OR" }
+                    )));
+                }
+                let arity = arity as usize;
+                if stack.len() < arity {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: {} requires {arity} operands but {} remain",
+                        if is_and { "AND" } else { "OR" },
+                        stack.len()
+                    )));
+                }
+                let terms = stack.split_off(stack.len() - arity);
+                let combined = if is_and {
+                    terms.into_iter().reduce(and_value)
+                } else {
+                    terms.into_iter().reduce(or_value)
+                };
+                stack.push(combined.ok_or_else(|| {
+                    ReplayError::Message(
+                        "malformed instruction plan: boolean instruction produced no value"
+                            .to_string(),
+                    )
+                })?);
             }
             other => {
                 return Err(ReplayError::Message(format!(
@@ -416,23 +435,27 @@ fn evaluate_instructions(
             }
         }
     }
-    Ok(stack.first().copied().unwrap_or_else(false_value))
+    if stack.len() != 1 {
+        return Err(ReplayError::Message(format!(
+            "malformed instruction plan: expected exactly one result value, found {}",
+            stack.len()
+        )));
+    }
+    Ok(stack[0])
 }
 
-fn signal_value(order: &OracleOrderState, signal_key: &str) -> EvalValue {
+fn signal_value(order: &OracleOrderState, signal_key: &str) -> Result<EvalValue> {
     let Some(signal) = order.signals.get(signal_key) else {
-        return false_value();
+        return Ok(false_value());
     };
-    let submitted_at = value_str(signal, "submittedAt")
-        .and_then(seconds_from_iso)
-        .unwrap_or(0);
-    EvalValue {
+    let submitted_at = seconds_from_iso(value_str(signal, "submittedAt")?)?;
+    Ok(EvalValue {
         value: true,
         wait: false,
         cancel: false,
         due_at: 0,
         anchor_at: submitted_at,
-    }
+    })
 }
 
 fn false_value() -> EvalValue {
@@ -468,7 +491,9 @@ fn delay_value(value: EvalValue, delay_seconds: i64, now: &str) -> Result<EvalVa
     if value.cancel || !value.value {
         return Ok(value);
     }
-    let due_at = value.anchor_at + delay_seconds;
+    let due_at = value.anchor_at.checked_add(delay_seconds).ok_or_else(|| {
+        ReplayError::Message("delay computation overflows the replay timestamp range".to_string())
+    })?;
     if seconds_from_iso(now)? < due_at {
         return Ok(EvalValue {
             value: false,
@@ -814,6 +839,74 @@ mod tests {
         };
         let merged = or_value(left, right);
         assert_eq!(merged.anchor_at, 5);
+    }
+
+    #[test]
+    fn rejects_not_without_operand() {
+        let instructions = vec![json!({"op": "NOT"})];
+        let error = evaluate_instructions(
+            &OracleOrderState::default(),
+            &instructions,
+            "2026-04-27T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("NOT requires one operand"));
+    }
+
+    #[test]
+    fn rejects_arity_exceeding_stack() {
+        let instructions = vec![
+            json!({"op": "SIGNAL", "signalKey": "0x50"}),
+            json!({"op": "AND", "arity": 2}),
+        ];
+        let error = evaluate_instructions(
+            &OracleOrderState::default(),
+            &instructions,
+            "2026-04-27T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires 2 operands"));
+    }
+
+    #[test]
+    fn rejects_leftover_stack_values() {
+        let instructions = vec![
+            json!({"op": "SIGNAL", "signalKey": "0x50"}),
+            json!({"op": "SIGNAL", "signalKey": "0x51"}),
+        ];
+        let error = evaluate_instructions(
+            &OracleOrderState::default(),
+            &instructions,
+            "2026-04-27T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exactly one result value"));
+    }
+
+    #[test]
+    fn rejects_overflowing_delay_computation() {
+        let anchored = EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: 0,
+            anchor_at: i64::MAX,
+        };
+        let error = delay_value(anchored, 30 * 24 * 60 * 60, "2026-04-27T00:00:00Z").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("overflows the replay timestamp range"));
+    }
+
+    #[test]
+    fn rejects_invalid_submitted_at() {
+        let mut order = OracleOrderState::default();
+        order.signals.insert(
+            "0x50".to_string(),
+            json!({"submittedAt": "not-a-timestamp"}),
+        );
+        let error = signal_value(&order, "0x50").unwrap_err();
+        assert!(error.to_string().contains("invalid chain oracle timestamp"));
     }
 
     #[test]

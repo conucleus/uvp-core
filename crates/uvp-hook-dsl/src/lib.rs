@@ -420,6 +420,10 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         }
         _ => {}
     }
+    // Defense in depth: a hand-crafted compiled AST must satisfy the same
+    // positive-anchor invariant as a parsed expression before it may drive
+    // hook status transitions.
+    validate_hook(&expr, req.profile)?;
     let signals = signal_map(req.signals, req.profile)?;
     let result = eval_expr(&expr, &source, &signals, now)?;
 
@@ -439,19 +443,27 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
     let mut result = BTreeMap::new();
     for signal in signals {
         let received_at = parse_time(&signal.received_at, profile)?;
-        result.insert(
-            signal_key(&signal.source, &signal.signal_name),
-            SignalEntry {
+        // First-writer-wins matches the replay oracle and the documented
+        // runtime contract: a repeated source::signalName fact never replaces
+        // the first received instance.
+        result
+            .entry(signal_key(&signal.source, &signal.signal_name))
+            .or_insert(SignalEntry {
                 source: signal.source,
                 signal_name: signal.signal_name,
                 received_at,
-            },
-        );
+            });
     }
     Ok(result)
 }
 
+const MAX_PARSE_DEPTH: usize = 256;
+
 fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
+    parse_hook_expr_at_depth(raw, profile, 0)
+}
+
+fn parse_hook_expr_at_depth(raw: &str, profile: Profile, base_depth: usize) -> Result<HookExpr> {
     let (source, condition_raw) = raw
         .trim()
         .split_once("::")
@@ -470,7 +482,7 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
         ));
     }
     reject_unsupported_operators(condition_raw)?;
-    let mut parser = Parser::new(condition_raw, profile);
+    let mut parser = Parser::with_depth(condition_raw, profile, base_depth);
     let condition = parser.parse()?;
     validate_external_position(&condition, true)?;
     if matches!(
@@ -490,6 +502,15 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
 }
 
 fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
+    expr_from_cloud_value_at_depth(value, 0)
+}
+
+fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
+    if depth > MAX_PARSE_DEPTH {
+        return Err(HookError::Message(format!(
+            "compiled hook AST nesting exceeds the maximum depth of {MAX_PARSE_DEPTH}"
+        )));
+    }
     let kind = value
         .get("type")
         .and_then(Value::as_str)
@@ -594,10 +615,11 @@ fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
                 &["type", "expr"],
                 "compiled neg AST node",
             )?;
-            Ok(Expr::Not(Box::new(expr_from_cloud_value(
+            Ok(Expr::Not(Box::new(expr_from_cloud_value_at_depth(
                 value.get("expr").ok_or_else(|| {
                     HookError::Message("compiled neg AST node is missing expr".to_string())
                 })?,
+                depth + 1,
             )?)))
         }
         "and" | "or" => {
@@ -608,12 +630,18 @@ fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
                 &["type", "left", "right"],
                 "compiled boolean AST node",
             )?;
-            let left = expr_from_cloud_value(value.get("left").ok_or_else(|| {
-                HookError::Message("compiled boolean AST node is missing left".to_string())
-            })?)?;
-            let right = expr_from_cloud_value(value.get("right").ok_or_else(|| {
-                HookError::Message("compiled boolean AST node is missing right".to_string())
-            })?)?;
+            let left = expr_from_cloud_value_at_depth(
+                value.get("left").ok_or_else(|| {
+                    HookError::Message("compiled boolean AST node is missing left".to_string())
+                })?,
+                depth + 1,
+            )?;
+            let right = expr_from_cloud_value_at_depth(
+                value.get("right").ok_or_else(|| {
+                    HookError::Message("compiled boolean AST node is missing right".to_string())
+                })?,
+                depth + 1,
+            )?;
             Ok(if kind == "and" {
                 Expr::And(vec![left, right])
             } else {
@@ -628,9 +656,12 @@ fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
                 &["type", "expr", "rawDuration", "durationSeconds"],
                 "compiled delay AST node",
             )?;
-            let expr = expr_from_cloud_value(value.get("expr").ok_or_else(|| {
-                HookError::Message("compiled delay AST node is missing expr".to_string())
-            })?)?;
+            let expr = expr_from_cloud_value_at_depth(
+                value.get("expr").ok_or_else(|| {
+                    HookError::Message("compiled delay AST node is missing expr".to_string())
+                })?,
+                depth + 1,
+            )?;
             let raw_duration = value
                 .get("rawDuration")
                 .and_then(Value::as_str)
@@ -1490,30 +1521,31 @@ struct Parser<'a> {
 /// 递归下降深度上限。hook 表达式来自外部可填写的模板定义，无界嵌套
 /// （深层括号或连续 `~`）会打满调用栈直接 abort 宿主进程——栈溢出不可被
 /// catch_unwind 捕获，必须在解析期以普通错误拒绝。
-const MAX_EXPRESSION_DEPTH: usize = 128;
-
 impl<'a> Parser<'a> {
-    fn new(input: &'a str, profile: Profile) -> Self {
+    fn with_depth(input: &'a str, profile: Profile, depth: usize) -> Self {
         Self {
             input,
             index: 0,
             profile,
-            depth: 0,
+            depth,
         }
     }
 
-    fn enter(&mut self) -> Result<()> {
-        if self.depth >= MAX_EXPRESSION_DEPTH {
+    fn guard_depth<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            self.depth -= 1;
             return Err(HookError::Message(format!(
-                "hook expression nesting exceeds the maximum depth of {MAX_EXPRESSION_DEPTH}"
+                "hook expression nesting exceeds the maximum depth of {MAX_PARSE_DEPTH}"
             )));
         }
-        self.depth += 1;
-        Ok(())
+        let result = parse(self);
+        self.depth -= 1;
+        result
     }
 
     fn parse(&mut self) -> Result<Expr> {
-        let expr = self.parse_or()?;
+        let expr = self.guard_depth(|parser| parser.parse_or())?;
         self.skip_ws();
         if !self.at_end() {
             return Err(HookError::Message(format!(
@@ -1526,10 +1558,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_or(&mut self) -> Result<Expr> {
-        self.enter()?;
-        let result = self.parse_or_inner();
-        self.depth -= 1;
-        result
+        self.guard_depth(|parser| parser.parse_or_inner())
     }
 
     fn parse_or_inner(&mut self) -> Result<Expr> {
@@ -1545,9 +1574,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_and(&mut self) -> Result<Expr> {
-        let mut terms = vec![self.parse_unary()?];
+        let mut terms = vec![self.guard_depth(|parser| parser.parse_unary())?];
         while self.consume("&") {
-            terms.push(self.parse_unary()?);
+            terms.push(self.guard_depth(|parser| parser.parse_unary())?);
         }
         Ok(if terms.len() == 1 {
             terms.remove(0)
@@ -1559,10 +1588,9 @@ impl<'a> Parser<'a> {
     fn parse_unary(&mut self) -> Result<Expr> {
         self.skip_ws();
         if self.consume("~") {
-            self.enter()?;
-            let result = self.parse_unary();
-            self.depth -= 1;
-            return result.map(|expr| Expr::Not(Box::new(expr)));
+            return Ok(Expr::Not(Box::new(
+                self.guard_depth(|parser| parser.parse_unary())?,
+            )));
         }
         self.parse_postfix()
     }
@@ -1630,7 +1658,7 @@ impl<'a> Parser<'a> {
             )));
         }
         let target_raw = self.read_balanced_target()?;
-        let target = parse_hook_expr(&target_raw, self.profile)?;
+        let target = parse_hook_expr_at_depth(&target_raw, self.profile, self.depth)?;
         if contains_nested_external(&target.condition) {
             return Err(HookError::Message(format!(
                 "nested OUTSIDE/MERGE is not allowed in {target_raw:?}"
@@ -1665,7 +1693,7 @@ impl<'a> Parser<'a> {
                     "MERGE@ targets must be non-empty source::task.stage.signal entries in {targets_raw:?}"
                 )));
             }
-            let target = parse_hook_expr(raw, self.profile)?;
+            let target = parse_hook_expr_at_depth(raw, self.profile, self.depth)?;
             if !matches!(target.condition, Expr::Signal(_)) {
                 return Err(HookError::Message(format!(
                     "MERGE@ target must be a plain source::task.stage.signal reference: {raw:?}"
@@ -1927,6 +1955,108 @@ mod tests {
         );
         assert_eq!(eval.state, EvalState::Ready);
         assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:00.000Z"));
+    }
+
+    #[test]
+    fn rejects_deeply_nested_expressions_instead_of_overflowing() {
+        let deep = format!("buyer::{}a{}", "(".repeat(50_000), ")".repeat(50_000));
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "HOOK".to_string(),
+            hook: deep,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("maximum depth of 256"));
+    }
+
+    #[test]
+    fn rejects_deeply_nested_external_targets() {
+        let mut expression = "peer::task.main.cmp".to_string();
+        for _ in 0..2_000 {
+            expression = format!("::OUTSIDE@({expression})");
+        }
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "HOOK".to_string(),
+            hook: expression,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("maximum depth of 256"));
+    }
+
+    #[test]
+    fn rejects_deeply_nested_cloud_ast() {
+        let mut root = json!({ "type": "signal", "signal": "task.main.cmp" });
+        // Just past the guard threshold: deep enough to trip the depth cap,
+        // shallow enough that serde_json's recursive Drop stays safe.
+        for _ in 0..300 {
+            root = json!({ "type": "neg", "expr": root });
+        }
+        let ast = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "buyer",
+            "mode": "normal",
+            "root": root
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast,
+            signals: vec![],
+            now: "2026-04-27T00:00:00.000Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("maximum depth of 256"));
+    }
+
+    #[test]
+    fn rejects_pure_negative_compiled_root() {
+        let ast = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "buyer",
+            "mode": "normal",
+            "root": { "type": "neg", "expr": { "type": "signal", "signal": "task.cancel.cmp" } }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast,
+            signals: vec![],
+            now: "2026-04-27T00:00:00.000Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must contain at least one positive signal anchor"));
+    }
+
+    #[test]
+    fn repeated_signals_keep_first_received_fact() {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "TRIGGER".to_string(),
+            hook: "buyer::(task.pay.cmp +5s)".to_string(),
+        })
+        .unwrap();
+        let eval = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast: parsed.cloud_ast,
+            signals: vec![
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.pay.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:01.000Z".to_string(),
+                },
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.pay.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:10.000Z".to_string(),
+                },
+            ],
+            now: "2026-04-27T00:00:06.000Z".to_string(),
+        })
+        .unwrap();
+        // First received fact (00:00:01 + 5s) is already due at 00:00:06; a
+        // last-writer-wins map would anchor at 00:00:10 and report wait.
+        assert_eq!(eval.state, EvalState::Ready);
     }
 
     #[test]
