@@ -220,16 +220,6 @@ pub fn eval_compiled_hook_json(input: &str) -> String {
     envelope_json(result)
 }
 
-pub fn compile_json(input: &str) -> String {
-    parse_hook_json(input)
-}
-
-pub fn replay_json(_input: &str) -> String {
-    envelope_json::<Value>(Err(HookError::Message(
-        "uvp-replay is not implemented in this initial core cut".to_string(),
-    )))
-}
-
 fn envelope_json<T: Serialize>(result: Result<T>) -> String {
     let envelope = match result {
         Ok(value) => Envelope {
