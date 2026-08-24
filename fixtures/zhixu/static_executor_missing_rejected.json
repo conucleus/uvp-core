@@ -1,0 +1,48 @@
+{
+  "name": "stage without a static executor or selectedStages anchor is rejected",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "hook_plan",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "static_executor_missing",
+      "uid": "fx-statexec-002",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "market",
+          "stages": [
+            {
+              "name": "loose",
+              "source": "buyer",
+              "trigger": [
+                "MATCH"
+              ],
+              "receiveSignals": {
+                "MATCH": "buyer::market.pool.matched"
+              },
+              "sendSignals": [
+                "ack"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "errorContains": "no static executor"
+  }
+}

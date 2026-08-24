@@ -1,0 +1,80 @@
+{
+  "name": "cross-source direct trigger consumes another source's signal",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "cross_source_trigger",
+      "uid": "fx-crosssrc-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "supply",
+          "stages": [
+            {
+              "name": "listing",
+              "source": "seller",
+              "trigger": [
+                "OPEN"
+              ],
+              "externalSignals": [
+                "OPEN"
+              ],
+              "sendSignals": [
+                "listing_ready"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "seller-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "demand",
+          "stages": [
+            {
+              "name": "watch",
+              "source": "buyer",
+              "trigger": [
+                "WATCH"
+              ],
+              "receiveSignals": {
+                "WATCH": "seller::supply.listing.listing_ready"
+              },
+              "sendSignals": [
+                "ack"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "buyer-org"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "cloud",
+    "hookIds": [
+      "demand.watch#WATCH"
+    ],
+    "hookDependencyCounts": {
+      "demand.watch#WATCH": 1
+    }
+  }
+}

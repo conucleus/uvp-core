@@ -1,0 +1,68 @@
+{
+  "name": "ANCHOR reflux entry targets a bare same-order signal",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "anchor_entry",
+      "uid": "fx-anchor-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "farmer",
+          "stages": [
+            {
+              "name": "packing",
+              "source": "farmer",
+              "trigger": [
+                "PACK"
+              ],
+              "externalSignals": [
+                "PACK"
+              ],
+              "sendSignals": [
+                "settled"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "harvest",
+          "stages": [
+            {
+              "name": "collect",
+              "source": "farmer",
+              "trigger": [
+                "REFLUX"
+              ],
+              "receiveSignals": {
+                "REFLUX": "::ANCHOR@(farmer.packing.settled)"
+              },
+              "sendSignals": [
+                "collected"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "cloudHookModes": {
+      "REFLUX": "anchor"
+    }
+  }
+}

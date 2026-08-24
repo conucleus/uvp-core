@@ -156,6 +156,10 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_external_signal_contracts(&stage_entries));
     validation_issues.extend(validate_trigger_references(&stage_entries));
+    // 与 hook_plan 目标共用同一组校验：同一份定义不允许"一个 target 收、
+    // 另一个放"，否则 Go 主链路会拿到被 hook_plan 拒绝的定义的产物。
+    validation_issues.extend(validate_signal_maps(&stage_entries));
+    validation_issues.extend(validate_receive_signal_references(&stage_entries));
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
@@ -198,15 +202,19 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
                 .and_then(Value::as_object)
             {
                 for (hook_name, raw) in signal_map {
-                    if let Some(raw_expression) = raw.as_str() {
-                        hooks.push(cloud_hook_artifact(
-                            entry,
-                            hook_name,
-                            raw_expression,
-                            "executor",
-                            Some(supplier_id),
-                        )?);
-                    }
+                    let Some(raw_expression) = raw.as_str() else {
+                        return Err(CompilerError::Message(format!(
+                            "{}.executor.zhixuExecutorConfig.signalMap.{hook_name} is invalid: expected string",
+                            entry.stage_identifier
+                        )));
+                    };
+                    hooks.push(cloud_hook_artifact(
+                        entry,
+                        hook_name,
+                        raw_expression,
+                        "executor",
+                        Some(supplier_id),
+                    )?);
                 }
             }
         }

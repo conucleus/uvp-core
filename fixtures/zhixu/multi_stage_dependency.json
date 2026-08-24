@@ -1,0 +1,92 @@
+{
+  "name": "multi-stage dependency fans two upstreams into one hook",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "multi_stage_dep",
+      "uid": "fx-fanin-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "pipeline",
+          "stages": [
+            {
+              "name": "one",
+              "source": "buyer",
+              "trigger": [
+                "GO1"
+              ],
+              "externalSignals": [
+                "GO1"
+              ],
+              "sendSignals": [
+                "done"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-a"
+              }
+            },
+            {
+              "name": "two",
+              "source": "buyer",
+              "trigger": [
+                "GO2"
+              ],
+              "externalSignals": [
+                "GO2"
+              ],
+              "sendSignals": [
+                "done"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-b"
+              }
+            },
+            {
+              "name": "three",
+              "source": "buyer",
+              "trigger": [
+                "FINISH"
+              ],
+              "receiveSignals": {
+                "FINISH": "buyer::(pipeline.one.done & pipeline.two.done)"
+              },
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-c"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "cloud",
+    "hookIds": [
+      "pipeline.three#FINISH"
+    ],
+    "hookDependencyCounts": {
+      "pipeline.three#FINISH": 2
+    }
+  }
+}

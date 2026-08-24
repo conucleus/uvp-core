@@ -442,7 +442,7 @@ Each fixture should declare:
 ```json
 {
   "name": "string",
-  "semanticVersion": "uvp-semantic/0.1",
+  "semanticVersion": "uvp-semantic/0.4",
   "input": "...",
   "expected": "...",
   "portable": true
@@ -457,7 +457,7 @@ Suggested version lines:
 
 ```text
 uvp-core crate version: 0.1.x
-UVP semantic version: uvp-semantic/0.1
+UVP semantic version: uvp-semantic/0.4
 artifact schema version: cloud-artifact/0.1, evm-artifact/0.1
 contract version: independent
 cloud runtime version: independent
@@ -468,7 +468,7 @@ Every generated artifact should include:
 ```json
 {
   "uvpCoreVersion": "0.1.0",
-  "semanticVersion": "uvp-semantic/0.1",
+  "semanticVersion": "uvp-semantic/0.4",
   "artifactSchemaVersion": "cloud-artifact/0.1"
 }
 ```

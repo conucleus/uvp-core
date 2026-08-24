@@ -1,0 +1,81 @@
+{
+  "name": "MERGE pairing entry fans cross-source events into match executor",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "merge_entry",
+      "uid": "fx-merge-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "trade",
+          "stages": [
+            {
+              "name": "listing",
+              "source": "seller",
+              "trigger": [
+                "LIST"
+              ],
+              "externalSignals": [
+                "LIST"
+              ],
+              "sendSignals": [
+                "cmp"
+              ]
+            },
+            {
+              "name": "intent",
+              "source": "buyer",
+              "trigger": [
+                "WANT"
+              ],
+              "externalSignals": [
+                "WANT"
+              ],
+              "sendSignals": [
+                "cmp"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "juice",
+          "stages": [
+            {
+              "name": "match",
+              "source": "buyer",
+              "trigger": [
+                "PAIR"
+              ],
+              "receiveSignals": {
+                "PAIR": "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)"
+              },
+              "sendSignals": [
+                "paired"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "cloudHookModes": {
+      "PAIR": "merge"
+    }
+  }
+}

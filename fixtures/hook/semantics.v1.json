@@ -488,8 +488,15 @@
       "name": "nested external is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::OUTSIDE@(seller::OUTSIDE@(buyer::task.main.cmp))",
+      "hook": "::OUTSIDE@(::OUTSIDE@(buyer::task.main.cmp))",
       "messageContains": "nested OUTSIDE"
+    },
+    {
+      "name": "headed outside entry is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::OUTSIDE@(seller::task.main.cmp)",
+      "messageContains": "empty source header"
     },
     {
       "name": "headed merge entry is rejected",
@@ -619,6 +626,349 @@
         "eventId": "3:0:0x03",
         "observedCount": 1,
         "mismatchCount": 0
+      }
+    },
+    {
+      "name": "timer waits on submit then readies via poke",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x11",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
+            "zhixuId": "corpus-replay-timer",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c02",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT",
+                "isTrigger": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d02",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e02",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f02"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f02": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b02"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x12",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x13",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d02",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e02",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f02",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x14",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "TimerPoked",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x15",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+          "pokedAt": "2026-04-27T00:00:06.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x16",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+          "stageIdentifier": "task.main",
+          "hookName": "TIMEOUT"
+        }
+      ],
+      "expect": {
+        "orderKey": "corpus-replay-timer::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f02",
+        "senderId": "pay-executor",
+        "eventId": "3:0:0x13",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": ["HookStatusChanged", "HookReady"],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "finalHookStatuses": {
+          "corpus-replay-timer::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b02": "reg"
+          }
+        }
+      }
+    },
+    {
+      "name": "negative guard cancels before registration",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a03",
+            "zhixuId": "corpus-replay-negative",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b03",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c03",
+                "stageIdentifier": "trade.main",
+                "hookName": "PAY_GUARD",
+                "isTrigger": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d03",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e03",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f03"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d04",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e04",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f04"
+                  },
+                  { "op": "NOT" },
+                  { "op": "AND", "arity": 2 }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f03": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b03"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f04": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b03"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a03",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d04",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e04",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f04",
+          "senderId": "refund-sender",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b03",
+          "status": "cxl"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d03",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e03",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f03",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:02.000Z"
+        }
+      ],
+      "expect": {
+        "orderKey": "corpus-replay-negative::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f04",
+        "senderId": "refund-sender",
+        "eventId": "3:0:0x23",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": ["HookStatusChanged"],
+        "finalHookStatuses": {
+          "corpus-replay-negative::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b03": "cxl"
+          }
+        }
+      }
+    },
+    {
+      "name": "late negative cancels a waiting delay",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x31",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
+            "zhixuId": "corpus-replay-delay-cancel",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c04",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT_GUARD",
+                "isTrigger": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d05",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e05",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f05"
+                  },
+                  { "op": "DELAY", "delaySeconds": 5 },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06"
+                  },
+                  { "op": "NOT" },
+                  { "op": "AND", "arity": 2 }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f05": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b04"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f06": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b04"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x32",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x33",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d05",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e05",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f05",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x34",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x35",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+          "senderId": "refund-sender",
+          "submittedAt": "2026-04-27T00:00:03.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x36",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
+          "status": "cxl"
+        }
+      ],
+      "expect": {
+        "orderKey": "corpus-replay-delay-cancel::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+        "senderId": "refund-sender",
+        "eventId": "5:0:0x35",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": ["HookStatusChanged", "HookStatusChanged"],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "finalHookStatuses": {
+          "corpus-replay-delay-cancel::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b04": "cxl"
+          }
+        }
       }
     }
   ]

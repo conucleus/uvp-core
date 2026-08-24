@@ -1,0 +1,94 @@
+{
+  "name": "delegation binds a child zhixu executor through signalMap source switch",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "child_source_switch",
+      "uid": "fx-delegate-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "selector",
+          "stages": [
+            {
+              "name": "assign",
+              "source": "buyer",
+              "trigger": [
+                "CREATE_ORDER_REQUEST"
+              ],
+              "externalSignals": [
+                "CREATE_ORDER_REQUEST"
+              ],
+              "sendSignals": [
+                "executor_selected"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "selector-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "execution",
+          "stages": [
+            {
+              "name": "main",
+              "source": "buyer",
+              "trigger": [
+                "START"
+              ],
+              "receiveSignals": {
+                "START": "buyer::selector.assign.executor_selected",
+                "TIMEOUT": "buyer::(selector.assign.executor_selected +5s) & ~execution.main.cmp"
+              },
+              "sendSignals": [
+                "str",
+                "cmp",
+                "err"
+              ],
+              "executor": {
+                "supplierType": "zhixu",
+                "supplierID": "payment-zhixu",
+                "zhixuExecutorConfig": {
+                  "signalMap": {
+                    "str": "payment::payment_flow.init.str",
+                    "cmp": "payment::payment_flow.settle.cmp"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "cloud",
+    "hookIds": [
+      "execution.main#START",
+      "execution.main#TIMEOUT",
+      "execution.main#signalMap.cmp",
+      "execution.main#signalMap.str"
+    ],
+    "hookDependencyCounts": {
+      "execution.main#START": 1,
+      "execution.main#signalMap.cmp": 1,
+      "execution.main#signalMap.str": 1
+    }
+  }
+}

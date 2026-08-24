@@ -1,0 +1,68 @@
+{
+  "name": "OUTSIDE spawn entry keeps empty header and upstream source dependency",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "outside_entry",
+      "uid": "fx-outside-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "dispatch",
+          "stages": [
+            {
+              "name": "main",
+              "source": "test_executor",
+              "trigger": [
+                "RUN"
+              ],
+              "externalSignals": [
+                "RUN"
+              ],
+              "sendSignals": [
+                "smart_contract"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "orchard",
+          "stages": [
+            {
+              "name": "retail",
+              "source": "buyer",
+              "trigger": [
+                "SPAWN"
+              ],
+              "receiveSignals": {
+                "SPAWN": "::OUTSIDE@(test_executor::dispatch.main.smart_contract)"
+              },
+              "sendSignals": [
+                "ack"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "cloudHookModes": {
+      "SPAWN": "outside_spawn"
+    }
+  }
+}

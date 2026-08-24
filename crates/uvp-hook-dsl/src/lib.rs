@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.3";
+pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.4";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp/cloud-ast/v1";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,6 +251,13 @@ fn envelope_json<T: Serialize>(result: Result<T>) -> String {
 pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     let profile = req.profile;
     let hook_name = req.hook_name;
+    // 长度上限对齐 DDL 列宽（hook_name VARCHAR(36)、signal_name VARCHAR(100)）：
+    // 超长定义在解析期即拒绝，不再拖到落库才以 value too long 失败。
+    if hook_name.trim().is_empty() || hook_name.len() > 36 {
+        return Err(HookError::Message(
+            "hook_name must be 1-36 characters".to_string(),
+        ));
+    }
     let hook = parse_hook_expr(&req.hook, profile)?;
     validate_hook(&hook.condition, profile)?;
 
@@ -387,6 +394,32 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         .get("root")
         .ok_or_else(|| HookError::Message("compiled hook AST root is missing".to_string()))?;
     let expr = expr_from_cloud_value(root)?;
+    // 求值器是解码层最后一道防线：root 形态必须与 mode 一致，布尔树内部
+    // 不得再嵌套跨源节点——两者都只能由手写毒 AST 构造，解析器产不出
+    // （解析期位置约束见 validate_external_position）。
+    match mode {
+        "merge" if !matches!(expr, Expr::Merge { .. }) => {
+            return Err(HookError::Message(
+                "compiled merge hook AST root must be a merge node".to_string(),
+            ));
+        }
+        "anchor" if !matches!(expr, Expr::Anchor { .. }) => {
+            return Err(HookError::Message(
+                "compiled anchor hook AST root must be an anchor node".to_string(),
+            ));
+        }
+        "outside_spawn" if !matches!(expr, Expr::External { .. }) => {
+            return Err(HookError::Message(
+                "compiled external hook AST root must be an external node".to_string(),
+            ));
+        }
+        "normal" if contains_nested_external(&expr) => {
+            return Err(HookError::Message(
+                "compiled normal hook AST must not contain cross-source nodes".to_string(),
+            ));
+        }
+        _ => {}
+    }
     let signals = signal_map(req.signals, req.profile)?;
     let result = eval_expr(&expr, &source, &signals, now)?;
 
@@ -439,9 +472,13 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
     let mut parser = Parser::new(condition_raw, profile);
     let condition = parser.parse()?;
     validate_external_position(&condition, true)?;
-    if matches!(condition, Expr::Merge { .. } | Expr::Anchor { .. }) && !source.is_empty() {
+    if matches!(
+        condition,
+        Expr::Merge { .. } | Expr::Anchor { .. } | Expr::External { .. }
+    ) && !source.is_empty()
+    {
         return Err(HookError::Message(
-            "MERGE@/ANCHOR@ entries must use an empty source header: ::MERGE@(a::task.stage.signal, ...) or ::ANCHOR@(task.stage.signal)".to_string(),
+            "MERGE@/ANCHOR@/OUTSIDE@ entries must use an empty source header: ::MERGE@(a::task.stage.signal, ...), ::ANCHOR@(task.stage.signal) or ::OUTSIDE@(source::task.stage.signal)".to_string(),
         ));
     }
     Ok(HookExpr {
@@ -1429,7 +1466,13 @@ struct Parser<'a> {
     input: &'a str,
     index: usize,
     profile: Profile,
+    depth: usize,
 }
+
+/// 递归下降深度上限。hook 表达式来自外部可填写的模板定义，无界嵌套
+/// （深层括号或连续 `~`）会打满调用栈直接 abort 宿主进程——栈溢出不可被
+/// catch_unwind 捕获，必须在解析期以普通错误拒绝。
+const MAX_EXPRESSION_DEPTH: usize = 128;
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str, profile: Profile) -> Self {
@@ -1437,7 +1480,18 @@ impl<'a> Parser<'a> {
             input,
             index: 0,
             profile,
+            depth: 0,
         }
+    }
+
+    fn enter(&mut self) -> Result<()> {
+        if self.depth >= MAX_EXPRESSION_DEPTH {
+            return Err(HookError::Message(format!(
+                "hook expression nesting exceeds the maximum depth of {MAX_EXPRESSION_DEPTH}"
+            )));
+        }
+        self.depth += 1;
+        Ok(())
     }
 
     fn parse(&mut self) -> Result<Expr> {
@@ -1454,6 +1508,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_or(&mut self) -> Result<Expr> {
+        self.enter()?;
+        let result = self.parse_or_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_or_inner(&mut self) -> Result<Expr> {
         let mut terms = vec![self.parse_and()?];
         while self.consume("|") {
             terms.push(self.parse_and()?);
@@ -1480,7 +1541,10 @@ impl<'a> Parser<'a> {
     fn parse_unary(&mut self) -> Result<Expr> {
         self.skip_ws();
         if self.consume("~") {
-            return Ok(Expr::Not(Box::new(self.parse_unary()?)));
+            self.enter()?;
+            let result = self.parse_unary();
+            self.depth -= 1;
+            return result.map(|expr| Expr::Not(Box::new(expr)));
         }
         self.parse_postfix()
     }
@@ -1575,6 +1639,7 @@ impl<'a> Parser<'a> {
         }
         let targets_raw = self.read_balanced_target()?;
         let mut targets = Vec::new();
+        let mut seen_targets = std::collections::BTreeSet::new();
         for part in targets_raw.split(',') {
             let raw = part.trim();
             if raw.is_empty() {
@@ -1586,6 +1651,11 @@ impl<'a> Parser<'a> {
             if !matches!(target.condition, Expr::Signal(_)) {
                 return Err(HookError::Message(format!(
                     "MERGE@ target must be a plain source::task.stage.signal reference: {raw:?}"
+                )));
+            }
+            if !seen_targets.insert(raw.to_string()) {
+                return Err(HookError::Message(format!(
+                    "MERGE@ targets must be distinct: duplicate entry {raw:?}"
                 )));
             }
             targets.push(target);
@@ -1690,7 +1760,15 @@ impl<'a> Parser<'a> {
                 self.index
             )));
         }
-        Ok(self.input[start..self.index].to_string())
+        let ident = &self.input[start..self.index];
+        // 标识符整体落 signal_name 列（task.stage.signal 全名，VARCHAR(100)）。
+        if ident.len() > 100 {
+            return Err(HookError::Message(format!(
+                "identifier exceeds the maximum length of 100 characters: {}…",
+                &ident[..32]
+            )));
+        }
+        Ok(ident.to_string())
     }
 
     fn consume(&mut self, value: &str) -> bool {
@@ -2053,13 +2131,56 @@ mod tests {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
             hook_name: "HOOK".to_string(),
-            hook: "buyer::OUTSIDE@(seller::task.main.cmp) & task.other.cmp".to_string(),
+            hook: "::OUTSIDE@(seller::task.main.cmp) & task.other.cmp".to_string(),
         })
         .unwrap_err();
         assert!(
             err.to_string()
                 .contains("must be the complete hook condition"),
             "unexpected error for a composite cross-source wrapper: {err}"
+        );
+
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "HOOK".to_string(),
+            hook: "buyer::OUTSIDE@(seller::task.main.cmp)".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("empty source header"),
+            "expected headed OUTSIDE rejection: {err}"
+        );
+    }
+
+    #[test]
+    fn parser_rejects_unbounded_nesting_and_duplicate_merge_targets() {
+        // 深度上限：深层括号与连续 ~ 都必须以普通错误拒绝，而不是打满
+        // 调用栈 abort 宿主进程（栈溢出不可被 catch_unwind 捕获）。
+        for poisoned in [
+            format!("buyer::{}task.main.cmp{}", "(".repeat(256), ")".repeat(256)),
+            format!("buyer::{}task.main.cmp", "~".repeat(256)),
+        ] {
+            let err = parse_hook(ParseHookRequest {
+                profile: Profile::CloudCompat,
+                hook_name: "HOOK".to_string(),
+                hook: poisoned,
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("maximum depth"),
+                "expected depth-limit rejection: {err}"
+            );
+        }
+
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "HOOK".to_string(),
+            hook: "::MERGE@(a::t.s.x, a::t.s.x)".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate entry"),
+            "unexpected error for duplicate merge targets: {err}"
         );
     }
 

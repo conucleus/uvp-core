@@ -1,0 +1,75 @@
+{
+  "name": "linear flow across two stages",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "linear_flow",
+      "uid": "fx-linear-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "flow",
+          "stages": [
+            {
+              "name": "start",
+              "source": "buyer",
+              "trigger": [
+                "KICKOFF"
+              ],
+              "externalSignals": [
+                "KICKOFF"
+              ],
+              "sendSignals": [
+                "step_done"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-a"
+              }
+            },
+            {
+              "name": "finish",
+              "source": "buyer",
+              "trigger": [
+                "FINISH"
+              ],
+              "receiveSignals": {
+                "FINISH": "buyer::flow.start.step_done"
+              },
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-b"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "cloud",
+    "hookIds": [
+      "flow.finish#FINISH"
+    ],
+    "hookDependencyCounts": {
+      "flow.finish#FINISH": 1
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "name": "merge pairing entry requires the static executor it delivers to",
+  "semanticVersion": "uvp-semantic/0.4",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "static_executor_ok",
+      "uid": "fx-statexec-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "trade",
+          "stages": [
+            {
+              "name": "listing",
+              "source": "seller",
+              "trigger": [
+                "LIST"
+              ],
+              "externalSignals": [
+                "LIST"
+              ],
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "seller-org"
+              }
+            },
+            {
+              "name": "intent",
+              "source": "buyer",
+              "trigger": [
+                "WANT"
+              ],
+              "externalSignals": [
+                "WANT"
+              ],
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "buyer-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "market",
+          "stages": [
+            {
+              "name": "pool",
+              "source": "buyer",
+              "trigger": [
+                "MATCH"
+              ],
+              "receiveSignals": {
+                "MATCH": "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)"
+              },
+              "sendSignals": [
+                "matched"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "market-org"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "cloud",
+    "hookIds": [
+      "market.pool#MATCH"
+    ],
+    "hookDependencyCounts": {
+      "market.pool#MATCH": 2
+    }
+  }
+}
