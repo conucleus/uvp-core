@@ -43,18 +43,16 @@ fn guard_ffi_panic(operation: &str, action: impl FnOnce() -> String) -> String {
 
 #[no_mangle]
 pub extern "C" fn uvp_compile_json(request_json: *const c_char) -> *mut c_char {
-    into_c_string(guard_ffi_panic(
-        "uvp_compile_json",
-        || uvp_compiler::compile_json(&to_rust_string(request_json)),
-    ))
+    into_c_string(guard_ffi_panic("uvp_compile_json", || {
+        uvp_compiler::compile_json(&to_rust_string(request_json))
+    }))
 }
 
 #[no_mangle]
 pub extern "C" fn uvp_parse_hook_json(request_json: *const c_char) -> *mut c_char {
-    into_c_string(guard_ffi_panic(
-        "uvp_parse_hook_json",
-        || uvp_hook_dsl::parse_hook_json(&to_rust_string(request_json)),
-    ))
+    into_c_string(guard_ffi_panic("uvp_parse_hook_json", || {
+        uvp_hook_dsl::parse_hook_json(&to_rust_string(request_json))
+    }))
 }
 
 #[no_mangle]
@@ -66,10 +64,9 @@ pub extern "C" fn uvp_eval_compiled_hook_json(request_json: *const c_char) -> *m
 
 #[no_mangle]
 pub extern "C" fn uvp_replay_json(request_json: *const c_char) -> *mut c_char {
-    into_c_string(guard_ffi_panic(
-        "uvp_replay_json",
-        || uvp_replay::replay_json(&to_rust_string(request_json)),
-    ))
+    into_c_string(guard_ffi_panic("uvp_replay_json", || {
+        uvp_replay::replay_json(&to_rust_string(request_json))
+    }))
 }
 
 #[no_mangle]

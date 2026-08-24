@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.4";
+pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.5";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp/cloud-ast/v1";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -468,7 +468,8 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
             "empty source is only allowed for OUTSIDE@(…), MERGE@(…) or ANCHOR@(…) hooks"
                 .to_string(),
         ));
-    }    reject_unsupported_operators(condition_raw)?;
+    }
+    reject_unsupported_operators(condition_raw)?;
     let mut parser = Parser::new(condition_raw, profile);
     let condition = parser.parse()?;
     validate_external_position(&condition, true)?;
@@ -752,10 +753,9 @@ fn validate_hook(expr: &Expr, profile: Profile) -> Result<()> {
 
 fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
     match expr {
-        Expr::Signal(_)
-        | Expr::External { .. }
-        | Expr::Merge { .. }
-        | Expr::Anchor { .. } => Ok(true),
+        Expr::Signal(_) | Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => {
+            Ok(true)
+        }
         Expr::Not(inner) => {
             if profile == Profile::CloudCompat && !matches!(inner.as_ref(), Expr::Signal(_)) {
                 return Err(HookError::Message(
@@ -805,10 +805,7 @@ fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
 
 fn has_positive_anchor(expr: &Expr) -> bool {
     match expr {
-        Expr::Signal(_)
-        | Expr::External { .. }
-        | Expr::Merge { .. }
-        | Expr::Anchor { .. } => true,
+        Expr::Signal(_) | Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => true,
         Expr::Not(_) => false,
         Expr::Delay { expr, .. } => has_positive_anchor(expr),
         Expr::And(terms) | Expr::Or(terms) => terms.iter().any(has_positive_anchor),
@@ -942,10 +939,7 @@ fn precedence(expr: &Expr) -> u8 {
         Expr::Or(_) => 1,
         Expr::And(_) => 2,
         Expr::Not(_) | Expr::Delay { .. } => 3,
-        Expr::Signal(_)
-        | Expr::External { .. }
-        | Expr::Merge { .. }
-        | Expr::Anchor { .. } => 4,
+        Expr::Signal(_) | Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => 4,
     }
 }
 
@@ -1301,18 +1295,17 @@ fn eval_expr(
                     };
                     // 溢出必须走错误返回而不是 panic：panic 跨 extern "C" 边界会 abort
                     // 整个宿主进程（statemachine），毒 hook 会杀死所有在途信号处理。
-                    let delta = chrono::Duration::try_seconds(*duration_seconds).ok_or_else(|| {
-                        HookError::Message(format!(
-                            "delay duration seconds out of range: {duration_seconds}"
-                        ))
-                    })?;
-                    let ready_at = anchor
-                        .checked_add_signed(delta)
-                        .ok_or_else(|| {
+                    let delta =
+                        chrono::Duration::try_seconds(*duration_seconds).ok_or_else(|| {
                             HookError::Message(format!(
-                                "delay readyAt overflowed: anchor {anchor} plus {duration_seconds}s"
+                                "delay duration seconds out of range: {duration_seconds}"
                             ))
                         })?;
+                    let ready_at = anchor.checked_add_signed(delta).ok_or_else(|| {
+                        HookError::Message(format!(
+                            "delay readyAt overflowed: anchor {anchor} plus {duration_seconds}s"
+                        ))
+                    })?;
                     if now >= ready_at {
                         Ok(InternalEval {
                             state: EvalState::Ready,
@@ -1375,10 +1368,21 @@ fn eval_expr(
             let mut waits = Vec::new();
             let mut has_open = false;
             let mut all_impossible = true;
+            let mut ready: Option<InternalEval> = None;
             for term in terms {
                 let evaluated = eval_expr(term, source, signals, now)?;
                 match evaluated.state {
-                    EvalState::Ready => return Ok(evaluated),
+                    EvalState::Ready => {
+                        // Arrival-time causality: when several branches have
+                        // already fired, the earliest RECEIVED signal is the
+                        // cause; the winning branch keeps its own timer.
+                        let better = ready.as_ref().is_none_or(|current| {
+                            branch_anchor(&evaluated) < branch_anchor(current)
+                        });
+                        if better {
+                            ready = Some(evaluated);
+                        }
+                    }
                     EvalState::Wait => {
                         has_open = true;
                         all_impossible = false;
@@ -1392,6 +1396,9 @@ fn eval_expr(
                     }
                     EvalState::Impossible => {}
                 }
+            }
+            if let Some(evaluated) = ready {
+                return Ok(evaluated);
             }
             if let Some(ready_at) = waits.into_iter().min() {
                 return Ok(InternalEval {
@@ -1420,6 +1427,17 @@ fn eval_expr(
             })
         }
     }
+}
+
+/// Earliest received time of an evaluated branch; the arrival-time tiebreak
+/// for OR branches that have already fired.
+fn branch_anchor(evaluated: &InternalEval) -> DateTime<Utc> {
+    evaluated
+        .anchors
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or_else(|| evaluated.ready_at.unwrap_or(DateTime::<Utc>::MAX_UTC))
 }
 
 fn eval_signal(
@@ -1960,10 +1978,7 @@ mod tests {
             hook: "buyer::task.receive.cmp +31d".to_string(),
         })
         .unwrap_err();
-        assert!(
-            err.to_string().contains("30d"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("30d"), "unexpected error: {err}");
 
         let boundary = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
@@ -2004,10 +2019,7 @@ mod tests {
             now: "2026-04-27T00:00:01.000Z".to_string(),
         })
         .unwrap_err();
-        assert!(
-            err.to_string().contains("30d"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("30d"), "unexpected error: {err}");
     }
 
     #[test]
@@ -2205,16 +2217,20 @@ mod tests {
     }
 
     #[test]
-    fn merge_entry_parses_targets_and_dependencies() {        let out = parse_value(
+    fn merge_entry_parses_targets_and_dependencies() {
+        let out = parse_value(
             "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
             Profile::CloudCompat,
             "MATCH",
         );
         assert_eq!(out["mode"], "merge");
-        assert_eq!(out["mergeTargets"], json!([
-            { "source": "seller", "signalName": "trade.listing.cmp" },
-            { "source": "buyer", "signalName": "trade.intent.cmp" }
-        ]));
+        assert_eq!(
+            out["mergeTargets"],
+            json!([
+                { "source": "seller", "signalName": "trade.listing.cmp" },
+                { "source": "buyer", "signalName": "trade.intent.cmp" }
+            ])
+        );
         assert_eq!(
             out["dependencies"],
             json!([
@@ -2257,10 +2273,7 @@ mod tests {
                 hook: hook.to_string(),
             })
             .unwrap_err();
-            assert!(
-                !err.to_string().is_empty(),
-                "expected rejection for {hook}"
-            );
+            assert!(!err.to_string().is_empty(), "expected rejection for {hook}");
         }
     }
 
@@ -2307,10 +2320,7 @@ mod tests {
             out["dependencies"],
             json!([{ "kind": "positive", "source": "", "signalName": "farmer.main.settle" }])
         );
-        assert_eq!(
-            out["normalizedExpression"],
-            "::ANCHOR@(farmer.main.settle)"
-        );
+        assert_eq!(out["normalizedExpression"], "::ANCHOR@(farmer.main.settle)");
 
         let cloud_ast = out["cloudAst"].clone();
         assert_eq!(cloud_ast["mode"], "anchor");
@@ -2377,5 +2387,65 @@ mod tests {
         })
         .expect_err("duration overflow must be rejected");
         assert!(err.to_string().contains("duration is too large"));
+    }
+
+    #[test]
+    fn or_branches_resolve_by_earliest_received_signal() {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "TRIGGER".to_string(),
+            hook: "buyer::(task.pay.cmp | task.ship.cmp) +5s".to_string(),
+        })
+        .unwrap();
+        let eval = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast: parsed.cloud_ast,
+            signals: vec![
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.pay.cmp".to_string(),
+                    received_at: "2026-04-27T00:01:40.000Z".to_string(),
+                },
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.ship.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:01.000Z".to_string(),
+                },
+            ],
+            now: "2026-04-27T00:00:06.000Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(eval.state, EvalState::Ready);
+        assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:06.000Z"));
+    }
+
+    #[test]
+    fn or_anchor_uses_arrival_not_expression_order_without_delay() {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "TRIGGER".to_string(),
+            hook: "buyer::(task.pay.cmp | task.ship.cmp)".to_string(),
+        })
+        .unwrap();
+        let eval = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast: parsed.cloud_ast,
+            signals: vec![
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.pay.cmp".to_string(),
+                    received_at: "2026-04-27T00:09:00.000Z".to_string(),
+                },
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.ship.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:30.000Z".to_string(),
+                },
+            ],
+            now: "2026-04-27T00:09:01.000Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(eval.state, EvalState::Ready);
+        assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:30.000Z"));
     }
 }

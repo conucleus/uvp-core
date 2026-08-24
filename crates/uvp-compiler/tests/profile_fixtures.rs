@@ -153,8 +153,17 @@ fn assert_success_fields(fixture: &ProfileFixture, value: &Value) {
         for (hook_name, expected_mode) in expected_modes {
             let actual_mode = hooks
                 .iter()
-                .find(|hook| hook["hookName"].as_str().is_some_and(|name| name == hook_name))
-                .map(|hook| hook["astJson"]["mode"].as_str().unwrap_or_default().to_string())
+                .find(|hook| {
+                    hook["hookName"]
+                        .as_str()
+                        .is_some_and(|name| name == hook_name)
+                })
+                .map(|hook| {
+                    hook["astJson"]["mode"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string()
+                })
                 .unwrap_or_else(|| panic!("{} missing cloud hook {hook_name}", fixture.name));
             assert_eq!(
                 &actual_mode, expected_mode,

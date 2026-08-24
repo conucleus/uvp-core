@@ -35,7 +35,8 @@ struct ReplayExpect {
     wait_due_at: Option<String>,
     /// Assert terminal hook statuses: {orderKey -> {hookId -> status}}.
     #[serde(default)]
-    final_hook_statuses: Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
+    final_hook_statuses:
+        Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
     /// Assert these order keys exist in the replayed state (lineage/multi-order facts).
     #[serde(default)]
     state_order_keys: Option<Vec<String>>,
@@ -94,14 +95,9 @@ fn replays_semantic_corpus() {
         if let Some(finals) = &case.expect.final_hook_statuses {
             for (order_key, hooks) in finals {
                 for (hook_id, status) in hooks {
-                    let actual = &result["state"]["orders"][order_key]["hookStatuses"][hook_id]
-                        ["status"];
-                    assert_eq!(
-                        actual.as_str().unwrap_or_default(),
-                        status,
-                        "{}",
-                        case.name
-                    );
+                    let actual =
+                        &result["state"]["orders"][order_key]["hookStatuses"][hook_id]["status"];
+                    assert_eq!(actual.as_str().unwrap_or_default(), status, "{}", case.name);
                 }
             }
         }
@@ -110,7 +106,11 @@ fn replays_semantic_corpus() {
                 .as_object()
                 .expect("state orders should be an object");
             for key in order_keys {
-                assert!(orders.contains_key(key), "{} missing order {key}", case.name);
+                assert!(
+                    orders.contains_key(key),
+                    "{} missing order {key}",
+                    case.name
+                );
             }
         }
     }

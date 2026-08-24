@@ -519,13 +519,15 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
 }
 
 fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
+    // Arrival-time causality (semantic 0.5): the earliest RECEIVED signal is
+    // the cause, so OR merges keep the minimum anchor instead of the maximum.
     if left.value || right.value {
         return EvalValue {
             value: true,
             wait: false,
             cancel: false,
             due_at: 0,
-            anchor_at: left.anchor_at.max(right.anchor_at),
+            anchor_at: min_anchor(left.anchor_at, right.anchor_at),
         };
     }
     if left.wait || right.wait {
@@ -534,7 +536,7 @@ fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
             wait: true,
             cancel: false,
             due_at: min_non_zero(left.due_at, right.due_at),
-            anchor_at: left.anchor_at.max(right.anchor_at),
+            anchor_at: min_anchor(left.anchor_at, right.anchor_at),
         };
     }
     if left.cancel && right.cancel {
@@ -547,6 +549,16 @@ fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
         };
     }
     false_value()
+}
+
+fn min_anchor(left: i64, right: i64) -> i64 {
+    if left == 0 {
+        return right;
+    }
+    if right == 0 || left < right {
+        return left;
+    }
+    right
 }
 
 fn chain_event_to_expected_observation(event: &Value) -> Result<Value> {
@@ -783,6 +795,26 @@ fn envelope_json(result: Result<Value>) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn or_merge_keeps_earliest_anchor() {
+        let left = EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: 0,
+            anchor_at: 100,
+        };
+        let right = EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: 0,
+            anchor_at: 5,
+        };
+        let merged = or_value(left, right);
+        assert_eq!(merged.anchor_at, 5);
+    }
 
     #[test]
     fn replays_ready_hook() {
