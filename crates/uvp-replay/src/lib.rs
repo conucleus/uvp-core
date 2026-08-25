@@ -428,6 +428,30 @@ fn evaluate_instructions(
                     )
                 })?);
             }
+            "MERGE" => {
+                // 撮合扇入（semantic 0.6，规格 I1/I2）：任一路在场即就绪，锚点取
+                // 在场分支最早到达；无等待/取消分支。表达式形态 k≥2，k=1 观察入口
+                // 是 cloud 运行时投递形态，不进任何求值器。
+                let arity = value_i64(instruction, "arity")?;
+                if arity < 2 {
+                    return Err(ReplayError::Message(
+                        "malformed instruction plan: MERGE requires at least two targets".to_string(),
+                    ));
+                }
+                let arity = arity as usize;
+                if stack.len() < arity {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: MERGE requires {arity} operands but {} remain",
+                        stack.len()
+                    )));
+                }
+                let terms = stack.split_off(stack.len() - arity);
+                stack.push(terms.into_iter().reduce(merge_value).ok_or_else(|| {
+                    ReplayError::Message(
+                        "malformed instruction plan: merge instruction produced no value".to_string(),
+                    )
+                })?);
+            }
             other => {
                 return Err(ReplayError::Message(format!(
                     "unsupported chain-mode instruction {other}"
@@ -543,6 +567,26 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
         };
     }
     false_value()
+}
+
+/// 撮合扇入归并：任一路在场即就绪，锚点取在场分支最早到达（先到因果）。
+fn merge_value(left: EvalValue, right: EvalValue) -> EvalValue {
+    if left.value && right.value {
+        return EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: 0,
+            anchor_at: min_anchor(left.anchor_at, right.anchor_at),
+        };
+    }
+    if left.value {
+        return EvalValue { value: true, wait: false, cancel: false, due_at: 0, anchor_at: left.anchor_at };
+    }
+    if right.value {
+        return EvalValue { value: true, wait: false, cancel: false, due_at: 0, anchor_at: right.anchor_at };
+    }
+    EvalValue { value: false, wait: false, cancel: false, due_at: 0, anchor_at: 0 }
 }
 
 fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
@@ -841,6 +885,46 @@ mod tests {
         };
         let merged = or_value(left, right);
         assert_eq!(merged.anchor_at, 5);
+    }
+
+    #[test]
+    fn merge_delivers_on_first_contributing_signal() {
+        let instructions = vec![
+            json!({"op": "SIGNAL", "signalKey": "0xaa"}),
+            json!({"op": "SIGNAL", "signalKey": "0xbb"}),
+            json!({"op": "MERGE", "arity": 2}),
+        ];
+        let now = "2026-04-27T00:00:00Z";
+        let mut state = OracleOrderState::default();
+        state.signals.insert("0xaa".to_string(), json!({"submittedAt": "1970-01-01T00:01:40Z"}));
+        let result =
+            evaluate_instructions(&state, &instructions, now).expect("first arrival must deliver");
+        assert!(result.value);
+        assert_eq!(result.anchor_at, 100);
+
+        state.signals.insert("0xbb".to_string(), json!({"submittedAt": "1970-01-01T00:00:50Z"}));
+        let both = evaluate_instructions(&state, &instructions, now).expect("both present");
+        assert!(both.value);
+        assert_eq!(both.anchor_at, 50, "earliest arrival wins the merge anchor");
+
+        let none = evaluate_instructions(&OracleOrderState::default(), &instructions, now)
+            .expect("no arrival evaluates to false");
+        assert!(!none.value);
+    }
+
+    #[test]
+    fn rejects_merge_with_single_target() {
+        let instructions = vec![
+            json!({"op": "SIGNAL", "signalKey": "0xaa"}),
+            json!({"op": "MERGE", "arity": 1}),
+        ];
+        let error = evaluate_instructions(
+            &OracleOrderState::default(),
+            &instructions,
+            "2026-04-27T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("at least two targets"));
     }
 
     #[test]

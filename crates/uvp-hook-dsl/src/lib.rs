@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.5";
+pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.6";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp/cloud-ast/v1";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
