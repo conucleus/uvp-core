@@ -508,7 +508,9 @@ fn delay_value(value: EvalValue, delay_seconds: i64, now: &str) -> Result<EvalVa
         wait: false,
         cancel: false,
         due_at: 0,
-        anchor_at: value.anchor_at,
+        // 锚点推进（semantic 0.5 链式裁决）：延时到期时刻本身成为新的锚点，
+        // 使 `(A+5s)+10s` 的外层延时从 A+5s 起算，与生产求值器一致。
+        anchor_at: due_at,
     })
 }
 
