@@ -2,7 +2,7 @@
 
 - 状态：**权威**。与实现冲突时，先修本文档或先报冲突，不得静默偏离。
 - 版本基线：uvp-semantic/0.5；本文锚定的行为自 0.3 引入、0.4 固化根形态校验。
-- 适用轨道：cloud（已完整实现）；EVM 未实现（见 §8）。本文即为 EVM 实现的对照规范。
+- 适用轨道：cloud（已完整实现）；EVM 已实现 MERGE 同单跨源扇入（semantic 0.6），ANCHOR 未实现（见 §8）。
 - 代码锚点以 `crates/uvp-hook-dsl/src/lib.rs` 与 cloud `pkg/statemachine` 当前 HEAD 为准。
 
 ## 1. 定位
@@ -104,10 +104,15 @@ bootstrap e2e k=1 观察形态（`main_ci_zhixu.yaml` child_test_complete）全�
 `DecodeCompiledHook` 的 Go 实现是结构化的、而 `EvalCompiledHook` 对 k=1 merge 会报错——
 任何未来引入的通用重算/审计工具必须复刻 §4 的短路规则，已在 I2 中成文。
 
-## 8. EVM 缺口清单（D6 执行范围，暂不动）
+## 8. EVM 落地状态（2026-08-25 更新）
 
-1. 求值栈无 Merge/Anchor op：需事件级 poke 入口 + 血缘预映照（rel_order_order 的链上对应物），
-   或明确降级为"链上不支持、仅 cloud"，二选一后同步 TS 编译器（当前 fail-fast 拒绝）
-   与 wiki docking/signal-authorization 页的指引。
-2. 语料：fixtures/cloud 两夹具为 cloud 专属（`portable:false`），EVM 若支持需新增
-   evm 目标夹具并升 semantic 版本。
+**已落地（semantic 0.6）**：MERGE 以同单跨源扇入形态上链——合约 `InstructionOp.Merge`
+（任一路在场即就绪、在场最早锚点、无等待分支，表达式形态 k≥2）；replay oracle `merge_value`
+镜像；TS 编译器把 `::MERGE@(...)` 编码为 MERGE 指令并拒绝 k=1 与非裸引用目标。
+边界声明：链上 MERGE 是**同订单内跨 source** 扇入；跨订单配对/建单判定仍归执行器
+（cloud 全拓扑能力不变）。I2 在链上的体现：k=1 由编码层拒绝，求值层不会见到。
+
+**未落地（后续 D6 余量）**：ANCHOR 跨订单回流需要血缘投递子系统——链上现仅有
+单亲 `OrderTriggerLink`（UVPOrderLinkModule），无 rel_order_order 图与反向索引，
+且 `_evaluateAffectedHooks` 按 (order, plan) 隔离发现受影响钩子，子单信号无法触达
+父单钩子。实现前 ANCHOR 编译保持 fail-fast，错误信息指向本节。
