@@ -204,7 +204,12 @@ fn parse_replay_request(input: &str) -> Result<(Vec<Value>, ReplayOptions)> {
     }
     let request: ReplayRequest = serde_json::from_value(value)
         .map_err(|err| ReplayError::Message(format!("invalid replay request: {err}")))?;
-    Ok((request.events.unwrap_or_default(), request.options))
+    let events = request.events.ok_or_else(|| {
+        ReplayError::Message(
+            "replay request is missing the required \"events\" field".to_string(),
+        )
+    })?;
+    Ok((events, request.options))
 }
 
 fn record_signal_and_evaluate(state: &mut OracleState, event: &Value) -> Result<Vec<Value>> {

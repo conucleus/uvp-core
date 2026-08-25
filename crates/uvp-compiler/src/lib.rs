@@ -69,8 +69,14 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
         .metadata
         .annotations
         .get("version")
-        .cloned()
-        .unwrap_or_else(|| "1".to_string());
+        .map(String::as_str)
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| {
+            CompilerError::Message(
+                "metadata.annotations.version is required: missing or empty version".to_string(),
+            )
+        })?
+        .to_string();
     let platform = normalize_platform_value(&definition.spec.platform)?;
     let stage_entries = flatten_stages(&definition)?;
     let stage_ids = stage_entries
@@ -192,7 +198,13 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
                 .as_ref()
                 .and_then(|executor| executor.get("supplierID"))
                 .and_then(Value::as_str)
-                .unwrap_or_default();
+                .filter(|supplier_id| !supplier_id.is_empty())
+                .ok_or_else(|| {
+                    CompilerError::Message(format!(
+                        "{}.executor: zhixu executor missing supplierID",
+                        entry.stage_identifier
+                    ))
+                })?;
             if let Some(signal_map) = entry
                 .stage
                 .executor
