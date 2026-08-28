@@ -11,6 +11,7 @@ use uvp_model::{ZhixuDefinition, ZhixuStage};
 const COMPILER_NAME: &str = "uvp-eth-compiler";
 const COMPILER_VERSION: &str = "0.1.0";
 const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v1";
+const MAX_SIGNAL_MAP_KEY_LENGTH: usize = 36;
 
 #[derive(Debug, Error)]
 pub enum CompilerError {
@@ -555,6 +556,13 @@ fn validate_signal_maps(entries: &[StageEntry]) -> Vec<String> {
         }
         let mut parsed = Vec::new();
         for (signal, raw) in signal_map {
+            if signal.contains('.') || signal.len() > MAX_SIGNAL_MAP_KEY_LENGTH {
+                issues.push(format!(
+                    "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: key must not contain '.' and must be at most {MAX_SIGNAL_MAP_KEY_LENGTH} bytes",
+                    entry.stage_identifier
+                ));
+                continue;
+            }
             let Some(raw_expression) = raw.as_str() else {
                 issues.push(format!(
                     "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: expected string",
