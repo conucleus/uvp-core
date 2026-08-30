@@ -298,7 +298,29 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     if definition.spec.task_patterns.is_empty() {
         issues.push("spec.taskPatterns must contain at least one task pattern".to_string());
     }
+    for (task_index, task) in definition.spec.task_patterns.iter().enumerate() {
+        if !valid_identifier_part(&task.name) {
+            issues.push(format!(
+                "spec.taskPatterns[{task_index}].name must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-': {}",
+                task.name
+            ));
+        }
+        for (stage_index, stage) in task.stages.iter().enumerate() {
+            if !valid_identifier_part(&stage.name) {
+                issues.push(format!(
+                    "spec.taskPatterns[{task_index}].stages[{stage_index}].name must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-': {}",
+                    stage.name
+                ));
+            }
+        }
+    }
     issues
+}
+
+fn valid_identifier_part(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 fn flatten_stages(definition: &ZhixuDefinition) -> Result<Vec<StageEntry>> {
@@ -1076,6 +1098,20 @@ mod tests {
                     .iter()
                     .all(|dep| dep["dependencyKind"] != "timer")
         }));
+    }
+
+    #[test]
+    fn rejects_invalid_task_or_stage_identifier_parts() {
+        for (field, value) in [("taskPatterns[0].name", "execution.main"), ("stages[0].name", "1main")] {
+            let mut definition = demo_definition();
+            if field.starts_with("taskPatterns") {
+                definition["spec"]["taskPatterns"][0]["name"] = json!(value);
+            } else {
+                definition["spec"]["taskPatterns"][1]["stages"][0]["name"] = json!(value);
+            }
+            let error = compile_zhixu_hook_plan(&definition).expect_err("invalid identifier must fail");
+            assert!(error.to_string().contains("must start with an ASCII letter"));
+        }
     }
 
     fn demo_definition() -> Value {
