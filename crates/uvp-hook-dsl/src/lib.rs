@@ -1466,10 +1466,11 @@ impl<'a> Parser<'a> {
         })?;
         let source = source.trim();
         let signal = signal.trim();
+        // source 类命名空间对齐 taskPattern 标识符规则：字母/数字/下划线/中划线。
         if source.is_empty()
             || !source
                 .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
         {
             return Err(HookError::Message(format!(
                 "subscription source must be a plain identifier: {source:?}"
