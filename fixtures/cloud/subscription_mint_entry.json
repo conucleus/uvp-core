@@ -1,6 +1,6 @@
 {
-  "name": "OUTSIDE spawn entry keeps empty header and upstream source dependency",
-  "semanticVersion": "uvp-semantic/0.4",
+  "name": "Subscription entry with mint per-fact births orders from channel facts",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "cloud",
   "portable": false,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "main",
               "source": "test_executor",
-              "trigger": [
-                "RUN"
-              ],
-              "externalSignals": [
-                "RUN"
-              ],
               "sendSignals": [
                 "smart_contract"
               ]
@@ -45,15 +39,13 @@
             {
               "name": "retail",
               "source": "buyer",
-              "trigger": [
-                "SPAWN"
-              ],
               "receiveSignals": {
-                "SPAWN": "::OUTSIDE@(test_executor::dispatch.main.smart_contract)"
+                "SPAWN": "::ANCHOR(@test_executor::dispatch.main.smart_contract)"
               },
               "sendSignals": [
                 "ack"
-              ]
+              ],
+              "mint": "per-fact"
             }
           ]
         }
@@ -62,7 +54,7 @@
   },
   "expect": {
     "cloudHookModes": {
-      "SPAWN": "outside_spawn"
+      "SPAWN": "subscription"
     }
   }
 }

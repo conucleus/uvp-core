@@ -1,6 +1,6 @@
 {
-  "name": "ANCHOR reflux entry targets a bare same-order signal",
-  "semanticVersion": "uvp-semantic/0.4",
+  "name": "Subscription entry refluxes child-order settlement into collector executor",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "cloud",
   "portable": false,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "packing",
               "source": "farmer",
-              "trigger": [
-                "PACK"
-              ],
-              "externalSignals": [
-                "PACK"
-              ],
               "sendSignals": [
                 "settled"
               ]
@@ -45,11 +39,8 @@
             {
               "name": "collect",
               "source": "farmer",
-              "trigger": [
-                "REFLUX"
-              ],
               "receiveSignals": {
-                "REFLUX": "::ANCHOR@(farmer.packing.settled)"
+                "REFLUX": "::ANCHOR(@farmer::farmer.packing.settled)"
               },
               "sendSignals": [
                 "collected"
@@ -62,7 +53,7 @@
   },
   "expect": {
     "cloudHookModes": {
-      "REFLUX": "anchor"
+      "REFLUX": "subscription"
     }
   }
 }

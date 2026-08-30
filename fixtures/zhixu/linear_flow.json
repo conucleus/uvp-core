@@ -1,6 +1,6 @@
 {
   "name": "linear flow across two stages",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "start",
               "source": "buyer",
-              "trigger": [
-                "KICKOFF"
-              ],
-              "externalSignals": [
-                "KICKOFF"
-              ],
               "sendSignals": [
                 "step_done"
               ],
@@ -44,9 +38,6 @@
             {
               "name": "finish",
               "source": "buyer",
-              "trigger": [
-                "FINISH"
-              ],
               "receiveSignals": {
                 "FINISH": "buyer::flow.start.step_done"
               },

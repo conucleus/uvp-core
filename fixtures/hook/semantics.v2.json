@@ -1,0 +1,919 @@
+{
+  "schemaVersion": "uvp.hookSemanticsCorpus.v2",
+  "semanticVersion": "uvp-semantic/0.7",
+  "specRef": "docs/specs/subscription-mint-spec.md",
+  "wikiRefs": [
+    "uvp-wiki/wiki/concepts/core/hook.md",
+    "uvp-wiki/wiki/concepts/core/signal.md",
+    "uvp-wiki/wiki/concepts/core/source.md",
+    "uvp-wiki/wiki/concepts/core/trigger.md",
+    "uvp-wiki/wiki/concepts/state-machine/evaluation.md",
+    "uvp-wiki/wiki/concepts/state-machine/timers-and-status.md",
+    "uvp-wiki/wiki/concepts/state-machine/replay.md"
+  ],
+  "runtimeDeliveryModel": {
+    "evm": "Core semantics produce chain events and replayable projections. Users or services may fetch results from chain/indexer.",
+    "cloud": "Core semantics produce the same state, but cloud runtime can treat the engine as a black box and push computed user messages directly."
+  },
+  "parseCases": [
+    {
+      "name": "single positive signal",
+      "profile": "evm_strict",
+      "hookName": "START",
+      "hook": "buyer::task.main.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.main.cmp",
+        "normalizedExpression": "buyer::task.main.cmp",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.main.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delay with monotonic negative guard",
+      "profile": "evm_strict",
+      "hookName": "TIMEOUT",
+      "hook": "buyer::(task.pay.cmp +5s) & ~task.refund.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.pay.cmp+5s&~task.refund.cmp",
+        "normalizedExpression": "buyer::task.pay.cmp+5s&~task.refund.cmp",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.refund.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.pay.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.pay.cmp",
+            "delaySeconds": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "subscription entry fans class events into executor",
+      "profile": "cloud_compat",
+      "hookName": "SUBSCRIBE",
+      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "expect": {
+        "source": "",
+        "mode": "subscription",
+        "runtimeCondition": "ANCHOR(@seller::trade.listing.cmp)",
+        "normalizedExpression": "::ANCHOR(@seller::trade.listing.cmp)",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "seller",
+            "signalName": "trade.listing.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "subscription entry addresses another class in the same domain",
+      "profile": "cloud_compat",
+      "hookName": "SUBSCRIBE",
+      "hook": "::ANCHOR(@buyer::juice_demand.entry.requested)",
+      "expect": {
+        "source": "",
+        "mode": "subscription",
+        "runtimeCondition": "ANCHOR(@buyer::juice_demand.entry.requested)",
+        "normalizedExpression": "::ANCHOR(@buyer::juice_demand.entry.requested)",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "juice_demand.entry.requested"
+          }
+        ]
+      }
+    }
+  ],
+  "evalCases": [
+    {
+      "name": "missing signal needs more",
+      "profile": "evm_strict",
+      "hookName": "START",
+      "hook": "buyer::task.main.cmp",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [],
+      "expect": {
+        "state": "needs_more"
+      }
+    },
+    {
+      "name": "single positive signal ready",
+      "profile": "evm_strict",
+      "hookName": "START",
+      "hook": "buyer::task.main.cmp",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready"
+      }
+    },
+    {
+      "name": "same signal name under another source does not satisfy evm hook",
+      "profile": "evm_strict",
+      "hookName": "START",
+      "hook": "buyer::task.main.cmp",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "seller",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more"
+      }
+    },
+    {
+      "name": "same signal name under another source does not satisfy cloud hook",
+      "profile": "cloud_compat",
+      "hookName": "START",
+      "hook": "buyer::task.main.cmp",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "seller",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more"
+      }
+    },
+    {
+      "name": "source-less signal does not satisfy sourced cloud hook",
+      "profile": "cloud_compat",
+      "hookName": "START",
+      "hook": "buyer::task.main.cmp",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "",
+          "signalName": "task.main.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more"
+      }
+    },
+    {
+      "name": "evm delay waits at chain second precision",
+      "profile": "evm_strict",
+      "hookName": "TIMEOUT",
+      "hook": "buyer::task.pay.cmp +5s",
+      "now": "2026-04-27T00:00:04.999Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "cloud delay preserves subsecond timestamp",
+      "profile": "cloud_compat",
+      "hookName": "TIMEOUT",
+      "hook": "buyer::task.pay.cmp +5s",
+      "now": "2026-04-27T00:00:05.899Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.900Z"
+      }
+    },
+    {
+      "name": "delay ready after due time",
+      "profile": "evm_strict",
+      "hookName": "TIMEOUT",
+      "hook": "buyer::task.pay.cmp +5s",
+      "now": "2026-04-27T00:00:05.001Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "negative guard cancels monotonically",
+      "profile": "evm_strict",
+      "hookName": "PAY",
+      "hook": "buyer::task.pay.cmp & ~task.refund.cmp",
+      "now": "2026-04-27T00:00:06.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.refund.cmp",
+          "receivedAt": "2026-04-27T00:00:03.000Z"
+        }
+      ],
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "negated condition exists: task.refund.cmp"
+      }
+    },
+    {
+      "name": "and waits on latest delayed branch",
+      "profile": "evm_strict",
+      "hookName": "BOTH",
+      "hook": "buyer::(task.a.cmp +5s) & (task.b.cmp +10s)",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:10.000Z"
+      }
+    },
+    {
+      "name": "or waits on earliest live delayed branch",
+      "profile": "evm_strict",
+      "hookName": "ANY",
+      "hook": "buyer::(task.a.cmp +5s) | (task.b.cmp +10s)",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "all or branches cancelled",
+      "profile": "evm_strict",
+      "hookName": "ANY",
+      "hook": "buyer::(task.a.cmp & ~task.cancel.cmp) | (task.b.cmp & ~task.fail.cmp)",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.fail.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "all OR branches are cancelled"
+      }
+    },
+    {
+      "name": "subscription entry defers per-event delivery to state machine",
+      "profile": "cloud_compat",
+      "hookName": "SUBSCRIBE",
+      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [],
+      "expect": {
+        "state": "needs_more",
+        "reasonContains": "delivered per"
+      }
+    }
+  ],
+  "invalidCases": [
+    {
+      "name": "missing source separator",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "task.main.cmp",
+      "messageContains": "must contain"
+    },
+    {
+      "name": "empty source only allowed for external hooks",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::task.main.cmp",
+      "messageContains": "empty source is only allowed"
+    },
+    {
+      "name": "single segment short name",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::cmp",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "two segment short name",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::main.cmp",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "four segment signal name",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.stage.signal.extra",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "empty signal segment",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task..cmp",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "zero delay is rejected",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.pay.cmp +0s",
+      "messageContains": "invalid duration"
+    },
+    {
+      "name": "outside entry is retired",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::OUTSIDE@(seller::task.main.cmp)",
+      "messageContains": "retired"
+    },
+    {
+      "name": "merge entry is retired",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::MERGE@(seller::task.main.cmp, buyer::task.other.cmp)",
+      "messageContains": "retired"
+    },
+    {
+      "name": "legacy anchor header form is retired",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR@(farmer.main.settle)",
+      "messageContains": "retired"
+    },
+    {
+      "name": "bare outsource is retired",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::OUTSOURCE@(seller::task.main.cmp)",
+      "messageContains": "retired"
+    },
+    {
+      "name": "bare outside is retired",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::OUTSIDE",
+      "messageContains": "retired"
+    },
+    {
+      "name": "subscription mixed with operators is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@seller::task.main.cmp) & task.other.cmp",
+      "messageContains": "must be the complete hook condition"
+    },
+    {
+      "name": "headed subscription entry is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::ANCHOR(@seller::task.main.cmp)",
+      "messageContains": "empty source header"
+    },
+    {
+      "name": "subscription target requires full signal name",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@seller::listing.cmp)",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "subscription source requires plain identifier",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@::trade.listing.cmp)",
+      "messageContains": "plain identifier"
+    }
+  ],
+  "replayCases": [
+    {
+      "name": "duplicate signal is first writer wins",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x01",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a01",
+            "zhixuId": "corpus-replay",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b01",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c01",
+                "stageIdentifier": "task.main",
+                "hookName": "START",
+                "isTrigger": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d01",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e01",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f01"
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f01": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b01"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x02",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a01",
+          "zhixuId": "corpus-replay",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x03",
+          "zhixuId": "corpus-replay",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d01",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e01",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f01",
+          "senderId": "first-writer",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x04",
+          "zhixuId": "corpus-replay",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b01",
+          "stageIdentifier": "task.main",
+          "hookName": "START"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x05",
+          "zhixuId": "corpus-replay",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d01",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e01",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f01",
+          "senderId": "second-writer",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        }
+      ],
+      "expect": {
+        "orderKey": "corpus-replay::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f01",
+        "senderId": "first-writer",
+        "eventId": "3:0:0x03",
+        "observedCount": 1,
+        "mismatchCount": 0
+      }
+    },
+    {
+      "name": "timer waits on submit then readies via poke",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x11",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
+            "zhixuId": "corpus-replay-timer",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c02",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT",
+                "isTrigger": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d02",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e02",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f02"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f02": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b02"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x12",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x13",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d02",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e02",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f02",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x14",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "TimerPoked",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x15",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+          "pokedAt": "2026-04-27T00:00:06.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x16",
+          "zhixuId": "corpus-replay-timer",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
+          "stageIdentifier": "task.main",
+          "hookName": "TIMEOUT"
+        }
+      ],
+      "expect": {
+        "orderKey": "corpus-replay-timer::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f02",
+        "senderId": "pay-executor",
+        "eventId": "3:0:0x13",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged",
+          "HookReady"
+        ],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "finalHookStatuses": {
+          "corpus-replay-timer::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b02": "reg"
+          }
+        }
+      }
+    },
+    {
+      "name": "negative guard cancels before registration",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a03",
+            "zhixuId": "corpus-replay-negative",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b03",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c03",
+                "stageIdentifier": "trade.main",
+                "hookName": "PAY_GUARD",
+                "isTrigger": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d03",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e03",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f03"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d04",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e04",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f04"
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f03": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b03"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f04": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b03"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a03",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d04",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e04",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f04",
+          "senderId": "refund-sender",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b03",
+          "status": "cxl"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "zhixuId": "corpus-replay-negative",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d03",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e03",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f03",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:02.000Z"
+        }
+      ],
+      "expect": {
+        "orderKey": "corpus-replay-negative::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f04",
+        "senderId": "refund-sender",
+        "eventId": "3:0:0x23",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged"
+        ],
+        "finalHookStatuses": {
+          "corpus-replay-negative::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b03": "cxl"
+          }
+        }
+      }
+    },
+    {
+      "name": "late negative cancels a waiting delay",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x31",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
+            "zhixuId": "corpus-replay-delay-cancel",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c04",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT_GUARD",
+                "isTrigger": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d05",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e05",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f05"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06"
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f05": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b04"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f06": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b04"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x32",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x33",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d05",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e05",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f05",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x34",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x35",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+          "senderId": "refund-sender",
+          "submittedAt": "2026-04-27T00:00:03.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x36",
+          "zhixuId": "corpus-replay-delay-cancel",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
+          "status": "cxl"
+        }
+      ],
+      "expect": {
+        "orderKey": "corpus-replay-delay-cancel::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+        "senderId": "refund-sender",
+        "eventId": "5:0:0x35",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged",
+          "HookStatusChanged"
+        ],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "finalHookStatuses": {
+          "corpus-replay-delay-cancel::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b04": "cxl"
+          }
+        }
+      }
+    }
+  ]
+}

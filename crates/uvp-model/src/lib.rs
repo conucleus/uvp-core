@@ -68,10 +68,10 @@ pub struct ZhixuTaskPattern {
 pub struct ZhixuStage {
     pub name: String,
     pub source: String,
-    #[serde(default)]
-    pub trigger: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub external_signals: Vec<String>,
+    /// per-fact：本阶段为出生阶段，订阅事实逐条由引擎代铸订单。
+    /// 仅无锚阶段可声明；编译期唯一锚定依据（见 subscription-mint-spec.md）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executor: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

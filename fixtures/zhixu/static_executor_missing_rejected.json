@@ -1,6 +1,6 @@
 {
   "name": "stage without a static executor or selectedStages anchor is rejected",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": false,
   "input": {
@@ -27,9 +27,6 @@
             {
               "name": "loose",
               "source": "buyer",
-              "trigger": [
-                "MATCH"
-              ],
               "receiveSignals": {
                 "MATCH": "buyer::market.pool.matched"
               },

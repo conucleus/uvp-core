@@ -5,8 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.6";
-pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp/cloud-ast/v1";
+pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.7";
+pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp/cloud-ast/v2";
+
+/// uvp-semantic/0.6 的跨秩序四典型（::OUTSIDE@ / ::MERGE@ / 旧 ::ANCHOR@ /
+/// OUTSOURCE）在 0.7 统一退役为「订阅 + 铸单」模型；解析器保留关键字识别，
+/// 以给出精确的迁移报错而不是笼统的语法错误。
+pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp-semantic/0.7; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,21 +32,13 @@ type Result<T> = std::result::Result<T, HookError>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Signal(String),
-    External {
-        mode: ExternalMode,
-        target: Box<HookExpr>,
-    },
-    /// 撮合入口：k≥1 路独立上游信号逐事件携带溯源转交静态执行器，判定权归执行器。
-    /// k≥2 含跨源配对；k=1 退化为跨订单观察/聚合入口（单 source 的多张订单逐
-    /// 事件转交，"收到几个、收齐没有"仍由执行器裁决）。分馏 OUTSIDE@ 是同一
-    /// 管道上判定谓词退化为恒等、连建单都由引擎代行的极限形态。
-    Merge {
-        targets: Vec<HookExpr>,
-    },
-    /// 收购回流入口：当前订单的直接子订单发生目标信号时，逐事件投递给锚定阶段
-    /// 静态执行器；血缘（rel_order_order）是构成性过滤，聚合裁决归锚定执行器。
-    Anchor {
-        target: Box<HookExpr>,
+    /// 跨源订阅通道：`ANCHOR(@source::task.stage.signal)`。
+    /// 按类寻址（source 为 zhixu 局部因果身份类），逐事件投递并携带溯源，
+    /// 无表达式裁决。路由（按单 / 扇入）由接收方锚定状态决定，聚合判定
+    /// 归订阅方执行器；per-fact 代铸由阶段级 `mint` 声明表达，不属于 hook。
+    Subscription {
+        source: String,
+        target: String,
     },
     Not(Box<Expr>),
     And(Vec<Expr>),
@@ -51,20 +48,6 @@ pub enum Expr {
         raw_duration: String,
         duration_seconds: i64,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExternalMode {
-    #[serde(rename = "OUTSIDE")]
-    Outside,
-}
-
-impl ExternalMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Outside => "OUTSIDE",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,14 +85,12 @@ pub struct ParseHookOutput {
     pub hook_name: String,
     pub source: String,
     pub mode: HookMode,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_source: Option<String>,
     pub raw_hook: String,
     pub raw_condition: String,
     pub runtime_condition: String,
     pub normalized_expression: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub merge_targets: Option<Vec<MergeTarget>>,
+    pub subscription_target: Option<SubscriptionTarget>,
     pub dependencies: Vec<Dependency>,
     pub ast: Value,
     pub cloud_ast: Value,
@@ -117,7 +98,7 @@ pub struct ParseHookOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MergeTarget {
+pub struct SubscriptionTarget {
     pub source: String,
     pub signal_name: String,
 }
@@ -133,9 +114,7 @@ pub enum Compatibility {
 #[serde(rename_all = "snake_case")]
 pub enum HookMode {
     Normal,
-    OutsideSpawn,
-    Merge,
-    Anchor,
+    Subscription,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -257,7 +236,6 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
         .map(|(_, cond)| cond.trim().to_string())
         .unwrap_or_default();
     let mode = hook_mode(&hook.condition);
-    let upstream_source = upstream_source(&hook.condition);
     let compatibility = compatibility_for(&hook, profile);
     let runtime_condition = runtime_condition(&hook, &hook_name, profile)?;
     let normalized_expression = format!(
@@ -267,16 +245,11 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     );
     let dependencies = extract_dependencies(&hook, profile);
     let cloud_ast = cloud_ast_for(&hook, &hook_name, profile)?;
-    let merge_targets = match &hook.condition {
-        Expr::Merge { targets } => Some(
-            targets
-                .iter()
-                .map(|target| MergeTarget {
-                    source: target.source.clone(),
-                    signal_name: merge_target_signal(target),
-                })
-                .collect::<Vec<_>>(),
-        ),
+    let subscription_target = match &hook.condition {
+        Expr::Subscription { source, target } => Some(SubscriptionTarget {
+            source: source.clone(),
+            signal_name: target.clone(),
+        }),
         _ => None,
     };
 
@@ -288,12 +261,11 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
         hook_name,
         source: hook.source.clone(),
         mode,
-        upstream_source,
         raw_hook: req.hook,
         raw_condition,
         runtime_condition,
         normalized_expression,
-        merge_targets,
+        subscription_target,
         dependencies,
         ast: hook_to_value(&hook),
         cloud_ast,
@@ -311,9 +283,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             "schemaVersion",
             "source",
             "mode",
-            "upstreamSource",
-            "mergeTargets",
-            "anchorTarget",
+            "subscriptionTarget",
             "root",
         ],
         "compiled hook AST",
@@ -335,48 +305,41 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         .get("mode")
         .and_then(Value::as_str)
         .ok_or_else(|| HookError::Message("compiled hook AST is missing mode".to_string()))?;
-    if !matches!(mode, "normal" | "outside_spawn" | "merge" | "anchor") {
+    if !matches!(mode, "normal" | "subscription") {
         return Err(HookError::Message(format!(
-            "unsupported compiled hook AST mode: {mode}"
+            "unsupported compiled hook AST mode: {mode}; outside_spawn/merge/anchor were retired in uvp-semantic/0.7"
         )));
     }
-    if mode == "outside_spawn"
-        && req
-            .ast
-            .get("upstreamSource")
+    if mode == "subscription" {
+        let target = req.ast.get("subscriptionTarget");
+        let has_source = target
+            .and_then(|target| target.get("source"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .is_none()
-    {
-        return Err(HookError::Message(
-            "compiled external hook AST is missing upstreamSource".to_string(),
-        ));
-    }
-    if mode == "anchor" {
-        let has_target = req
-            .ast
-            .get("anchorTarget")
+            .is_some();
+        let has_signal = target
             .and_then(|target| target.get("signal"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .is_some();
-        if !has_target {
+        if !has_source || !has_signal {
             return Err(HookError::Message(
-                "compiled anchor hook AST is missing anchorTarget.signal".to_string(),
+                "compiled subscription hook AST is missing subscriptionTarget.source/.signal"
+                    .to_string(),
             ));
         }
     }
     let now = parse_time(&req.now, req.profile)?;
-    // 收购回流钩子标头恒为空：投递目标由阶段静态执行器决定，事件来源由
-    // 状态机按血缘过滤，因此仅 anchor 模式允许空 source。
+    // 订阅钩子标头恒为空：投递目标由阶段静态执行器决定，路由由接收方锚定
+    // 状态与对接记录裁决，因此仅 subscription 模式允许空 source。
     let source = req
         .ast
         .get("source")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty() || mode == "anchor")
+        .filter(|value| !value.is_empty() || mode == "subscription")
         .map(ToOwned::to_owned)
         .ok_or_else(|| HookError::Message("compiled hook AST is missing source".to_string()))?;
     let root = req
@@ -385,30 +348,17 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         .ok_or_else(|| HookError::Message("compiled hook AST root is missing".to_string()))?;
     let expr = expr_from_cloud_value(root)?;
     // 求值器是解码层最后一道防线：root 形态必须与 mode 一致，布尔树内部
-    // 不得再嵌套跨源节点——两者都只能由手写毒 AST 构造，解析器产不出
-    // （解析期位置约束见 validate_external_position）。
+    // 不得再嵌套订阅节点——两者都只能由手写毒 AST 构造，解析器产不出
+    // （解析期位置约束见 validate_subscription_position）。
     match mode {
-        "merge" if !matches!(expr, Expr::Merge { .. }) => {
+        "subscription" if !matches!(expr, Expr::Subscription { .. }) => {
             return Err(HookError::Message(
-                "compiled merge hook AST root must be a merge node".to_string(),
+                "compiled subscription hook AST root must be a subscription node".to_string(),
             ));
         }
-        "anchor" if !matches!(expr, Expr::Anchor { .. }) => {
+        "normal" if contains_nested_subscription(&expr) => {
             return Err(HookError::Message(
-                "compiled anchor hook AST root must be an anchor node".to_string(),
-            ));
-        }
-        // outside_spawn 的规范产物是 root=signal：委托关系由顶层 source +
-        // upstreamSource 表达，求值即以目标 source 解释该 signal。要求
-        // root 为 external 节点会拒绝编译器自己的合法产物。
-        "outside_spawn" if !matches!(expr, Expr::Signal(_)) => {
-            return Err(HookError::Message(
-                "compiled external hook AST root must be a plain signal reference".to_string(),
-            ));
-        }
-        "normal" if contains_nested_external(&expr) => {
-            return Err(HookError::Message(
-                "compiled normal hook AST must not contain cross-source nodes".to_string(),
+                "compiled normal hook AST must not contain subscription nodes".to_string(),
             ));
         }
         _ => {}
@@ -456,7 +406,7 @@ fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
     parse_hook_expr_at_depth(raw, profile, 0)
 }
 
-fn parse_hook_expr_at_depth(raw: &str, profile: Profile, base_depth: usize) -> Result<HookExpr> {
+fn parse_hook_expr_at_depth(raw: &str, _profile: Profile, base_depth: usize) -> Result<HookExpr> {
     let (source, condition_raw) = raw
         .trim()
         .split_once("::")
@@ -468,23 +418,19 @@ fn parse_hook_expr_at_depth(raw: &str, profile: Profile, base_depth: usize) -> R
             "hook condition cannot be empty".to_string(),
         ));
     }
-    if source.is_empty() && !starts_external(condition_raw) {
+    if source.is_empty() && !starts_cross_source(condition_raw) {
         return Err(HookError::Message(
-            "empty source is only allowed for OUTSIDE@(…), MERGE@(…) or ANCHOR@(…) hooks"
-                .to_string(),
+            "empty source is only allowed for ANCHOR(@…) subscription hooks".to_string(),
         ));
     }
     reject_unsupported_operators(condition_raw)?;
-    let mut parser = Parser::with_depth(condition_raw, profile, base_depth);
+    let mut parser = Parser::with_depth(condition_raw, base_depth);
     let condition = parser.parse()?;
-    validate_external_position(&condition, true)?;
-    if matches!(
-        condition,
-        Expr::Merge { .. } | Expr::Anchor { .. } | Expr::External { .. }
-    ) && !source.is_empty()
-    {
+    validate_subscription_position(&condition, true)?;
+    if matches!(condition, Expr::Subscription { .. }) && !source.is_empty() {
         return Err(HookError::Message(
-            "MERGE@/ANCHOR@/OUTSIDE@ entries must use an empty source header: ::MERGE@(a::task.stage.signal, ...), ::ANCHOR@(task.stage.signal) or ::OUTSIDE@(source::task.stage.signal)".to_string(),
+            "subscription entries must use an empty source header: ::ANCHOR(@source::task.stage.signal)"
+                .to_string(),
         ));
     }
     Ok(HookExpr {
@@ -527,77 +473,37 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                     HookError::Message("compiled signal AST node is missing signal".to_string())
                 })
         }
-        "merge" => {
+        "subscription" => {
             reject_unknown_keys(
                 value.as_object().ok_or_else(|| {
-                    HookError::Message("compiled merge AST node must be an object".to_string())
+                    HookError::Message(
+                        "compiled subscription AST node must be an object".to_string(),
+                    )
                 })?,
-                &["type", "targets"],
-                "compiled merge AST node",
+                &["type", "source", "signal"],
+                "compiled subscription AST node",
             )?;
-            let targets = value
-                .get("targets")
-                .and_then(Value::as_array)
+            let source = value
+                .get("source")
+                .and_then(Value::as_str)
+                .filter(|source| !source.trim().is_empty())
                 .ok_or_else(|| {
-                    HookError::Message("compiled merge AST node is missing targets".to_string())
+                    HookError::Message(
+                        "compiled subscription AST node is missing source".to_string(),
+                    )
                 })?;
-            // 求值器只做表达式裁决，从不执行投递：作为"汇合表达式"，少于两路
-            // 操作数没有求值意义。k=1 的运行时投递形态（跨订单观察入口）由
-            // 状态机在 decode 层短路处理，不经过这里。
-            if targets.len() < 2 {
-                return Err(HookError::Message(
-                    "compiled merge AST node requires at least two targets".to_string(),
-                ));
-            }
-            let mut parsed = Vec::new();
-            for target in targets {
-                let source = target
-                    .get("source")
-                    .and_then(Value::as_str)
-                    .filter(|source| !source.trim().is_empty())
-                    .ok_or_else(|| {
-                        HookError::Message(
-                            "compiled merge AST target is missing source".to_string(),
-                        )
-                    })?;
-                let signal = target
-                    .get("signal")
-                    .and_then(Value::as_str)
-                    .filter(|signal| !signal.trim().is_empty())
-                    .ok_or_else(|| {
-                        HookError::Message(
-                            "compiled merge AST target is missing signal".to_string(),
-                        )
-                    })?;
-                parsed.push(HookExpr {
-                    raw: format!("{source}::{signal}"),
-                    source: source.to_string(),
-                    condition: Expr::Signal(signal.to_string()),
-                });
-            }
-            Ok(Expr::Merge { targets: parsed })
-        }
-        "anchor" => {
-            reject_unknown_keys(
-                value.as_object().ok_or_else(|| {
-                    HookError::Message("compiled anchor AST node must be an object".to_string())
-                })?,
-                &["type", "signal"],
-                "compiled anchor AST node",
-            )?;
             let signal = value
                 .get("signal")
                 .and_then(Value::as_str)
                 .filter(|signal| !signal.trim().is_empty())
                 .ok_or_else(|| {
-                    HookError::Message("compiled anchor AST node is missing signal".to_string())
+                    HookError::Message(
+                        "compiled subscription AST node is missing signal".to_string(),
+                    )
                 })?;
-            Ok(Expr::Anchor {
-                target: Box::new(HookExpr {
-                    raw: signal.to_string(),
-                    source: String::new(),
-                    condition: Expr::Signal(signal.to_string()),
-                }),
+            Ok(Expr::Subscription {
+                source: source.to_string(),
+                target: signal.to_string(),
             })
         }
         "neg" => {
@@ -707,38 +613,37 @@ fn reject_unknown_keys(
     Ok(())
 }
 
-// External operators are cross-source wrappers, not backend/executor input
-// declarations. Backend/executor external inputs are declared by the
-// surrounding Stage contract and are sent to UVP only when backend explicitly
-// chooses to do so.
-fn validate_external_position(expr: &Expr, root: bool) -> Result<()> {
+// Subscription operators are cross-source delivery channels, not
+// backend/executor input declarations. Backend/executor external inputs are
+// sent to UVP only when the executor explicitly chooses to do so; there is no
+// externalSignals declaration any more.
+fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
     match expr {
-        Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => {
+        Expr::Subscription { .. } => {
             if !root {
-                return Err(HookError::Message(
-                    "OUTSIDE/MERGE/ANCHOR must be the complete hook condition; declare backend external inputs in externalSignals and reference the canonical signal in a normal expression".to_string(),
-                ));
+                return Err(HookError::Message(format!(
+                    "{RETIRED_KEYWORDS_HINT}; a subscription must be the complete hook condition"
+                )));
             }
             Ok(())
         }
         Expr::Signal(_) => Ok(()),
-        Expr::Not(inner) => validate_external_position(inner, false),
+        Expr::Not(inner) => validate_subscription_position(inner, false),
         Expr::And(terms) | Expr::Or(terms) => {
             for term in terms {
-                validate_external_position(term, false)?;
+                validate_subscription_position(term, false)?;
             }
             Ok(())
         }
-        Expr::Delay { expr, .. } => validate_external_position(expr, false),
+        Expr::Delay { expr, .. } => validate_subscription_position(expr, false),
     }
 }
 
-fn starts_external(value: &str) -> bool {
-    // OUTSOURCE 仍放行进解析器，以便空标头形态也能命中退役提示而非笼统的
-    // 空标头报错。
-    value.starts_with("OUTSIDE")
+fn starts_cross_source(value: &str) -> bool {
+    // 旧关键字仍放行进解析器，以便命中精确的退役提示而非笼统的空标头报错。
+    value.starts_with("ANCHOR")
+        || value.starts_with("OUTSIDE")
         || value.starts_with("MERGE")
-        || value.starts_with("ANCHOR")
         || value.starts_with("OUTSOURCE")
 }
 
@@ -777,9 +682,7 @@ fn validate_hook(expr: &Expr, profile: Profile) -> Result<()> {
 
 fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
     match expr {
-        Expr::Signal(_) | Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => {
-            Ok(true)
-        }
+        Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
         Expr::Not(inner) => {
             if profile == Profile::CloudCompat && !matches!(inner.as_ref(), Expr::Signal(_)) {
                 return Err(HookError::Message(
@@ -829,7 +732,7 @@ fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
 
 fn has_positive_anchor(expr: &Expr) -> bool {
     match expr {
-        Expr::Signal(_) | Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => true,
+        Expr::Signal(_) | Expr::Subscription { .. } => true,
         Expr::Not(_) => false,
         Expr::Delay { expr, .. } => has_positive_anchor(expr),
         Expr::And(terms) | Expr::Or(terms) => terms.iter().any(has_positive_anchor),
@@ -852,19 +755,8 @@ fn normalize_condition(expr: &Expr, style: NormalizeStyle) -> String {
 fn normalize_tight(expr: &Expr) -> String {
     match expr {
         Expr::Signal(signal) => signal.clone(),
-        Expr::External { mode, target } => {
-            format!("{}@({})", mode.as_str(), normalize_hook_tight(target))
-        }
-        Expr::Merge { targets } => format!(
-            "MERGE@({})",
-            targets
-                .iter()
-                .map(normalize_hook_tight)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Expr::Anchor { target } => {
-            format!("ANCHOR@({})", normalize_tight(&target.condition))
+        Expr::Subscription { source, target } => {
+            format!("ANCHOR(@{source}::{target})")
         }
         Expr::Not(inner) => format!("~{}", normalize_for_unary_tight(inner)),
         Expr::Delay {
@@ -885,13 +777,9 @@ fn normalize_tight(expr: &Expr) -> String {
     }
 }
 
-fn normalize_hook_tight(hook: &HookExpr) -> String {
-    format!("{}::{}", hook.source, normalize_tight(&hook.condition))
-}
-
 fn normalize_for_unary_tight(expr: &Expr) -> String {
     match expr {
-        Expr::Signal(_) | Expr::External { .. } | Expr::Merge { .. } => normalize_tight(expr),
+        Expr::Signal(_) | Expr::Subscription { .. } => normalize_tight(expr),
         _ => format!("({})", normalize_tight(expr)),
     }
 }
@@ -907,19 +795,8 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
     let precedence = precedence(expr);
     let body = match expr {
         Expr::Signal(signal) => signal.clone(),
-        Expr::External { mode, target } => {
-            format!("{}@({})", mode.as_str(), normalize_hook_tight(target))
-        }
-        Expr::Merge { targets } => format!(
-            "MERGE@({})",
-            targets
-                .iter()
-                .map(normalize_hook_tight)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Expr::Anchor { target } => {
-            format!("ANCHOR@({})", normalize_tight(&target.condition))
+        Expr::Subscription { source, target } => {
+            format!("ANCHOR(@{source}::{target})")
         }
         Expr::Not(inner) => {
             let mut child = normalize_cloud(inner, precedence);
@@ -963,7 +840,7 @@ fn precedence(expr: &Expr) -> u8 {
         Expr::Or(_) => 1,
         Expr::And(_) => 2,
         Expr::Not(_) | Expr::Delay { .. } => 3,
-        Expr::Signal(_) | Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => 4,
+        Expr::Signal(_) | Expr::Subscription { .. } => 4,
     }
 }
 
@@ -972,11 +849,7 @@ fn runtime_condition(hook: &HookExpr, _hook_name: &str, profile: Profile) -> Res
         return Ok(normalize_condition(&hook.condition, NormalizeStyle::Tight));
     }
     match &hook.condition {
-        Expr::External { target, .. } => Ok(normalize_condition(
-            &target.condition,
-            NormalizeStyle::Cloud,
-        )),
-        Expr::Merge { .. } | Expr::Anchor { .. } => {
+        Expr::Subscription { .. } => {
             Ok(normalize_condition(&hook.condition, NormalizeStyle::Tight))
         }
         _ => Ok(normalize_condition(&hook.condition, NormalizeStyle::Cloud)),
@@ -985,20 +858,8 @@ fn runtime_condition(hook: &HookExpr, _hook_name: &str, profile: Profile) -> Res
 
 fn hook_mode(expr: &Expr) -> HookMode {
     match expr {
-        Expr::External {
-            mode: ExternalMode::Outside,
-            ..
-        } => HookMode::OutsideSpawn,
-        Expr::Merge { .. } => HookMode::Merge,
-        Expr::Anchor { .. } => HookMode::Anchor,
+        Expr::Subscription { .. } => HookMode::Subscription,
         _ => HookMode::Normal,
-    }
-}
-
-fn upstream_source(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::External { target, .. } => Some(target.source.clone()),
-        _ => None,
     }
 }
 
@@ -1027,16 +888,13 @@ fn collect_dependencies(expr: &Expr, source: &str, negated: bool, out: &mut Vec<
             signal_name: signal.clone(),
             delay_seconds: None,
         }),
-        Expr::External { target, .. } => {
-            collect_dependencies(&target.condition, &target.source, negated, out);
-        }
-        Expr::Merge { targets } => {
-            for target in targets {
-                collect_dependencies(&target.condition, &target.source, negated, out);
-            }
-        }
-        Expr::Anchor { target } => {
-            collect_dependencies(&target.condition, &target.source, negated, out);
+        Expr::Subscription { source, target } => {
+            out.push(Dependency {
+                kind: DependencyKind::Positive,
+                source: source.clone(),
+                signal_name: target.clone(),
+                delay_seconds: None,
+            });
         }
         Expr::Not(inner) => collect_dependencies(inner, source, !negated, out),
         Expr::Delay {
@@ -1112,16 +970,11 @@ fn hook_to_value(hook: &HookExpr) -> Value {
 fn expr_to_ts_value(expr: &Expr) -> Value {
     match expr {
         Expr::Signal(signal) => json!({ "kind": "signal", "signalName": signal }),
-        Expr::External { mode, target } => {
-            json!({ "kind": "external", "mode": mode.as_str(), "target": hook_to_value(target) })
-        }
-        Expr::Merge { targets } => json!({
-            "kind": "merge",
-            "targets": targets.iter().map(hook_to_value).collect::<Vec<_>>()
+        Expr::Subscription { source, target } => json!({
+            "kind": "subscription",
+            "source": source,
+            "signal": target
         }),
-        Expr::Anchor { target } => {
-            json!({ "kind": "anchor", "target": hook_to_value(target) })
-        }
         Expr::Not(inner) => json!({ "kind": "not", "expr": expr_to_ts_value(inner) }),
         Expr::And(terms) => {
             json!({ "kind": "and", "terms": terms.iter().map(expr_to_ts_value).collect::<Vec<_>>() })
@@ -1144,36 +997,16 @@ fn expr_to_ts_value(expr: &Expr) -> Value {
 
 fn cloud_ast_for(hook: &HookExpr, _hook_name: &str, _profile: Profile) -> Result<Value> {
     match &hook.condition {
-        Expr::External { target, .. } => Ok(json!({
+        Expr::Subscription { source, target } => Ok(json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
-            "source": target.source.clone(),
-            "mode": HookMode::OutsideSpawn,
-            "upstreamSource": target.source,
-            "root": expr_to_cloud_value(&target.condition)
-        })),
-        Expr::Merge { targets } => Ok(json!({
-            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
-            // 撮合钩子按事件逐次由状态机直接判定就绪，root 仅保留首个目标的
-            // 可求值形态以维持 cloud-ast 结构完整；配对语义归撮合执行器。
-            "source": targets.first().map(|t| t.source.clone()).unwrap_or_default(),
-            "mode": HookMode::Merge,
-            "mergeTargets": targets
-                .iter()
-                .map(|target| json!({
-                    "source": target.source,
-                    "signal": merge_target_signal(target),
-                }))
-                .collect::<Vec<_>>(),
-            "root": expr_to_cloud_value(&hook.condition)
-        })),
-        Expr::Anchor { target } => Ok(json!({
-            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
-            // 收购回流钩子按子订单事件逐次由状态机判定投递；血缘过滤在状态机
-            // 完成，聚合裁决归锚定执行器。
+            // 订阅钩子按事件逐次由状态机扇入或按对接记录路由投递；路由由接收
+            // 方锚定状态裁决，聚合判定归订阅方执行器，per-fact 代铸归阶段
+            // mint 声明。
             "source": "",
-            "mode": HookMode::Anchor,
-            "anchorTarget": {
-                "signal": merge_target_signal(target),
+            "mode": HookMode::Subscription,
+            "subscriptionTarget": {
+                "source": source,
+                "signal": target,
             },
             "root": expr_to_cloud_value(&hook.condition)
         })),
@@ -1181,36 +1014,18 @@ fn cloud_ast_for(hook: &HookExpr, _hook_name: &str, _profile: Profile) -> Result
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": hook.source.clone(),
             "mode": HookMode::Normal,
-            "upstreamSource": Value::Null,
             "root": expr_to_cloud_value(&hook.condition)
         })),
-    }
-}
-
-fn merge_target_signal(target: &HookExpr) -> String {
-    match &target.condition {
-        Expr::Signal(signal) => signal.clone(),
-        other => normalize_tight(other),
     }
 }
 
 fn expr_to_cloud_value(expr: &Expr) -> Value {
     match expr {
         Expr::Signal(signal) => json!({ "type": "signal", "signal": signal }),
-        Expr::External { target, .. } => expr_to_cloud_value(&target.condition),
-        Expr::Merge { targets } => json!({
-            "type": "merge",
-            "targets": targets
-                .iter()
-                .map(|target| json!({
-                    "source": target.source,
-                    "signal": merge_target_signal(target),
-                }))
-                .collect::<Vec<_>>()
-        }),
-        Expr::Anchor { target } => json!({
-            "type": "anchor",
-            "signal": merge_target_signal(target),
+        Expr::Subscription { source, target } => json!({
+            "type": "subscription",
+            "source": source,
+            "signal": target
         }),
         Expr::Not(inner) => json!({ "type": "neg", "expr": expr_to_cloud_value(inner) }),
         Expr::And(terms) => fold_cloud_terms("and", terms),
@@ -1263,21 +1078,13 @@ fn eval_expr(
 ) -> Result<InternalEval> {
     match expr {
         Expr::Signal(signal) => eval_signal(source, signal, signals),
-        Expr::External { target, .. } => eval_expr(&target.condition, &target.source, signals, now),
-        Expr::Merge { .. } => Ok(InternalEval {
+        Expr::Subscription { .. } => Ok(InternalEval {
             state: EvalState::NeedsMore,
             anchors: Vec::new(),
             ready_at: None,
             reason: Some(
-                "merge hooks are delivered per contributing event by the state machine".to_string(),
-            ),
-        }),
-        Expr::Anchor { .. } => Ok(InternalEval {
-            state: EvalState::NeedsMore,
-            anchors: Vec::new(),
-            ready_at: None,
-            reason: Some(
-                "anchor hooks are delivered per child-order event by the state machine".to_string(),
+                "subscription hooks are delivered per contributing event by the state machine"
+                    .to_string(),
             ),
         }),
         Expr::Not(inner) => {
@@ -1507,7 +1314,6 @@ fn parse_time(value: &str, profile: Profile) -> Result<DateTime<Utc>> {
 struct Parser<'a> {
     input: &'a str,
     index: usize,
-    profile: Profile,
     depth: usize,
 }
 
@@ -1515,11 +1321,10 @@ struct Parser<'a> {
 /// （深层括号或连续 `~`）会打满调用栈直接 abort 宿主进程——栈溢出不可被
 /// catch_unwind 捕获，必须在解析期以普通错误拒绝。
 impl<'a> Parser<'a> {
-    fn with_depth(input: &'a str, profile: Profile, depth: usize) -> Self {
+    fn with_depth(input: &'a str, depth: usize) -> Self {
         Self {
             input,
             index: 0,
-            profile,
             depth,
         }
     }
@@ -1618,12 +1423,10 @@ impl<'a> Parser<'a> {
 
         let ident = self.read_identifier()?;
         match ident.as_str() {
-            "OUTSIDE" => self.parse_external(ExternalMode::Outside),
-            "MERGE" => self.parse_merge(),
-            "ANCHOR" => self.parse_anchor(),
-            "OUTSOURCE" => Err(HookError::Message(
-                "OUTSOURCE has been retired; use ::OUTSIDE@(...) to fork an independent order, ::MERGE@(...) to fan cross-source events into a match executor, or ::ANCHOR@(task.stage.signal) to reflux child-order events into an anchor executor".to_string(),
-            )),
+            "ANCHOR" => self.parse_subscription(),
+            "OUTSIDE" | "MERGE" | "OUTSOURCE" => Err(HookError::Message(format!(
+                "{ident}@ has been retired: {RETIRED_KEYWORDS_HINT}"
+            ))),
             _ => {
                 if !is_strict_signal_ref(&ident) {
                     return Err(HookError::Message(format!(
@@ -1635,113 +1438,51 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_external(&mut self, mode: ExternalMode) -> Result<Expr> {
+    /// 订阅通道：`ANCHOR(@source::task.stage.signal)`。旧 `ANCHOR@(裸三段)`
+    /// 标头形态已退役；目标必须携带 @ 前缀的 source 类名空间。
+    fn parse_subscription(&mut self) -> Result<Expr> {
         self.skip_ws();
-        if !self.consume("@") {
+        if self.peek() == '@' {
             return Err(HookError::Message(format!(
-                "bare {} is no longer supported; declare external inputs in externalSignals or use {}@(source::task.stage.signal) for a cross-source wrapper",
-                mode.as_str(),
-                mode.as_str(),
+                "ANCHOR@ header form has been retired: {RETIRED_KEYWORDS_HINT}"
             )));
         }
         if !self.consume("(") {
             return Err(HookError::Message(format!(
-                "expected '@' target at {}",
+                "expected '(' after ANCHOR at {}",
                 self.index
             )));
         }
         let target_raw = self.read_balanced_target()?;
-        let target = parse_hook_expr_at_depth(&target_raw, self.profile, self.depth)?;
-        if contains_nested_external(&target.condition) {
-            return Err(HookError::Message(format!(
-                "nested OUTSIDE/MERGE is not allowed in {target_raw:?}"
-            )));
-        }
-        Ok(Expr::External {
-            mode,
-            target: Box::new(target),
-        })
-    }
-
-    fn parse_merge(&mut self) -> Result<Expr> {
-        self.skip_ws();
-        if !self.consume("@") {
-            return Err(HookError::Message(
-                "bare MERGE is no longer supported; use MERGE@(a::task.stage.signal, b::task.stage.signal) for a merge entry".to_string(),
-            ));
-        }
-        if !self.consume("(") {
-            return Err(HookError::Message(format!(
-                "expected '@' target at {}",
-                self.index
-            )));
-        }
-        let targets_raw = self.read_balanced_target()?;
-        let mut targets = Vec::new();
-        let mut seen_targets = std::collections::BTreeSet::new();
-        for part in targets_raw.split(',') {
-            let raw = part.trim();
-            if raw.is_empty() {
-                return Err(HookError::Message(format!(
-                    "MERGE@ targets must be non-empty source::task.stage.signal entries in {targets_raw:?}"
-                )));
-            }
-            let target = parse_hook_expr_at_depth(raw, self.profile, self.depth)?;
-            if !matches!(target.condition, Expr::Signal(_)) {
-                return Err(HookError::Message(format!(
-                    "MERGE@ target must be a plain source::task.stage.signal reference: {raw:?}"
-                )));
-            }
-            if !seen_targets.insert(raw.to_string()) {
-                return Err(HookError::Message(format!(
-                    "MERGE@ targets must be distinct: duplicate entry {raw:?}"
-                )));
-            }
-            targets.push(target);
-        }
-        // k≥1 而非 k≥2：k=1 是合法的跨订单观察/聚合入口（单 source 的多张订单
-        // 逐事件转交静态执行器，判定权仍在执行器）；求值器层的 ≥2 下限只约束
-        // 表达式形态，见 expr_from_cloud_value。
-        if targets.is_empty() {
-            return Err(HookError::Message(
-                "MERGE@ requires at least one upstream signal target".to_string(),
-            ));
-        }
-        Ok(Expr::Merge { targets })
-    }
-
-    fn parse_anchor(&mut self) -> Result<Expr> {
-        self.skip_ws();
-        if !self.consume("@") {
-            return Err(HookError::Message(
-                "bare ANCHOR is no longer supported; use ::ANCHOR@(task.stage.signal) for an acquisition reflux entry".to_string(),
-            ));
-        }
-        if !self.consume("(") {
-            return Err(HookError::Message(format!(
-                "expected '@' target at {}",
-                self.index
-            )));
-        }
-        // 收购回流目标必须是裸 task.stage.signal：子订单事件来自任意农户秩序，
-        // 不允许 source 名空间，血缘过滤由状态机按 rel_order_order 裁决。
-        let signal = self.read_balanced_target()?;
-        let bare_ref = !signal.is_empty()
-            && signal
+        let target = target_raw.strip_prefix('@').map(str::trim).ok_or_else(|| {
+            HookError::Message(format!(
+                "subscription target must be @source::task.stage.signal: {target_raw:?}"
+            ))
+        })?;
+        let (source, signal) = target.split_once("::").ok_or_else(|| {
+            HookError::Message(format!(
+                "subscription target must be @source::task.stage.signal: {target_raw:?}"
+            ))
+        })?;
+        let source = source.trim();
+        let signal = signal.trim();
+        if source.is_empty()
+            || !source
                 .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
-            && is_strict_signal_ref(&signal);
-        if !bare_ref {
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
             return Err(HookError::Message(format!(
-                "ANCHOR@ target must be a bare task.stage.signal reference without a source namespace: {signal:?}"
+                "subscription source must be a plain identifier: {source:?}"
             )));
         }
-        Ok(Expr::Anchor {
-            target: Box::new(HookExpr {
-                raw: signal.clone(),
-                source: String::new(),
-                condition: Expr::Signal(signal),
-            }),
+        if !is_strict_signal_ref(signal) {
+            return Err(HookError::Message(format!(
+                "subscription target must use task.stage.signal: {signal:?}"
+            )));
+        }
+        Ok(Expr::Subscription {
+            source: source.to_string(),
+            target: signal.to_string(),
         })
     }
 
@@ -1840,12 +1581,12 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn contains_nested_external(expr: &Expr) -> bool {
+fn contains_nested_subscription(expr: &Expr) -> bool {
     match expr {
-        Expr::External { .. } | Expr::Merge { .. } | Expr::Anchor { .. } => true,
+        Expr::Subscription { .. } => true,
         Expr::Signal(_) => false,
-        Expr::Not(inner) | Expr::Delay { expr: inner, .. } => contains_nested_external(inner),
-        Expr::And(terms) | Expr::Or(terms) => terms.iter().any(contains_nested_external),
+        Expr::Not(inner) | Expr::Delay { expr: inner, .. } => contains_nested_subscription(inner),
+        Expr::And(terms) | Expr::Or(terms) => terms.iter().any(contains_nested_subscription),
     }
 }
 
@@ -1963,7 +1704,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_deeply_nested_external_targets() {
+    fn retired_cross_source_keywords_fail_fast() {
+        // 嵌套构造在最外层即命中退役报错：0.7 不再解析四典型形态。
         let mut expression = "peer::task.main.cmp".to_string();
         for _ in 0..2_000 {
             expression = format!("::OUTSIDE@({expression})");
@@ -1974,7 +1716,7 @@ mod tests {
             hook: expression,
         })
         .unwrap_err();
-        assert!(err.to_string().contains("maximum depth of 256"));
+        assert!(err.to_string().contains("retired"), "unexpected: {err}");
     }
 
     #[test]
@@ -2116,7 +1858,7 @@ mod tests {
         // 直接构造绕过编译期的毒 AST（历史持久化产物的形态：超大秒数与
         // 原始字面量自洽）。求值必须在解码期确定性拒绝并走有界失败路径，
         // 而不是 panic 跨 FFI 边界 abort 进程。
-        let mut poisoned = json!({
+        let poisoned = json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": "buyer",
             "mode": "normal",
@@ -2127,9 +1869,6 @@ mod tests {
                 "durationSeconds": i64::MAX
             }
         });
-        if poisoned.get("upstreamSource").is_none() {
-            poisoned["upstreamSource"] = serde_json::Value::Null;
-        }
 
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
@@ -2240,11 +1979,11 @@ mod tests {
             hook: "::OUTSIDE".to_string(),
         })
         .unwrap_err();
-        assert!(err.to_string().contains("no longer supported"));
+        assert!(err.to_string().contains("retired"));
     }
 
     #[test]
-    fn rejects_external_operator_inside_composite_condition() {
+    fn rejects_subscription_inside_composite_condition() {
         for hook in [
             "buyer::OUTSIDE & task.main.cmp",
             "buyer::task.main.cmp | OUTSIDE",
@@ -2258,7 +1997,7 @@ mod tests {
             })
             .unwrap_err();
             assert!(
-                err.to_string().contains("no longer supported"),
+                err.to_string().contains("retired"),
                 "unexpected error for {hook}: {err}"
             );
         }
@@ -2266,24 +2005,24 @@ mod tests {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
             hook_name: "HOOK".to_string(),
-            hook: "::OUTSIDE@(seller::task.main.cmp) & task.other.cmp".to_string(),
+            hook: "::ANCHOR(@seller::task.main.cmp) & task.other.cmp".to_string(),
         })
         .unwrap_err();
         assert!(
             err.to_string()
                 .contains("must be the complete hook condition"),
-            "unexpected error for a composite cross-source wrapper: {err}"
+            "unexpected error for a composite subscription: {err}"
         );
 
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
             hook_name: "HOOK".to_string(),
-            hook: "buyer::OUTSIDE@(seller::task.main.cmp)".to_string(),
+            hook: "buyer::ANCHOR(@seller::task.main.cmp)".to_string(),
         })
         .unwrap_err();
         assert!(
             err.to_string().contains("empty source header"),
-            "expected headed OUTSIDE rejection: {err}"
+            "expected headed subscription rejection: {err}"
         );
     }
 
@@ -2310,12 +2049,12 @@ mod tests {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
             hook_name: "HOOK".to_string(),
-            hook: "::MERGE@(a::t.s.x, a::t.s.x)".to_string(),
+            hook: "::ANCHOR(@seller::listing.cmp)".to_string(),
         })
         .unwrap_err();
         assert!(
-            err.to_string().contains("duplicate entry"),
-            "unexpected error for duplicate merge targets: {err}"
+            err.to_string().contains("task.stage.signal"),
+            "unexpected error for short subscription target: {err}"
         );
     }
 
@@ -2333,44 +2072,45 @@ mod tests {
             })
             .unwrap_err();
             assert!(
-                err.to_string().contains("OUTSOURCE has been retired"),
+                err.to_string().contains("retired"),
                 "unexpected error for {hook}: {err}"
             );
         }
     }
 
     #[test]
-    fn merge_entry_parses_targets_and_dependencies() {
+    fn subscription_entry_parses_target_and_dependencies() {
         let out = parse_value(
-            "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
+            "::ANCHOR(@seller::trade.listing.cmp)",
             Profile::CloudCompat,
-            "MATCH",
+            "SUBSCRIBE",
         );
-        assert_eq!(out["mode"], "merge");
+        assert_eq!(out["mode"], "subscription");
         assert_eq!(
-            out["mergeTargets"],
-            json!([
-                { "source": "seller", "signalName": "trade.listing.cmp" },
-                { "source": "buyer", "signalName": "trade.intent.cmp" }
-            ])
+            out["subscriptionTarget"],
+            json!({ "source": "seller", "signalName": "trade.listing.cmp" })
         );
         assert_eq!(
             out["dependencies"],
             json!([
-                { "kind": "positive", "source": "buyer", "signalName": "trade.intent.cmp" },
                 { "kind": "positive", "source": "seller", "signalName": "trade.listing.cmp" }
             ])
         );
         assert_eq!(
             out["normalizedExpression"],
-            "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)"
+            "::ANCHOR(@seller::trade.listing.cmp)"
         );
 
         let cloud_ast = out["cloudAst"].clone();
-        assert_eq!(cloud_ast["mode"], "merge");
-        assert_eq!(cloud_ast["source"], "seller");
-        assert_eq!(cloud_ast["mergeTargets"].as_array().map(Vec::len), Some(2));
+        assert_eq!(cloud_ast["mode"], "subscription");
+        assert_eq!(cloud_ast["source"], "");
+        assert_eq!(
+            cloud_ast["subscriptionTarget"],
+            json!({ "source": "seller", "signal": "trade.listing.cmp" })
+        );
 
+        // 订阅钩子不经表达式裁决：求值器恒返回 NeedsMore，投递由状态机
+        // 按接收方锚定状态路由（按单经对接记录，无锚按类扇入）。
         let eval = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
             ast: cloud_ast,
@@ -2379,16 +2119,21 @@ mod tests {
         })
         .unwrap();
         assert_eq!(eval.state, EvalState::NeedsMore);
+        assert!(eval.reason.unwrap_or_default().contains("delivered per"));
     }
 
     #[test]
-    fn merge_entry_rejects_degenerate_shapes() {
+    fn subscription_entry_rejects_degenerate_shapes() {
         for hook in [
-            "::MERGE@(seller::trade.listing.cmp,)",
-            "::MERGE@()",
-            "::MERGE@(seller::trade.listing.cmp & buyer::trade.intent.cmp)",
-            "::MERGE@(seller::trade.listing.cmp, seller::(trade.a & trade.b))",
-            "wholesaler::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)",
+            "::ANCHOR()",
+            "::ANCHOR(@)",
+            "::ANCHOR(seller::trade.listing.cmp)",
+            "::ANCHOR(@seller::trade.listing.cmp & buyer::trade.intent.cmp)",
+            "::ANCHOR(@seller::listing.cmp)",
+            "::ANCHOR(@::trade.listing.cmp)",
+            "::ANCHOR(@seller names::trade.listing.cmp)",
+            "wholesaler::ANCHOR(@seller::trade.listing.cmp)",
+            "::ANCHOR@(farmer.main.settle)",
         ] {
             let err = parse_hook(ParseHookRequest {
                 profile: Profile::CloudCompat,
@@ -2401,79 +2146,46 @@ mod tests {
     }
 
     #[test]
-    fn merge_entry_with_single_upstream_is_observation_entry() {
-        // k=1 是合法的运行时投递形态：单 source 的多张订单逐事件转交静态执行
-        // 器（跨订单观察/聚合入口），判定权仍在执行器。钉住 parse 层 k≥1 下限，
-        // 防止被误"收紧"到 ≥2。
-        let out = parse_value(
-            "::MERGE@(child_ci::child.test.cmp)",
-            Profile::CloudCompat,
-            "OBSERVE",
-        );
-        assert_eq!(out["mode"], "merge");
-        assert_eq!(
-            out["mergeTargets"],
-            json!([{ "source": "child_ci", "signalName": "child.test.cmp" }])
-        );
-
-        // 求值器只做表达式裁决、从不执行投递：作为汇合表达式，k<2 在求值层
-        // 仍无意义。运行时投递由状态机在 decode 层短路完成，不经过求值器。
-        let err = eval_compiled_hook(EvalCompiledHookRequest {
-            profile: Profile::CloudCompat,
-            ast: out["cloudAst"].clone(),
-            signals: vec![],
-            now: "2026-04-27T00:00:00Z".to_string(),
-        })
-        .expect_err("merge expression with a single operand must not evaluate");
-        assert!(
-            err.to_string().contains("requires at least two targets"),
-            "unexpected error: {err}"
-        );
+    fn retired_hook_modes_are_rejected_at_decode() {
+        // 0.6 的编译产物（outside_spawn/merge/anchor）在 0.7 解码期确定性拒绝，
+        // 不做兼容解释。
+        for mode in ["outside_spawn", "merge", "anchor"] {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast: json!({
+                    "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                    "source": "",
+                    "mode": mode,
+                    "root": { "type": "signal", "signal": "task.main.cmp" }
+                }),
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .expect_err("retired mode must not decode");
+            assert!(
+                err.to_string().contains("retired in uvp-semantic/0.7"),
+                "unexpected error for {mode}: {err}"
+            );
+        }
     }
 
     #[test]
-    fn anchor_entry_parses_target_and_cloud_ast() {
-        let out = parse_value(
-            "::ANCHOR@(farmer.main.settle)",
-            Profile::CloudCompat,
-            "ANCHOR_SETTLE",
-        );
-        assert_eq!(out["mode"], "anchor");
-        assert_eq!(
-            out["dependencies"],
-            json!([{ "kind": "positive", "source": "", "signalName": "farmer.main.settle" }])
-        );
-        assert_eq!(out["normalizedExpression"], "::ANCHOR@(farmer.main.settle)");
-
-        let cloud_ast = out["cloudAst"].clone();
-        assert_eq!(cloud_ast["mode"], "anchor");
-        assert_eq!(
-            cloud_ast["anchorTarget"],
-            json!({ "signal": "farmer.main.settle" })
-        );
-
-        let eval = eval_compiled_hook(EvalCompiledHookRequest {
-            profile: Profile::CloudCompat,
-            ast: cloud_ast.clone(),
-            signals: vec![],
-            now: "2026-04-27T00:00:00Z".to_string(),
-        })
-        .unwrap();
-        assert_eq!(eval.state, EvalState::NeedsMore);
-        assert!(eval.reason.unwrap_or_default().contains("delivered per"));
-
-        // 直接构造缺失 anchorTarget 的毒 AST：求值必须在解码期确定性拒绝。
-        let mut poisoned = cloud_ast;
-        poisoned["anchorTarget"] = serde_json::Value::Null;
+    fn subscription_ast_without_target_is_rejected_at_decode() {
+        let cloud_ast = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "",
+            "mode": "subscription",
+            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        });
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
-            ast: poisoned,
+            ast: cloud_ast,
             signals: vec![],
             now: "2026-04-27T00:00:00Z".to_string(),
         })
-        .expect_err("anchor AST without target must not be evaluated");
+        .expect_err("subscription AST without target must not be evaluated");
         assert!(
-            err.to_string().contains("anchorTarget"),
+            err.to_string().contains("subscriptionTarget"),
             "unexpected error: {err}"
         );
     }
@@ -2510,28 +2222,6 @@ mod tests {
         })
         .expect_err("duration overflow must be rejected");
         assert!(err.to_string().contains("duration is too large"));
-    }
-
-    #[test]
-    fn outside_spawn_evaluates_through_delegated_signal_root() {
-        let parsed = parse_hook(ParseHookRequest {
-            profile: Profile::EvmStrict,
-            hook_name: "TRIGGER".to_string(),
-            hook: "::OUTSIDE@(seller::task.ship.cmp)".to_string(),
-        })
-        .unwrap();
-        let eval = eval_compiled_hook(EvalCompiledHookRequest {
-            profile: Profile::EvmStrict,
-            ast: parsed.cloud_ast,
-            signals: vec![SignalFact {
-                source: "seller".to_string(),
-                signal_name: "task.ship.cmp".to_string(),
-                received_at: "2026-04-27T00:00:00.000Z".to_string(),
-            }],
-            now: "2026-04-27T00:00:00.000Z".to_string(),
-        })
-        .unwrap();
-        assert_eq!(eval.state, EvalState::Ready);
     }
 
     #[test]

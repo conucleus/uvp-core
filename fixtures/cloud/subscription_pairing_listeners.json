@@ -1,6 +1,6 @@
 {
-  "name": "MERGE pairing entry fans cross-source events into match executor",
-  "semanticVersion": "uvp-semantic/0.4",
+  "name": "Subscription listeners fan cross-source class events into match executor",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "cloud",
   "portable": false,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "listing",
               "source": "seller",
-              "trigger": [
-                "LIST"
-              ],
-              "externalSignals": [
-                "LIST"
-              ],
               "sendSignals": [
                 "cmp"
               ]
@@ -40,12 +34,6 @@
             {
               "name": "intent",
               "source": "buyer",
-              "trigger": [
-                "WANT"
-              ],
-              "externalSignals": [
-                "WANT"
-              ],
               "sendSignals": [
                 "cmp"
               ]
@@ -58,11 +46,9 @@
             {
               "name": "match",
               "source": "buyer",
-              "trigger": [
-                "PAIR"
-              ],
               "receiveSignals": {
-                "PAIR": "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)"
+                "PAIR_SELLER": "::ANCHOR(@seller::trade.listing.cmp)",
+                "PAIR_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
               },
               "sendSignals": [
                 "paired"
@@ -75,7 +61,8 @@
   },
   "expect": {
     "cloudHookModes": {
-      "PAIR": "merge"
+      "PAIR_SELLER": "subscription",
+      "PAIR_BUYER": "subscription"
     }
   }
 }

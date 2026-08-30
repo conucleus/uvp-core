@@ -1,6 +1,6 @@
 {
   "name": "cross-source direct trigger consumes another source's signal",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "listing",
               "source": "seller",
-              "trigger": [
-                "OPEN"
-              ],
-              "externalSignals": [
-                "OPEN"
-              ],
               "sendSignals": [
                 "listing_ready"
               ],
@@ -49,9 +43,6 @@
             {
               "name": "watch",
               "source": "buyer",
-              "trigger": [
-                "WATCH"
-              ],
               "receiveSignals": {
                 "WATCH": "seller::supply.listing.listing_ready"
               },

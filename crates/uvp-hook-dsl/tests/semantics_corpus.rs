@@ -4,7 +4,7 @@ use uvp_hook_dsl::{
     eval_compiled_hook, parse_hook, EvalCompiledHookRequest, ParseHookRequest, Profile, SignalFact,
 };
 
-const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
+const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v2.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,7 +29,6 @@ struct ParseCase {
 struct ParseExpect {
     source: String,
     mode: String,
-    upstream_source: Option<String>,
     runtime_condition: String,
     normalized_expression: String,
     dependencies: Vec<Value>,
@@ -90,11 +89,6 @@ fn parses_semantic_corpus() {
 
         assert_eq!(output.source, case.expect.source, "{}", case.name);
         assert_eq!(output_value["mode"], case.expect.mode, "{}", case.name);
-        assert_eq!(
-            output.upstream_source, case.expect.upstream_source,
-            "{}",
-            case.name
-        );
         assert_eq!(
             output.runtime_condition, case.expect.runtime_condition,
             "{}",

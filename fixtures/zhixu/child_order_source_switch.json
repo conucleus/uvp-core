@@ -1,6 +1,6 @@
 {
   "name": "delegation binds a child zhixu executor through signalMap source switch",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "assign",
               "source": "buyer",
-              "trigger": [
-                "CREATE_ORDER_REQUEST"
-              ],
-              "externalSignals": [
-                "CREATE_ORDER_REQUEST"
-              ],
               "sendSignals": [
                 "executor_selected"
               ],
@@ -49,9 +43,6 @@
             {
               "name": "main",
               "source": "buyer",
-              "trigger": [
-                "START"
-              ],
               "receiveSignals": {
                 "START": "buyer::selector.assign.executor_selected",
                 "TIMEOUT": "buyer::(selector.assign.executor_selected +5s) & ~execution.main.cmp"

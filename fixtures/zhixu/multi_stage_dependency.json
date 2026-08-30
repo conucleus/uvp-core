@@ -1,6 +1,6 @@
 {
   "name": "multi-stage dependency fans two upstreams into one hook",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "one",
               "source": "buyer",
-              "trigger": [
-                "GO1"
-              ],
-              "externalSignals": [
-                "GO1"
-              ],
               "sendSignals": [
                 "done"
               ],
@@ -44,12 +38,6 @@
             {
               "name": "two",
               "source": "buyer",
-              "trigger": [
-                "GO2"
-              ],
-              "externalSignals": [
-                "GO2"
-              ],
               "sendSignals": [
                 "done"
               ],
@@ -61,9 +49,6 @@
             {
               "name": "three",
               "source": "buyer",
-              "trigger": [
-                "FINISH"
-              ],
               "receiveSignals": {
                 "FINISH": "buyer::(pipeline.one.done & pipeline.two.done)"
               },

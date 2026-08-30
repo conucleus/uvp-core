@@ -1,6 +1,6 @@
 {
   "name": "evm-only template pins chain platform and portable hooks",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -29,9 +29,6 @@
             {
               "name": "hold",
               "source": "buyer",
-              "trigger": [
-                "LOCK"
-              ],
               "receiveSignals": {
                 "LOCK": "buyer::escrow.hold.locked"
               },

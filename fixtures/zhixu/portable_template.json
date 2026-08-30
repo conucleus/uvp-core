@@ -1,6 +1,6 @@
 {
   "name": "portable template compiles under every profile target",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -27,9 +27,6 @@
             {
               "name": "pay",
               "source": "buyer",
-              "trigger": [
-                "SETTLE"
-              ],
               "receiveSignals": {
                 "SETTLE": "buyer::settle.pay.done"
               },

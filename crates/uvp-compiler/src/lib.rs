@@ -92,8 +92,7 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
         &stage_entries,
         &selected_stage_bindings,
     ));
-    validation_issues.extend(validate_external_signal_contracts(&stage_entries));
-    validation_issues.extend(validate_trigger_references(&stage_entries));
+    validation_issues.extend(validate_mint_anchors(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(&stage_entries));
     validation_issues.extend(validate_signal_maps(&stage_entries));
     if !validation_issues.is_empty() {
@@ -161,8 +160,7 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
 
     let stage_entries = flatten_stages(&definition)?;
     let mut validation_issues = Vec::new();
-    validation_issues.extend(validate_external_signal_contracts(&stage_entries));
-    validation_issues.extend(validate_trigger_references(&stage_entries));
+    validation_issues.extend(validate_mint_anchors(&stage_entries));
     // 与 hook_plan 目标共用同一组校验：同一份定义不允许"一个 target 收、
     // 另一个放"，否则 Go 主链路会拿到被 hook_plan 拒绝的定义的产物。
     validation_issues.extend(validate_signal_maps(&stage_entries));
@@ -467,60 +465,34 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
     issues
 }
 
-fn validate_trigger_references(entries: &[StageEntry]) -> Vec<String> {
+fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
+    // 编译期只固定两件事：
+    // 1) mint 取值合法（当前仅 per-fact）；
+    // 2) mint 阶段是出生阶段，只接受订阅通道——per-fact 出生由（通道）事实
+    //    驱动，同单 hook 在铸单前没有可求值的订单上下文。
+    // 其余阶段是否"有锚"由运行时按对接记录路由自然裁决：存在订单实例则
+    // 按单投递（域内血缘/dock 边），不存在实例则按类扇入。执行器自发 str
+    // 出的订单编译期不可见，因此不在此做静态锚定判断。
     for entry in entries {
-        let trigger_keys = normalize_trigger_keys(&entry.stage.trigger);
-        if trigger_keys.is_empty() {
-            issues.push(format!(
-                "{}.trigger must contain at least one externalSignals or receiveSignals key",
-                entry.stage_identifier
-            ));
-            continue;
-        }
-        for trigger_key in trigger_keys {
-            if entry.stage.receive_signals.contains_key(&trigger_key)
-                || entry
-                    .stage
-                    .external_signals
-                    .iter()
-                    .any(|signal| signal.trim() == trigger_key)
-            {
-                continue;
-            }
-            issues.push(format!(
-                "{}.trigger references missing externalSignals or receiveSignals key {}",
-                entry.stage_identifier, trigger_key
-            ));
-        }
-    }
-    issues
-}
-
-fn validate_external_signal_contracts(entries: &[StageEntry]) -> Vec<String> {
-    let mut issues = Vec::new();
-    for entry in entries {
-        let mut seen = BTreeSet::new();
-        for signal in &entry.stage.external_signals {
-            let normalized = signal.trim();
-            if normalized.is_empty() {
+        if let Some(mint) = &entry.stage.mint {
+            if mint.trim() != "per-fact" {
                 issues.push(format!(
-                    "{}.externalSignals cannot contain an empty signal",
-                    entry.stage_identifier
-                ));
-                continue;
-            }
-            if !seen.insert(normalized.to_string()) {
-                issues.push(format!(
-                    "{}.externalSignals contains duplicate signal {}",
-                    entry.stage_identifier, normalized
+                    "{}.mint only supports per-fact: {}",
+                    entry.stage_identifier, mint
                 ));
             }
-            if entry.stage.receive_signals.contains_key(normalized) {
-                issues.push(format!(
-                    "{}.signal {} cannot be declared in both externalSignals and receiveSignals",
-                    entry.stage_identifier, normalized
-                ));
+            for (hook_name, raw_expression) in &entry.stage.receive_signals {
+                match parse_hook_for_compiler("HOOK", raw_expression) {
+                    Ok(parsed) if parsed.mode != uvp_hook_dsl::HookMode::Subscription => {
+                        issues.push(format!(
+                            "{}.receiveSignals.{hook_name}: mint stages accept subscription entries only; per-fact birth is driven by channel facts",
+                            entry.stage_identifier
+                        ));
+                    }
+                    Err(_) => {} // 语法错误由引用存在性校验统一上报
+                    Ok(_) => {}
+                }
             }
         }
     }
@@ -700,15 +672,13 @@ fn parse_signal_reference(signal_name: &str) -> Option<(String, String)> {
 
 fn compile_stage_hooks(entry: &StageEntry) -> Result<Vec<Value>> {
     let mut hooks = Vec::new();
-    let trigger_keys = normalize_trigger_keys(&entry.stage.trigger)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+    let is_mint_stage = entry.stage.mint.is_some();
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
         hooks.push(compile_hook(
             "receive",
             &entry.stage_identifier,
             hook_name,
-            trigger_keys.contains(hook_name),
+            is_mint_stage,
             raw_expression,
             entry
                 .stage
@@ -836,12 +806,8 @@ fn cloud_stage_artifact(entry: &StageEntry) -> Result<Value> {
                 .map_err(|err| CompilerError::Message(err.to_string()))?,
         );
     }
-    if !entry.stage.external_signals.is_empty() {
-        stage.insert(
-            "externalSignals".to_string(),
-            serde_json::to_value(&entry.stage.external_signals)
-                .map_err(|err| CompilerError::Message(err.to_string()))?,
-        );
+    if let Some(mint) = &entry.stage.mint {
+        stage.insert("mint".to_string(), Value::String(mint.clone()));
     }
     Ok(Value::Object(stage))
 }
@@ -919,17 +885,6 @@ fn build_dependency_index(compiled_hooks: &[Value]) -> Value {
         );
     }
     Value::Object(out)
-}
-
-fn normalize_trigger_keys(trigger: &[String]) -> Vec<String> {
-    trigger
-        .iter()
-        .map(|item| item.trim())
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }
 
 fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
@@ -1054,7 +1009,7 @@ mod tests {
         );
         assert_eq!(
             plan["planHash"],
-            "0x9a96febc07e2d254143a36c4ee3d57369083e8c6288478f1ddfc4656ade244f8"
+            "0x5eb9cc389532e3942997f0efa30bafc5a50212fac1bdf827d807b9c6d4d40520"
         );
         assert_eq!(plan["compiledHooks"].as_array().unwrap().len(), 4);
         assert_eq!(
@@ -1102,15 +1057,21 @@ mod tests {
 
     #[test]
     fn rejects_invalid_task_or_stage_identifier_parts() {
-        for (field, value) in [("taskPatterns[0].name", "execution.main"), ("stages[0].name", "1main")] {
+        for (field, value) in [
+            ("taskPatterns[0].name", "execution.main"),
+            ("stages[0].name", "1main"),
+        ] {
             let mut definition = demo_definition();
             if field.starts_with("taskPatterns") {
                 definition["spec"]["taskPatterns"][0]["name"] = json!(value);
             } else {
                 definition["spec"]["taskPatterns"][1]["stages"][0]["name"] = json!(value);
             }
-            let error = compile_zhixu_hook_plan(&definition).expect_err("invalid identifier must fail");
-            assert!(error.to_string().contains("must start with an ASCII letter"));
+            let error =
+                compile_zhixu_hook_plan(&definition).expect_err("invalid identifier must fail");
+            assert!(error
+                .to_string()
+                .contains("must start with an ASCII letter"));
         }
     }
 

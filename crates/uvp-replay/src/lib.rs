@@ -205,9 +205,7 @@ fn parse_replay_request(input: &str) -> Result<(Vec<Value>, ReplayOptions)> {
     let request: ReplayRequest = serde_json::from_value(value)
         .map_err(|err| ReplayError::Message(format!("invalid replay request: {err}")))?;
     let events = request.events.ok_or_else(|| {
-        ReplayError::Message(
-            "replay request is missing the required \"events\" field".to_string(),
-        )
+        ReplayError::Message("replay request is missing the required \"events\" field".to_string())
     })?;
     Ok((events, request.options))
 }
@@ -440,7 +438,8 @@ fn evaluate_instructions(
                 let arity = value_i64(instruction, "arity")?;
                 if arity < 2 {
                     return Err(ReplayError::Message(
-                        "malformed instruction plan: MERGE requires at least two targets".to_string(),
+                        "malformed instruction plan: MERGE requires at least two targets"
+                            .to_string(),
                     ));
                 }
                 let arity = arity as usize;
@@ -453,7 +452,8 @@ fn evaluate_instructions(
                 let terms = stack.split_off(stack.len() - arity);
                 stack.push(terms.into_iter().reduce(merge_value).ok_or_else(|| {
                     ReplayError::Message(
-                        "malformed instruction plan: merge instruction produced no value".to_string(),
+                        "malformed instruction plan: merge instruction produced no value"
+                            .to_string(),
                     )
                 })?);
             }
@@ -586,12 +586,30 @@ fn merge_value(left: EvalValue, right: EvalValue) -> EvalValue {
         };
     }
     if left.value {
-        return EvalValue { value: true, wait: false, cancel: false, due_at: 0, anchor_at: left.anchor_at };
+        return EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: 0,
+            anchor_at: left.anchor_at,
+        };
     }
     if right.value {
-        return EvalValue { value: true, wait: false, cancel: false, due_at: 0, anchor_at: right.anchor_at };
+        return EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: 0,
+            anchor_at: right.anchor_at,
+        };
     }
-    EvalValue { value: false, wait: false, cancel: false, due_at: 0, anchor_at: 0 }
+    EvalValue {
+        value: false,
+        wait: false,
+        cancel: false,
+        due_at: 0,
+        anchor_at: 0,
+    }
 }
 
 fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
@@ -901,13 +919,19 @@ mod tests {
         ];
         let now = "2026-04-27T00:00:00Z";
         let mut state = OracleOrderState::default();
-        state.signals.insert("0xaa".to_string(), json!({"submittedAt": "1970-01-01T00:01:40Z"}));
+        state.signals.insert(
+            "0xaa".to_string(),
+            json!({"submittedAt": "1970-01-01T00:01:40Z"}),
+        );
         let result =
             evaluate_instructions(&state, &instructions, now).expect("first arrival must deliver");
         assert!(result.value);
         assert_eq!(result.anchor_at, 100);
 
-        state.signals.insert("0xbb".to_string(), json!({"submittedAt": "1970-01-01T00:00:50Z"}));
+        state.signals.insert(
+            "0xbb".to_string(),
+            json!({"submittedAt": "1970-01-01T00:00:50Z"}),
+        );
         let both = evaluate_instructions(&state, &instructions, now).expect("both present");
         assert!(both.value);
         assert_eq!(both.anchor_at, 50, "earliest arrival wins the merge anchor");

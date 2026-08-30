@@ -1,6 +1,6 @@
 {
   "name": "merge pairing entry requires the static executor it delivers to",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "listing",
               "source": "seller",
-              "trigger": [
-                "LIST"
-              ],
-              "externalSignals": [
-                "LIST"
-              ],
               "sendSignals": [
                 "cmp"
               ],
@@ -44,12 +38,6 @@
             {
               "name": "intent",
               "source": "buyer",
-              "trigger": [
-                "WANT"
-              ],
-              "externalSignals": [
-                "WANT"
-              ],
               "sendSignals": [
                 "cmp"
               ],
@@ -66,11 +54,9 @@
             {
               "name": "pool",
               "source": "buyer",
-              "trigger": [
-                "MATCH"
-              ],
               "receiveSignals": {
-                "MATCH": "::MERGE@(seller::trade.listing.cmp, buyer::trade.intent.cmp)"
+                "MATCH_SELLER": "::ANCHOR(@seller::trade.listing.cmp)",
+                "MATCH_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
               },
               "sendSignals": [
                 "matched"
@@ -88,10 +74,12 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "market.pool#MATCH"
+      "market.pool#MATCH_BUYER",
+      "market.pool#MATCH_SELLER"
     ],
     "hookDependencyCounts": {
-      "market.pool#MATCH": 2
+      "market.pool#MATCH_BUYER": 1,
+      "market.pool#MATCH_SELLER": 1
     }
   }
 }

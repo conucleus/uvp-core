@@ -1,6 +1,6 @@
 {
   "name": "cloud-only template spawns child orders via OUTSIDE entry",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "cloud",
   "portable": false,
   "input": {
@@ -27,12 +27,6 @@
             {
               "name": "main",
               "source": "test_executor",
-              "trigger": [
-                "RUN"
-              ],
-              "externalSignals": [
-                "RUN"
-              ],
               "sendSignals": [
                 "smart_contract"
               ],
@@ -49,11 +43,8 @@
             {
               "name": "retail",
               "source": "buyer",
-              "trigger": [
-                "SPAWN"
-              ],
               "receiveSignals": {
-                "SPAWN": "::OUTSIDE@(test_executor::dispatch.main.smart_contract)"
+                "SPAWN": "::ANCHOR(@test_executor::dispatch.main.smart_contract)"
               },
               "sendSignals": [
                 "ack"
@@ -61,7 +52,8 @@
               "executor": {
                 "supplierType": "organization",
                 "supplierID": "dispatch-org"
-              }
+              },
+              "mint": "per-fact"
             }
           ]
         }
@@ -70,7 +62,7 @@
   },
   "expect": {
     "cloudHookModes": {
-      "SPAWN": "outside_spawn"
+      "SPAWN": "subscription"
     }
   }
 }

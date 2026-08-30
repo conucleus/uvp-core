@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use uvp_replay::{replay_chain_events, ReplayOptions};
 
-const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
+const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v2.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

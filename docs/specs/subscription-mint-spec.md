@@ -1,0 +1,200 @@
+# 订阅与铸单模型规格（Subscription & Mint Model）
+
+> 状态：对齐基线（v1，替代 merge-anchor-delivery-spec.md）
+> 语义版本：`uvp-semantic/0.7`（自 `uvp-semantic/0.6` 升版，一次到位，不并存两套语义）
+> 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
+> 合约边界：本期不改合约 ABI 与 EIP-712 typed-data；链上 MERGE 指令 op 保留兼容既有 Plan；订阅上链属未来协议扩展
+
+---
+
+## 0. 本文解决什么
+
+旧模型的"跨秩序四典型"（分馏 `::OUTSIDE@`、撮合 `::MERGE@`、收购 `::ANCHOR@`、委托 signalMap）是同一根管道的四个命名捆绑包，每个捆绑包背着大量场景定语（回流方向、三段判定切分、k≥2 表达式下限等）。本规格把四典型收敛为三个正交层——**事实、路由、铸单**——并给出对应的语法表面。收敛后：
+
+- 事实怎么进来：订阅（一种语法，两条路由规则）。
+- 订单怎么出生：str 自报（免声明）或 `mint: per-fact` 代铸（唯一声明点）。
+- 阶段种类：编译期定死、终生不可变。
+
+旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。
+
+---
+
+## 1. 事实层（Fact）
+
+### 1.1 两种锚定
+
+事实（signal）按信封内容归类，**由发送方在每次发送时自由选择**（想发就发原则的延伸）：
+
+| 锚定 | 信封特征 | 存储 | 例子 |
+|---|---|---|---|
+| 订单锚定 | 携带 `order_id` | individual_record（现有，first-win） | 农户 cmp 落在农户单上 |
+| 通道锚定 | 无 `order_id`，携带去重键 `fact_key` | 源级事实存储（新增） | 成交播报 deal、开门/关门 |
+
+### 1.2 事实纪律三元组（不变量）
+
+无论锚定方式，一条事实必须具备：
+
+1. **去重身份**（first-win，重复吸收）：
+   - 订单锚定：`(域, order_id, signal_name)`（现有键）。
+   - 通道锚定：`(域, source, stage, signal, fact_key)`；`fact_key` 由发送方提供（成交编号等业务键），信封新增字段。
+2. **事实标签**（全序 + tie-break）：云侧 `ready_at + seq`，链侧 `(txHash, logIndex)`。一切投影按事实标签排序，不按到达时间。
+3. **溯源**：发送方域/单/阶段/信号，及发送方选择携带的关联订单引用（如成交事实携带买卖双方订单 id，供代铸复制血缘）。
+
+**可重放是唯一不变量**：给定全部事实（两种锚定）+ 不可变定义，重放必然收敛到同一订单集合。订单上下文不是事实成立的必要属性。
+
+### 1.3 事实归属的语义结论
+
+- 事实保持自己的家；铸单是从事实**派生新身份**并记录溯源关联，不移动事实、不产生双重身份。
+- 开门/关门/成交播报是事实流，不是身份。订单只出现在"没有它就无法路由、无法担责"的地方。
+
+---
+
+## 2. 路由层（Routing）
+
+### 2.1 source 命名空间
+
+- `source` 是 **zhixu 局部**的因果链身份命名空间；多个 stage 可共享同一 source（整条业务线共用一个因果身份类）。
+- 订阅寻址 `@source::stage.signal` 只在本域解析。**信号层面不存在跨秩序源**：跨域唯一通道是委托 dock + signalMap（见 2.4）。
+- 乐高原则：秩序之间无父子。被委托方天然存在，不因被委托需要父；可反向委托。无 dock 实例 = 无关系 = 不投递，这是"尚无关系"的正常态，不是孤儿。
+
+### 2.2 订阅语法（receiveSignals 值）
+
+| 表达式 | 语义 | 求值 |
+|---|---|---|
+| `{source}::{condition}` | 同单 hook（布尔/延时），现有语义不变 | 在订阅方自己的订单上下文内求值，判决一次（init/wait/ready/cxl） |
+| `ANCHOR(@{source}::{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
+
+旧 `::OUTSIDE@` / `::MERGE@` / `::ANCHOR@` 标头、OUTSOURCE、k≥2 表达式下限、空标头规则全部退役。
+
+### 2.3 三种接收方（编译期定死，选项 A）
+
+| 接收方种类 | 判定（编译期） | 收事实方式 | 收到后 |
+|---|---|---|---|
+| 出生阶段 | 阶段声明 `mint: per-fact` | 按 source 类扇入（铸前无单可锚） | 每事实引擎代铸一单，本阶段为其出生阶段 |
+| 有锚阶段 | 其 source 类在本域内存在 `mint: per-fact` 声明 | 按单路由：事实沿对接记录（域内血缘/dock 实例）到达订阅方订单 | 推进（同单事实累积） |
+| 无锚监听 | 其 source 类在本域内无任何 mint 声明 | 按 source 类扇入 | 执行器自行处理（配对、计数等私有判断） |
+
+规则细节：
+
+- 种类终生不可变，禁止运行时 patch（沿用既有禁 patch 门禁风格）。
+- **mint 声明是编译期唯一的锚定依据**。执行器自发 str 出的订单，编译期不可见；订阅此类来源的阶段一律扇入，多张同源单时订阅方执行器按溯源自行分拣。
+- mint 阶段自身的订阅一律扇入（铸前无单）。
+- 同单 hook 表达式只能出现在有锚阶段（无锚阶段没有订单上下文可求值）。
+
+### 2.4 跨域：委托 dock + signalMap
+
+- 委托是一个秩序 dock 另一个秩序：A 的委托 stage 与 B 被 trigger 的入口 stage 在接缝处视为**同一个 source** 的两半；signalMap 是接缝上的对译表。
+- 委托共享订单上下文（现有 zhixu 执行器 `NewSource=false` 通道不变）；事实经 signalMap 逐条映射回父阶段。
+- 委托关系一次性绑定、禁 patch（现有门禁不变）。
+- `rel_order_order` 语义从"父子血缘"改为**对接记录**（谁 dock 谁、映射实例、接缝两侧锚点）；表结构不变，写读两处语义与命名更新。按单路由以对接记录为落点。
+
+### 2.5 外部世界
+
+- 唯一入口：执行器自发信号（str / canonical signal），执行器是否、何时发送取决于其业务事务。
+- externalSignals 删除；外部事实名契约归 swagger。
+- 外部事实没有直连订阅的捷径：必须先经执行器变成某域的 canonical signal，才能被订阅或被引擎消费。
+
+---
+
+## 3. 铸单层（Mint）
+
+| 通道 | 声明 | 机制 | 保证 |
+|---|---|---|---|
+| 执行器 str | 无需声明 | `new_source=true`，可携带 `parent_order_ids` 自报血缘；无需父 | 执行器私有的铸造判定（配对、挑选、自发开单） |
+| 引擎 per-fact 代铸 | `mint: per-fact`（唯一声明点） | 每到达（扇入）事实，订单 ID 从事实纯函数派生（现 deriveOutsideOrderID 模式：域+阶段+订阅+上游引用），投递事务内 RegisterOrder 幂等重入 | **无需知情者的存在性**：投递失败只延迟，重放不漂移身份 |
+
+- 代铸订单的溯源父从事实的关联订单引用复制（如 deal 携带买卖双方订单 id）。
+- 一个事实最多铸一次单（按去重身份幂等）。
+
+---
+
+## 4. 语法表面（目标）
+
+```yaml
+# 出生阶段：每事实即铸（原分馏）
+- name: entry
+  source: customer
+  mint: per-fact
+  executor: { supplierType: organization, supplierID: journey-executor }
+  receiveSignals:
+    JOURNEY_START: "ANCHOR(@fruit_merchant::stall_retail.retail.sold)"
+  sendSignals: [str, cmp, err]
+
+# 无锚监听：通道扇入（原撮合）
+- name: exchange
+  source: match
+  executor: { supplierType: organization, supplierID: juice-market-executor }
+  receiveSignals:
+    SURPLUS_EVENT: "ANCHOR(@fruit_merchant::stall_retail.retail.surplus)"
+    DEMAND_EVENT: "ANCHOR(@buyer::juice_demand.entry.requested)"
+  sendSignals: [str, frozen, cmp, deal, err]
+
+# 有锚阶段：按单路由（原收购回流；同 source 类存在 mint 声明即有锚）
+- name: packing intake
+  source: seller
+  executor: { supplierType: organization, supplierID: fruit-merchant-executor }
+  receiveSignals:
+    FARMER_FRUIT_SETTLED: "ANCHOR(@farmer::farmer_orchard.packing.settled)"
+  sendSignals: [str, frozen, cmp, err]
+
+# 同单推进：普通 hook（原语义）
+- name: washing
+  source: seller
+  executor: { supplierType: organization, supplierID: farmer-executor }
+  receiveSignals:
+    WASH_READY: "seller::farmer_orchard.picking.cmp"
+  sendSignals: [str, cmp, err]
+```
+
+Stage 字段总表（目标态）：
+
+| 字段 | 状态 |
+|---|---|
+| `source` | 保留，升格为因果身份类（域内命名空间，多阶段共享） |
+| `mint` | 新增，可选，仅 `per-fact`；仅无 mint 之外的无出生链场景 |
+| `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
+| `sendSignals` | 保留 |
+| `executor` | 保留；委托（supplierType=zhixu + signalMap/triggerEntrance）原样 |
+| `trigger` | **删除**（原必填入口表） |
+| `externalSignals` | **删除** |
+| `fileResources`、`selectedStages` | 保留 |
+
+---
+
+## 5. 六场景对照（旧 → 新）
+
+| 场景 | 旧写法 | 新写法 |
+|---|---|---|
+| 分馏（汽油/顾客路线） | `::OUTSIDE@(源::t.s.sig)` | 订阅 + `mint: per-fact` |
+| 撮合（k≥2 配对） | `::MERGE@(a::…, b::…)` | 无锚监听 + 多条 `ANCHOR(@…)`；配对后执行器 str 多父 |
+| 收购回流 | `::ANCHOR@(裸三段)` | 有锚阶段 + `ANCHOR(@…)`（按单路由） |
+| 观察入口（k=1） | k=1 MERGE | 无锚监听 + 单条 `ANCHOR(@…)` |
+| 交易所开门/关门 | 无（外部 trigger + 载体单） | match source 上一个发开门/关门事实的 stage，通道锚定 |
+| 委托 | signalMap + triggerEntrance | **不变** |
+
+---
+
+## 6. 回放口径
+
+- 回放基线：全部事实（订单锚定 + 通道锚定）+ 不可变定义 + 对接记录。
+- 代铸订单：事实重放 → 纯函数派生 ID → 同一订单集合，不漂移。
+- hook 判决（普通表达式）：维持现有 hook_state 语义层（init/wait/ready/cxl，终态不可变）；订阅通道不经判决层，事实→路由→投递直通。
+- 投递层（重试/退避/dead/复活）机制原样，适用于订阅通道投递。
+
+## 7. 兼容与退役
+
+- `uvp-semantic/0.6` → `uvp-semantic/0.7`；共享语料 `semantics.v1.json` → `v2`（parseCases/invalidCases/evalCases/replayCases 全量换新）。
+- 兼容矩阵 `uvp-stack.v1.json` 等值断言同步升级（semanticVersion、hookCorpusSchema、hookPlan/onchainHookPlan schema）。
+- 合约 ABI fixture 与 EIP-712 typed-data 不动；云侧信封键字段与链上既有 `idempotencyKey` 语义对齐。
+- 旧关键字（OUTSIDE/MERGE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
+
+## 8. 决策记录
+
+| 决策 | 结论 | 依据 |
+|---|---|---|
+| 三种接收方是否可变 | 编译期定死、不可变（选项 A） | 路由语义单一可静态验证；生殖是入口行为不是流程行为；同单生殖走执行器 str |
+| 铸单标记命名 | `mint: per-fact` | 语义是铸单策略，不是入口激活 |
+| 链侧切换 | 一次到位，删四典型关键字 | 四类在业务模板与链上近零使用；干净切分优于并存 |
+| 血缘闸门 | 不再是过滤开关，而是域内路由规则 + 域作用域本身 | "只有我的农户"由按单路由与 zhixu 局部命名空间免费获得 |
+| 锚定依据 | mint 声明是编译期唯一锚定依据 | 自发 str 编译期不可见；订阅方按溯源分拣是执行器责任 |
+| 孤儿 | 概念删除 | 订单天然存在，无 dock = 尚无关系，非异常态 |
