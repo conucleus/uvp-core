@@ -209,3 +209,11 @@ Stage 字段总表（目标态）：
 | 血缘边构成者 | rel_order_order 增加 constituted_by（asserted/mint）+ constituent_sender；触发器代写断言边留信封 sender，mint 边标引擎 | 裸跑下断言边只留痕不设门；门语义收紧（构成权收回父侧 + 事实核对）待商店主体体系落地 |
 | patch selector | applyStageExecutorUpdate 校验 selector 阶段存在且 selectedStages 覆盖目标；主体对 selector 的控制权归属校验挂起 | 现网主链路（平台）不传 selector 不受影响；挂起项与商店主体词汇表一并设计 |
 | chain-services 自报头 | x-uvp-* 自报头永不作为权威；治理/运维/evidence 入口的身份由商店前置签发 | 自报 header 即得管理员 + 服务持 registry owner key 真实上链是对抗路确认的边界缺口；随商店落地整改 |
+
+### 补充决策（2026-08-31 第二批，用户裁决落地）
+
+| 决策 | 结论 | 依据 |
+|---|---|---|
+| 血缘门收紧（已落地） | rel_order_order 增加 constituting_signal：断言边只有被本钩子订阅的那条事实亲手盖章才构成投递依据（门核对 constituting_signal=订阅目标）；mint 边免检。伪造必须把关联声明塞进伪造事实信封本身 | 构成权收回父侧的引擎侧可实现形态；executor 主体归属等商店词汇表 |
+| patch 主体归属（定案） | 统一 selectedStages 口径：多个阶段可 select 同一目标阶段；selector 校验按"提供即校验存在且覆盖目标"执行。RBAC（谁能写谁）暂缓，待商店主体体系一并设计 | 现阶段唯一 patch 主链路是平台；提前建 RBAC 过度设计 |
+| chain-services 自报头（定案） | 缺口已登记，暂不整改；x-uvp-* 永不作为权威的口径不变，整改随秩序商店集成落地 | 当前无对外暴露面；商店落地时统一收口 |
