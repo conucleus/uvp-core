@@ -218,3 +218,18 @@ Stage 字段总表（目标态）：
 | 血缘门收紧（已落地） | rel_order_order 增加 constituting_signal：断言边只有被本钩子订阅的那条事实亲手盖章才构成投递依据（门核对 constituting_signal=订阅目标）；mint 边免检。伪造必须把关联声明塞进伪造事实信封本身 | 构成权收回父侧的引擎侧可实现形态；executor 主体归属等商店词汇表 |
 | patch 主体归属（定案） | 统一 selectedStages 口径：多个阶段可 select 同一目标阶段；selector 校验按"提供即校验存在且覆盖目标"执行。RBAC（谁能写谁）暂缓，待商店主体体系一并设计 | 现阶段唯一 patch 主链路是平台；提前建 RBAC 过度设计 |
 | chain-services 自报头（定案） | 缺口已登记，暂不整改；x-uvp-* 永不作为权威的口径不变，整改随秩序商店集成落地 | 当前无对外暴露面；商店落地时统一收口 |
+
+### 裁决落地（2026-09-01，用户逐项拍板）
+
+| 裁决 | 结论 | 落地 |
+|---|---|---|
+| 模-1 静态执行者 | 出生/订阅阶段必须编译期静态绑定非委托 executor；运行时 patch 一律拒绝（既有门禁不变） | Go validator 去豁免（uvp f724212 之后批次）；uvp-core validate_mint_anchors 增查；bootstrap child.main 前置注册静态执行者、register_select 撤销对该阶段的 patch |
+| 模-2 出生入口组成 | 出生入口只能是 ANCHOR 订阅；"订阅之外附加单正普通 hook"形态废除 | Go validateMintStages + zhixu_schema、uvp-core validate_mint_anchors 三处拒绝；TS 测试对齐 |
+| 模-3 域边界 | 域 = zhixu 实例。订阅按类匹配只在本实例内解析；跨秩序扇入要求 rel_zhixu_dock 显式对接（双向记录，compiler 新增 POST /zhixu-dock 登记，dbops.RegisterZhixuDock）。依赖按秩序 id 显式绑定（委托接缝/同单锚定）不受 dock 门限制 | uvp core-ddl + loadAffectedHooks + 契约测试 |
+| 事实标签 tie-break | hook_state.id 与 hook_delivery.id 改从共享序列 fact_label_seq 取值，标签对全部输出事实严格全序 | core-ddl |
+| nonce 防重放 | 接受现状（first-win 幂等吸收），nonce 查重/升级 JWT 随商店身份落地一并做 | 决策记录 |
+| DLQ 通知可靠性 | 告警语义走指标（stmDLQTotal 告警规则），持久化重投等运维真消费 DLQ 时再建 | 决策记录 |
+| chain-services 暴露面 | 模-5 修正"暂不整改"的前提：CORS 默认关闭（UVP_API_CORS_ALLOWED_ORIGINS 白名单回显）；notification-profile 挂 store.supplier.notification_profile.update；管理员白名单（GOVERNANCE_ADMIN_REVIEWER_IDS）真接入鉴权。身份归商店的裁决不变 | chain-services 本批次 |
+| 合约解冻批次（窗口已开） | #1 派生信号 capability 对称：跨订单派生要求目标（origin）订单 plan 声明同一 capability（审计修复方向 a）；#31 同 hook 输入内 dependencyKeys 去重；#30 README 口径改为"patch 即时接管、不可回滚恢复执行者"。#10 (planId, orderId) 复合键涉及全部模块/periphery 的订单寻址迁移，作为解冻窗口的下一个独立批次 | contracts 本批次 + forge 86/86 |
+
+#10 残余风险说明：capability 对称后，攻击者理论上仍可镜像目标 plan 的 capability 声明（plan 公开可读）；该残余与 #10 的订单寻址迁移一并在解冻窗口下一批次处置（选项：origin 侧 link 授权）。

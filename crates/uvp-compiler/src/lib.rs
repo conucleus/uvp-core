@@ -470,13 +470,13 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
 
 fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
-    // 编译期只固定三件事：
+    // 编译期固定四件事（模-1/模-2 裁决）：
     // 1) mint 取值合法（当前仅 per-fact）；
-    // 2) mint 阶段是出生阶段：接受订阅通道（跨类事实的 per-fact 出生）与
-    //    单信号普通 hook（外部提交事实的出生入口；链上即 isTrigger 钩子，
-    //    triggerOrderFrom* 的提交者按"现实成立后任意持有人签名提交"开放）；
-    //    布尔/否定/延时组合在铸单前没有可求值的订单上下文，仍拒绝。
-    // 3) 防无界代铸链：mint 阶段的订阅目标不得指向本阶段自己的 source 类。
+    // 2) mint 阶段必须编译期静态绑定非委托执行者（运行时 patch 对出生阶段
+    //    一律拒绝）；
+    // 3) 出生入口只能是 ANCHOR 订阅（跨类事实携带溯源进入；"附加单正普通
+    //    hook"形态已废除——普通 hook 在铸单前没有可求值的订单上下文）；
+    // 4) 防无界代铸链：mint 阶段的订阅目标不得指向本阶段自己的 source 类。
     // 其余阶段是否"有锚"由运行时按对接记录路由自然裁决：存在订单实例则
     // 按单投递（域内血缘/dock 边），不存在实例则按类扇入。执行器自发 str
     // 出的订单编译期不可见，因此不在此做静态锚定判断。
@@ -487,6 +487,15 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
                 issues.push(format!(
                     "{}.mint only supports per-fact: {}",
                     entry.stage_identifier, mint
+                ));
+            }
+            // 模-1 裁决：mint 出生阶段必须编译期静态绑定非委托执行者。
+            // 运行时 patch 对订阅/出生阶段一律拒绝，没有静态执行者的出生
+            // 阶段是"出生即死"的代铸死锁。
+            if !has_static_executor(entry.stage.executor.as_ref()) {
+                issues.push(format!(
+                    "{}.mint stage requires a static executor (subscription/birth stages cannot be patched at runtime)",
+                    entry.stage_identifier
                 ));
             }
             if entry.stage.executor.is_some() {
@@ -532,18 +541,14 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
                             }
                         }
                     }
-                    Ok(parsed) => {
-                        // 出生入口 hook 必须是单正信号（无组合/否定/延时）：
-                        // 出生事实本身即判定，isTrigger 计划就是一条 SIGNAL。
-                        let deps = &parsed.dependencies;
-                        let single_positive = deps.len() == 1
-                            && deps[0].kind == uvp_hook_dsl::DependencyKind::Positive;
-                        if !single_positive {
-                            issues.push(format!(
-                                "{}.receiveSignals.{hook_name}: mint stage birth entries must be a single plain signal (no boolean/negation/delay composition)",
-                                entry.stage_identifier
-                            ));
-                        }
+                    Ok(_) => {
+                        // 模-2 裁决：出生入口只能是 ANCHOR 订阅。"订阅之外附加
+                        // 单正普通 hook"的形态废除——出生事实一律走订阅通道
+                        // 携带溯源进入。
+                        issues.push(format!(
+                            "{}.receiveSignals.{hook_name}: mint stage accepts ANCHOR(@…) subscription entries only; plain birth-entry hooks are retired",
+                            entry.stage_identifier
+                        ));
                     }
                 }
             }

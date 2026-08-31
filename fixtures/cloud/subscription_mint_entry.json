@@ -45,7 +45,11 @@
               "sendSignals": [
                 "ack"
               ],
-              "mint": "per-fact"
+              "mint": "per-fact",
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "orchard-retail-executor"
+              }
             }
           ]
         }
