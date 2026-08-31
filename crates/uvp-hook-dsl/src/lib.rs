@@ -284,6 +284,8 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             "source",
             "mode",
             "subscriptionTarget",
+            "mint",
+            "route",
             "root",
         ],
         "compiled hook AST",
@@ -310,38 +312,73 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             "unsupported compiled hook AST mode: {mode}; outside_spawn/merge/anchor were retired in uvp-semantic/0.7"
         )));
     }
-    if mode == "subscription" {
-        let target = req.ast.get("subscriptionTarget");
-        let has_source = target
-            .and_then(|target| target.get("source"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some();
-        let has_signal = target
-            .and_then(|target| target.get("signal"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some();
-        if !has_source || !has_signal {
-            return Err(HookError::Message(
-                "compiled subscription hook AST is missing subscriptionTarget.source/.signal"
-                    .to_string(),
-            ));
+    // mint/route 是云侧编译器注入订阅 AST 的铸单/路由标注；对齐 Go
+    // DecodeCompiledHook：仅 subscription 模式允许携带，mint 仅 per-fact，
+    // route 仅 order/fanin（空值视为未携带）。
+    let mint = optional_ast_str(ast_object, "mint")?;
+    let route = optional_ast_str(ast_object, "route")?;
+    match mode {
+        "subscription" => {
+            if !mint.is_empty() && mint != "per-fact" {
+                return Err(HookError::Message(format!(
+                    "compiled hook AST mint only supports per-fact: {mint}"
+                )));
+            }
+            if !route.is_empty() && route != "order" && route != "fanin" {
+                return Err(HookError::Message(format!(
+                    "compiled hook AST route is invalid: {route}"
+                )));
+            }
+        }
+        _ => {
+            if !mint.is_empty() || !route.is_empty() {
+                return Err(HookError::Message(
+                    "compiled hook AST mint/route is only allowed on subscription mode".to_string(),
+                ));
+            }
         }
     }
+    let (target_source, target_signal) =
+        if mode == "subscription" {
+            let target = req.ast.get("subscriptionTarget");
+            let source = target
+                .and_then(|target| target.get("source"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let signal = target
+                .and_then(|target| target.get("signal"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            match (source, signal) {
+                (Some(source), Some(signal)) => (source.to_string(), signal.to_string()),
+                _ => return Err(HookError::Message(
+                    "compiled subscription hook AST is missing subscriptionTarget.source/.signal"
+                        .to_string(),
+                )),
+            }
+        } else {
+            (String::new(), String::new())
+        };
     let now = parse_time(&req.now, req.profile)?;
     // 订阅钩子标头恒为空：投递目标由阶段静态执行器决定，路由由接收方锚定
     // 状态与对接记录裁决，因此仅 subscription 模式允许空 source。
-    let source = req
-        .ast
-        .get("source")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() || mode == "subscription")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| HookError::Message("compiled hook AST is missing source".to_string()))?;
+    let raw_source = req.ast.get("source").and_then(Value::as_str).map(str::trim);
+    let source = match mode {
+        "subscription" => {
+            if !raw_source.unwrap_or_default().is_empty() {
+                return Err(HookError::Message(
+                    "compiled subscription hook AST source must be empty".to_string(),
+                ));
+            }
+            String::new()
+        }
+        _ => raw_source
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| HookError::Message("compiled hook AST is missing source".to_string()))?,
+    };
     let root = req
         .ast
         .get("root")
@@ -349,12 +386,25 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
     let expr = expr_from_cloud_value(root)?;
     // 求值器是解码层最后一道防线：root 形态必须与 mode 一致，布尔树内部
     // 不得再嵌套订阅节点——两者都只能由手写毒 AST 构造，解析器产不出
-    // （解析期位置约束见 validate_subscription_position）。
+    // （解析期位置约束见 validate_subscription_position）。订阅模式下顶层
+    // subscriptionTarget 还必须与 root 订阅节点指向同一 @source::signal。
     match mode {
-        "subscription" if !matches!(expr, Expr::Subscription { .. }) => {
-            return Err(HookError::Message(
-                "compiled subscription hook AST root must be a subscription node".to_string(),
-            ));
+        "subscription" => {
+            let Expr::Subscription {
+                source: node_source,
+                target: node_target,
+            } = &expr
+            else {
+                return Err(HookError::Message(
+                    "compiled subscription hook AST root must be a subscription node".to_string(),
+                ));
+            };
+            if node_source != &target_source || node_target != &target_signal {
+                return Err(HookError::Message(
+                    "compiled subscription hook AST subscriptionTarget does not match the root subscription node"
+                        .to_string(),
+                ));
+            }
         }
         "normal" if contains_nested_subscription(&expr) => {
             return Err(HookError::Message(
@@ -391,6 +441,13 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
         // the first received instance.
         result
             .entry(signal_key(&signal.source, &signal.signal_name))
+            .and_modify(|existing: &mut SignalEntry| {
+                // first-RECEIVED-wins 必须与输入数组顺序无关：同一事实键的
+                // 重复到达取时间戳最早者，语义成为事实集的纯函数。
+                if received_at < existing.received_at {
+                    existing.received_at = received_at;
+                }
+            })
             .or_insert(SignalEntry {
                 source: signal.source,
                 signal_name: signal.signal_name,
@@ -403,10 +460,10 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
 const MAX_PARSE_DEPTH: usize = 256;
 
 fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
-    parse_hook_expr_at_depth(raw, profile, 0)
+    parse_hook_expr_at_depth(raw, profile)
 }
 
-fn parse_hook_expr_at_depth(raw: &str, _profile: Profile, base_depth: usize) -> Result<HookExpr> {
+fn parse_hook_expr_at_depth(raw: &str, _profile: Profile) -> Result<HookExpr> {
     let (source, condition_raw) = raw
         .trim()
         .split_once("::")
@@ -424,7 +481,7 @@ fn parse_hook_expr_at_depth(raw: &str, _profile: Profile, base_depth: usize) -> 
         ));
     }
     reject_unsupported_operators(condition_raw)?;
-    let mut parser = Parser::with_depth(condition_raw, base_depth);
+    let mut parser = Parser::new(condition_raw);
     let condition = parser.parse()?;
     validate_subscription_position(&condition, true)?;
     if matches!(condition, Expr::Subscription { .. }) && !source.is_empty() {
@@ -613,6 +670,18 @@ fn reject_unknown_keys(
     Ok(())
 }
 
+/// 顶层可选字符串字段：缺失或 null 视为空（对齐 Go 的零值解码语义），
+/// 其余非字符串类型在解码期确定性拒绝（Go 侧由 JSON 类型解码拒绝）。
+fn optional_ast_str<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Result<&'a str> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(""),
+        Some(Value::String(value)) => Ok(value.as_str()),
+        Some(_) => Err(HookError::Message(format!(
+            "compiled hook AST {key} must be a string"
+        ))),
+    }
+}
+
 // Subscription operators are cross-source delivery channels, not
 // backend/executor input declarations. Backend/executor external inputs are
 // sent to UVP only when the executor explicitly chooses to do so; there is no
@@ -684,7 +753,7 @@ fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
         Expr::Not(inner) => {
-            if profile == Profile::CloudCompat && !matches!(inner.as_ref(), Expr::Signal(_)) {
+            if !matches!(inner.as_ref(), Expr::Signal(_)) {
                 return Err(HookError::Message(
                     "negation only supports direct signal references".to_string(),
                 ));
@@ -1115,7 +1184,19 @@ fn eval_expr(
             let evaluated = eval_expr(expr, source, signals, now)?;
             match evaluated.state {
                 EvalState::Impossible | EvalState::NeedsMore => Ok(evaluated),
-                EvalState::Ready | EvalState::Wait => {
+                // 内层已处于 Wait（嵌套延时如 (A +5s) +10s，或延时复合式中间
+                // 态）：把内层的 due_at 原样上浮为本次等待期限。否则这里返回
+                // NeedsMore（语义="缺正锚"）会让 adapter 不持久化任何定时，
+                // 内层到期后不再有新事件触发重评，订单永久卡在中间态。到期后
+                // poke 重评时内层锚点就位，本层再按自身时长推进（与回放
+                // oracle 的 delay_value 语义一致）。
+                EvalState::Wait => Ok(InternalEval {
+                    state: EvalState::Wait,
+                    anchors: Vec::new(),
+                    ready_at: evaluated.ready_at,
+                    reason: None,
+                }),
+                EvalState::Ready => {
                     let Some(anchor) = evaluated.anchors.iter().max().copied() else {
                         return Ok(InternalEval {
                             state: EvalState::NeedsMore,
@@ -1321,11 +1402,11 @@ struct Parser<'a> {
 /// （深层括号或连续 `~`）会打满调用栈直接 abort 宿主进程——栈溢出不可被
 /// catch_unwind 捕获，必须在解析期以普通错误拒绝。
 impl<'a> Parser<'a> {
-    fn with_depth(input: &'a str, depth: usize) -> Self {
+    fn new(input: &'a str) -> Self {
         Self {
             input,
             index: 0,
-            depth,
+            depth: 0,
         }
     }
 
@@ -1466,17 +1547,21 @@ impl<'a> Parser<'a> {
         })?;
         let source = source.trim();
         let signal = signal.trim();
-        // source 类命名空间对齐 taskPattern 标识符规则：字母/数字/下划线/中划线。
-        if source.is_empty()
-            || !source
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-        {
+        // source 类命名空间复用普通标识符扫描规则：字符集 [A-Za-z0-9_-]，
+        // 拒绝空格、括号、额外 :: 分隔与非 ASCII 字符。
+        if !is_plain_identifier(source) {
             return Err(HookError::Message(format!(
                 "subscription source must be a plain identifier: {source:?}"
             )));
         }
-        if !is_strict_signal_ref(signal) {
+        // signal 全名落 signal_name 列（VARCHAR(100)），与普通标识符扫描同限。
+        if signal.len() > 100 {
+            return Err(HookError::Message(format!(
+                "subscription target signal exceeds the maximum length of 100 characters: {signal:?}"
+            )));
+        }
+        let segments = signal.split('.').collect::<Vec<_>>();
+        if segments.len() != 3 || !segments.iter().all(|part| is_plain_identifier(part)) {
             return Err(HookError::Message(format!(
                 "subscription target must use task.stage.signal: {signal:?}"
             )));
@@ -1629,6 +1714,15 @@ fn duration_to_seconds(duration: &str) -> Result<i64> {
 fn is_strict_signal_ref(value: &str) -> bool {
     let parts = value.split('.').collect::<Vec<_>>();
     parts.len() == 3 && parts.iter().all(|part| !part.is_empty())
+}
+
+/// 普通标识符扫描规则：非空，且仅 ASCII 字母/数字/下划线/中划线。
+/// 订阅 target 的 source 类与 signal 各段均按此规则扫描。
+fn is_plain_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 #[cfg(test)]
@@ -2187,6 +2281,156 @@ mod tests {
         .expect_err("subscription AST without target must not be evaluated");
         assert!(
             err.to_string().contains("subscriptionTarget"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn mint_and_route_validation_matches_go_decode() {
+        // normal 模式携带 mint/route：对齐 Go DecodeCompiledHook 一律拒绝。
+        for (field, value) in [("mint", "per-fact"), ("route", "order")] {
+            let mut ast = json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "buyer",
+                "mode": "normal",
+                "root": { "type": "signal", "signal": "task.main.cmp" }
+            });
+            ast[field] = json!(value);
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast,
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .expect_err("normal-mode mint/route must not decode");
+            assert!(
+                err.to_string()
+                    .contains("mint/route is only allowed on subscription mode"),
+                "unexpected error for {field}: {err}"
+            );
+        }
+        // subscription 模式：合法组合放行，非法取值确定性拒绝。
+        let legal = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "",
+            "mode": "subscription",
+            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "mint": "per-fact",
+            "route": "fanin",
+            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        });
+        let eval = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: legal,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(eval.state, EvalState::NeedsMore);
+
+        let poisoned_mint = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "",
+            "mode": "subscription",
+            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "mint": "bulk",
+            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: poisoned_mint,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .expect_err("non per-fact mint must not decode");
+        assert!(
+            err.to_string().contains("mint only supports per-fact"),
+            "unexpected error: {err}"
+        );
+
+        let poisoned_route = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "",
+            "mode": "subscription",
+            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "route": "broadcast",
+            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: poisoned_route,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .expect_err("unknown route must not decode");
+        assert!(
+            err.to_string().contains("route is invalid"),
+            "unexpected error: {err}"
+        );
+
+        // 非字符串 mint/route 与 Go 的类型解码一致地拒绝。
+        let poisoned_type = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "",
+            "mode": "subscription",
+            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "mint": 5,
+            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: poisoned_type,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .expect_err("non-string mint must not decode");
+        assert!(
+            err.to_string().contains("mint must be a string"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn subscription_ast_with_nonempty_source_is_rejected_at_decode() {
+        let cloud_ast = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "buyer",
+            "mode": "subscription",
+            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: cloud_ast,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .expect_err("subscription AST with headed source must not decode");
+        assert!(
+            err.to_string().contains("source must be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn subscription_ast_target_root_mismatch_is_rejected_at_decode() {
+        let cloud_ast = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "",
+            "mode": "subscription",
+            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "root": { "type": "subscription", "source": "seller", "signal": "trade.intent.cmp" }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: cloud_ast,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .expect_err("mismatched subscriptionTarget/root must not decode");
+        assert!(
+            err.to_string()
+                .contains("subscriptionTarget does not match the root subscription node"),
             "unexpected error: {err}"
         );
     }

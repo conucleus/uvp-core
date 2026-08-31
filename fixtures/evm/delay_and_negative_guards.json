@@ -1,6 +1,6 @@
 {
   "name": "delay and negative guard expressions stay portable under evm plan",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp-semantic/0.7",
   "target": "hook_plan",
   "portable": true,
   "input": {
@@ -29,9 +29,6 @@
             {
               "name": "pay",
               "source": "buyer",
-              "trigger": [
-                "PAY"
-              ],
               "receiveSignals": {
                 "PAY": "buyer::(settle.pay.done +5s) & ~settle.pay.refunded"
               },

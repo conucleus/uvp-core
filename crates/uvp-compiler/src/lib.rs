@@ -467,10 +467,13 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
 
 fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
-    // 编译期只固定两件事：
+    // 编译期只固定三件事：
     // 1) mint 取值合法（当前仅 per-fact）；
-    // 2) mint 阶段是出生阶段，只接受订阅通道——per-fact 出生由（通道）事实
-    //    驱动，同单 hook 在铸单前没有可求值的订单上下文。
+    // 2) mint 阶段是出生阶段：接受订阅通道（跨类事实的 per-fact 出生）与
+    //    单信号普通 hook（外部提交事实的出生入口；链上即 isTrigger 钩子，
+    //    triggerOrderFrom* 的提交者按"现实成立后任意持有人签名提交"开放）；
+    //    布尔/否定/延时组合在铸单前没有可求值的订单上下文，仍拒绝。
+    // 3) 防无界代铸链：mint 阶段的订阅目标不得指向本阶段自己的 source 类。
     // 其余阶段是否"有锚"由运行时按对接记录路由自然裁决：存在订单实例则
     // 按单投递（域内血缘/dock 边），不存在实例则按类扇入。执行器自发 str
     // 出的订单编译期不可见，因此不在此做静态锚定判断。
@@ -484,14 +487,30 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
             }
             for (hook_name, raw_expression) in &entry.stage.receive_signals {
                 match parse_hook_for_compiler("HOOK", raw_expression) {
-                    Ok(parsed) if parsed.mode != uvp_hook_dsl::HookMode::Subscription => {
-                        issues.push(format!(
-                            "{}.receiveSignals.{hook_name}: mint stages accept subscription entries only; per-fact birth is driven by channel facts",
-                            entry.stage_identifier
-                        ));
-                    }
                     Err(_) => {} // 语法错误由引用存在性校验统一上报
-                    Ok(_) => {}
+                    Ok(parsed) if parsed.mode == uvp_hook_dsl::HookMode::Subscription => {
+                        if let Some(target) = &parsed.subscription_target {
+                            if target.source == entry.stage.source {
+                                issues.push(format!(
+                                    "{}.receiveSignals.{hook_name}: mint stage must not subscribe its own source class {}; per-fact mint would chain without bound",
+                                    entry.stage_identifier, target.source
+                                ));
+                            }
+                        }
+                    }
+                    Ok(parsed) => {
+                        // 出生入口 hook 必须是单正信号（无组合/否定/延时）：
+                        // 出生事实本身即判定，isTrigger 计划就是一条 SIGNAL。
+                        let deps = &parsed.dependencies;
+                        let single_positive = deps.len() == 1
+                            && deps[0].kind == uvp_hook_dsl::DependencyKind::Positive;
+                        if !single_positive {
+                            issues.push(format!(
+                                "{}.receiveSignals.{hook_name}: mint stage birth entries must be a single plain signal (no boolean/negation/delay composition)",
+                                entry.stage_identifier
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -509,6 +528,7 @@ fn validate_receive_signal_references(entries: &[StageEntry]) -> Vec<String> {
                     &parsed,
                     &format!("{}.receiveSignals.{hook_name}", entry.stage_identifier),
                     &catalog,
+                    false,
                 )),
                 Err(err) => issues.push(format!(
                     "{}.receiveSignals.{hook_name} is invalid: {err}",
@@ -593,6 +613,7 @@ fn validate_signal_maps(entries: &[StageEntry]) -> Vec<String> {
                     entry.stage_identifier
                 ),
                 &catalog,
+                true,
             ));
         }
     }
@@ -623,6 +644,7 @@ fn validate_hook_dependency_references(
     hook: &ParseHookOutput,
     path: &str,
     catalog: &SignalReferenceCatalog,
+    is_signal_map: bool,
 ) -> Vec<String> {
     let mut issues = Vec::new();
     let mut seen = BTreeSet::new();
@@ -632,6 +654,15 @@ fn validate_hook_dependency_references(
             continue;
         }
         if !catalog.local_sources.contains(&dependency.source) {
+            // 订阅寻址只在本域解析（subscription-mint-spec §2.1）：receive
+            // 钩子的依赖 source 必须 ∈ 本域 source 类集合；signalMap 是跨域
+            // 委托接缝上的对译表，依赖 source 来自被委托域，保留跳过。
+            if !is_signal_map {
+                issues.push(format!(
+                    "{path} subscription source {} is not a declared source in this zhixu",
+                    dependency.source
+                ));
+            }
             continue;
         }
         let Some((stage_identifier, signal_name)) = parse_signal_reference(&dependency.signal_name)
@@ -807,7 +838,7 @@ fn cloud_stage_artifact(entry: &StageEntry) -> Result<Value> {
         );
     }
     if let Some(mint) = &entry.stage.mint {
-        stage.insert("mint".to_string(), Value::String(mint.clone()));
+        stage.insert("mint".to_string(), Value::String(mint.trim().to_string()));
     }
     Ok(Value::Object(stage))
 }
@@ -1009,7 +1040,7 @@ mod tests {
         );
         assert_eq!(
             plan["planHash"],
-            "0x5eb9cc389532e3942997f0efa30bafc5a50212fac1bdf827d807b9c6d4d40520"
+            "0x8ce322fcd43821fffe3f0144838d0b23e657a7d20acf6ee6de7bdb071a340752"
         );
         assert_eq!(plan["compiledHooks"].as_array().unwrap().len(), 4);
         assert_eq!(
@@ -1088,8 +1119,6 @@ mod tests {
                         {
                             "name": "assign",
                             "source": "buyer",
-                            "trigger": ["CREATE_ORDER_REQUEST"],
-                            "externalSignals": ["CREATE_ORDER_REQUEST"],
                             "selectedStages": ["execution.main"],
                             "sendSignals": ["executor_selected"],
                             "executor": { "supplierType": "organization", "supplierID": "selector-org" }
@@ -1099,7 +1128,6 @@ mod tests {
                         {
                             "name": "main",
                             "source": "buyer",
-                            "trigger": ["START"],
                             "receiveSignals": {
                                 "START": "buyer::selector.assign.executor_selected",
                                 "TIMEOUT": "buyer::(selector.assign.executor_selected +5s) & ~execution.main.cmp"

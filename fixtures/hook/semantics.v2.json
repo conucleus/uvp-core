@@ -102,6 +102,25 @@
           }
         ]
       }
+    },
+    {
+      "name": "subscription entry tolerates whitespace between ANCHOR and target",
+      "profile": "cloud_compat",
+      "hookName": "SUBSCRIBE",
+      "hook": "::ANCHOR (@seller::t.a.b)",
+      "expect": {
+        "source": "",
+        "mode": "subscription",
+        "runtimeCondition": "ANCHOR(@seller::t.a.b)",
+        "normalizedExpression": "::ANCHOR(@seller::t.a.b)",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "seller",
+            "signalName": "t.a.b"
+          }
+        ]
+      }
     }
   ],
   "evalCases": [
@@ -341,6 +360,78 @@
         "state": "needs_more",
         "reasonContains": "delivered per"
       }
+    },
+    {
+      "name": "subscription stays needs_more even when the target signal is already delivered",
+      "profile": "cloud_compat",
+      "hookName": "SUBSCRIBE",
+      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "seller",
+          "signalName": "trade.listing.cmp",
+          "receivedAt": "2026-04-26T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more",
+        "reasonContains": "delivered per"
+      }
+    },
+    {
+      "name": "nested delay passes inner wait through before inner due",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "now": "2026-04-27T00:00:02.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "nested delay re-anchors on inner due during poke",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "now": "2026-04-27T00:00:06.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:10.000Z"
+      }
+    },
+    {
+      "name": "nested delay readies at the outer due after poke re-evaluation",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:10.000Z"
+      }
     }
   ],
   "invalidCases": [
@@ -455,6 +546,34 @@
       "hookName": "HOOK",
       "hook": "::ANCHOR(@::trade.listing.cmp)",
       "messageContains": "plain identifier"
+    },
+    {
+      "name": "subscription target with extra separator is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@seller::task.main.cmp::extra)",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "subscription target with embedded space is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@seller names::trade.listing.cmp)",
+      "messageContains": "plain identifier"
+    },
+    {
+      "name": "subscription target with four signal segments is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@seller::task.a.b.c)",
+      "messageContains": "task.stage.signal"
+    },
+    {
+      "name": "oversized subscription target signal is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@seller::task.main.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)",
+      "messageContains": "maximum length of 100"
     }
   ],
   "replayCases": [

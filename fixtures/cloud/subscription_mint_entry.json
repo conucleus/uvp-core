@@ -7,8 +7,8 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "outside_entry",
-      "uid": "fx-outside-001",
+      "name": "subscription_entry",
+      "uid": "fx-subscription-001",
       "annotations": {
         "version": "1"
       }

@@ -1,5 +1,5 @@
 {
-  "name": "cloud-only template receives cross-source facts via subscription entry",
+  "name": "receive hook with undeclared subscription source is rejected",
   "semanticVersion": "uvp-semantic/0.7",
   "target": "cloud",
   "portable": false,
@@ -7,8 +7,8 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "cloud_only_template",
-      "uid": "fx-cloudonly-001",
+      "name": "undeclared_subscription_source",
+      "uid": "fx-undclsrc-001",
       "annotations": {
         "version": "1"
       }
@@ -22,38 +22,37 @@
       },
       "taskPatterns": [
         {
-          "name": "dispatch",
+          "name": "orchard",
           "stages": [
             {
-              "name": "main",
-              "source": "test_executor",
+              "name": "gate",
+              "source": "farmer",
               "sendSignals": [
-                "smart_contract"
+                "picked"
               ],
               "executor": {
                 "supplierType": "organization",
-                "supplierID": "runner-org"
+                "supplierID": "farmer-org"
               }
             }
           ]
         },
         {
-          "name": "orchard",
+          "name": "market",
           "stages": [
             {
-              "name": "retail",
+              "name": "watch",
               "source": "buyer",
               "receiveSignals": {
-                "SPAWN": "::ANCHOR(@test_executor::dispatch.main.smart_contract)"
+                "PICK": "::ANCHOR(@ghost::orchard.gate.picked)"
               },
               "sendSignals": [
-                "ack"
+                "seen"
               ],
               "executor": {
                 "supplierType": "organization",
-                "supplierID": "dispatch-org"
-              },
-              "mint": "per-fact"
+                "supplierID": "market-org"
+              }
             }
           ]
         }
@@ -61,8 +60,6 @@
     }
   },
   "expect": {
-    "cloudHookModes": {
-      "SPAWN": "subscription"
-    }
+    "errorContains": "is not a declared source in this zhixu"
   }
 }

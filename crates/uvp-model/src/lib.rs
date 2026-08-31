@@ -64,12 +64,12 @@ pub struct ZhixuTaskPattern {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ZhixuStage {
     pub name: String,
     pub source: String,
     /// per-fact：本阶段为出生阶段，订阅事实逐条由引擎代铸订单。
-    /// 仅无锚阶段可声明；编译期唯一锚定依据（见 subscription-mint-spec.md）。
+    /// 由出生阶段声明；编译期唯一锚定依据（见 subscription-mint-spec.md）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

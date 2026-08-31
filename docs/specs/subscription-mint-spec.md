@@ -3,7 +3,7 @@
 > 状态：对齐基线（v1，替代 merge-anchor-delivery-spec.md）
 > 语义版本：`uvp-semantic/0.7`（自 `uvp-semantic/0.6` 升版，一次到位，不并存两套语义）
 > 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
-> 合约边界：本期不改合约 ABI 与 EIP-712 typed-data；链上 MERGE 指令 op 保留兼容既有 Plan；订阅上链属未来协议扩展
+> 合约边界：本期不改合约 ABI 与 EIP-712 typed-data；合约冻结侧仍含 op 5，工具链不再产出/校验该指令；订阅上链属未来协议扩展
 
 ---
 
@@ -15,7 +15,7 @@
 - 订单怎么出生：str 自报（免声明）或 `mint: per-fact` 代铸（唯一声明点）。
 - 阶段种类：编译期定死、终生不可变。
 
-旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。
+旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。合约冻结侧仍含 op 5，工具链不再产出/校验该指令。
 
 ---
 
@@ -64,7 +64,7 @@
 | `{source}::{condition}` | 同单 hook（布尔/延时），现有语义不变 | 在订阅方自己的订单上下文内求值，判决一次（init/wait/ready/cxl） |
 | `ANCHOR(@{source}::{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
 
-旧 `::OUTSIDE@` / `::MERGE@` / `::ANCHOR@` 标头、OUTSOURCE、k≥2 表达式下限、空标头规则全部退役。
+旧 `::OUTSIDE@` / `::MERGE@` / `::ANCHOR@` 标头、OUTSOURCE、k≥2 表达式下限、旧空标头白名单规则退役（新订阅必须空标头）。
 
 ### 2.3 三种接收方（编译期定死，选项 A）
 
@@ -151,7 +151,7 @@ Stage 字段总表（目标态）：
 | 字段 | 状态 |
 |---|---|
 | `source` | 保留，升格为因果身份类（域内命名空间，多阶段共享） |
-| `mint` | 新增，可选，仅 `per-fact`；仅无 mint 之外的无出生链场景 |
+| `mint` | 新增，可选，仅 `per-fact`；由出生阶段声明，是该类铸单的唯一声明点 |
 | `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
 | `sendSignals` | 保留 |
 | `executor` | 保留；委托（supplierType=zhixu + signalMap/triggerEntrance）原样 |
