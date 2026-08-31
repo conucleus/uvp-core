@@ -1,6 +1,6 @@
 {
   "name": "cloud-only template receives cross-source facts via subscription entry",
-  "semanticVersion": "uvp-semantic/0.7",
+  "semanticVersion": "uvp.semantic.v1",
   "target": "cloud",
   "portable": false,
   "input": {

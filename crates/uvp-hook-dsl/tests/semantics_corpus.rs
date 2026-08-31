@@ -4,7 +4,7 @@ use uvp_hook_dsl::{
     eval_compiled_hook, parse_hook, EvalCompiledHookRequest, ParseHookRequest, Profile, SignalFact,
 };
 
-const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v2.json");
+const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

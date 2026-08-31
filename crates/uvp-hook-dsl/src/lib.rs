@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SEMANTIC_VERSION: &str = "uvp-semantic/0.7";
-pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp/cloud-ast/v2";
+pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
+pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
 
 /// uvp-semantic/0.6 的跨秩序四典型（::OUTSIDE@ / ::MERGE@ / 旧 ::ANCHOR@ /
 /// OUTSOURCE）在 0.7 统一退役为「订阅 + 铸单」模型；解析器保留关键字识别，
 /// 以给出精确的迁移报错而不是笼统的语法错误。
-pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp-semantic/0.7; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
+pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -309,7 +309,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         .ok_or_else(|| HookError::Message("compiled hook AST is missing mode".to_string()))?;
     if !matches!(mode, "normal" | "subscription") {
         return Err(HookError::Message(format!(
-            "unsupported compiled hook AST mode: {mode}; outside_spawn/merge/anchor were retired in uvp-semantic/0.7"
+            "unsupported compiled hook AST mode: {mode}; outside_spawn/merge/anchor were retired in uvp.semantic.v1"
         )));
     }
     // mint/route 是云侧编译器注入订阅 AST 的铸单/路由标注；对齐 Go
@@ -2258,7 +2258,7 @@ mod tests {
             })
             .expect_err("retired mode must not decode");
             assert!(
-                err.to_string().contains("retired in uvp-semantic/0.7"),
+                err.to_string().contains("retired in uvp.semantic.v1"),
                 "unexpected error for {mode}: {err}"
             );
         }

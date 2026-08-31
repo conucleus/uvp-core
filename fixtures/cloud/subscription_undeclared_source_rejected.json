@@ -1,6 +1,6 @@
 {
   "name": "receive hook with undeclared subscription source is rejected",
-  "semanticVersion": "uvp-semantic/0.7",
+  "semanticVersion": "uvp.semantic.v1",
   "target": "cloud",
   "portable": false,
   "input": {

@@ -1,6 +1,6 @@
 {
   "name": "Subscription entry refluxes child-order settlement into collector executor",
-  "semanticVersion": "uvp-semantic/0.7",
+  "semanticVersion": "uvp.semantic.v1",
   "target": "cloud",
   "portable": false,
   "input": {

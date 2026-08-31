@@ -1,6 +1,6 @@
 {
   "name": "Subscription listeners fan cross-source class events into match executor",
-  "semanticVersion": "uvp-semantic/0.7",
+  "semanticVersion": "uvp.semantic.v1",
   "target": "cloud",
   "portable": false,
   "input": {

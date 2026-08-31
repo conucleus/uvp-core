@@ -1,6 +1,6 @@
 {
   "name": "linear flow across two stages",
-  "semanticVersion": "uvp-semantic/0.7",
+  "semanticVersion": "uvp.semantic.v1",
   "target": "hook_plan",
   "portable": true,
   "input": {

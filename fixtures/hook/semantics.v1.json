@@ -1,6 +1,6 @@
 {
-  "schemaVersion": "uvp.hookSemanticsCorpus.v2",
-  "semanticVersion": "uvp-semantic/0.7",
+  "schemaVersion": "uvp.hookSemanticsCorpus.v1",
+  "semanticVersion": "uvp.semantic.v1",
   "specRef": "docs/specs/subscription-mint-spec.md",
   "wikiRefs": [
     "uvp-wiki/wiki/concepts/core/hook.md",

@@ -1,7 +1,7 @@
 # 订阅与铸单模型规格（Subscription & Mint Model）
 
 > 状态：对齐基线（v1，替代 merge-anchor-delivery-spec.md）
-> 语义版本：`uvp-semantic/0.7`（自 `uvp-semantic/0.6` 升版，一次到位，不并存两套语义）
+> 语义版本：`uvp.semantic.v1`（上线前版本线整体重置为 v1：原 0.6→0.7 等开发期迭代编号全部作废，一次到位，不并存两套语义）
 > 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
 > 合约边界：本期不改合约 ABI 与 EIP-712 typed-data；合约冻结侧仍含 op 5，工具链不再产出/校验该指令；订阅上链属未来协议扩展
 
@@ -183,8 +183,8 @@ Stage 字段总表（目标态）：
 
 ## 7. 兼容与退役
 
-- `uvp-semantic/0.6` → `uvp-semantic/0.7`；共享语料 `semantics.v1.json` → `v2`（parseCases/invalidCases/evalCases/replayCases 全量换新）。
-- 兼容矩阵 `uvp-stack.v1.json` 等值断言同步升级（semanticVersion、hookCorpusSchema、hookPlan/onchainHookPlan schema）。
+- 版本 slate 重置（2026-08-31 裁决）：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格且全部置 v1——`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件同步更名 semantics.v1.json）、`uvp.cloudArtifact.v1`；部署清单 `uvp-eth.addresses.v5` → `uvp-eth.addresses.v1`。开发期累积的 0.7/v2/v5 编号无兼容义务，作废。
+- 兼容矩阵 `uvp-stack.v1.json` 等值断言同步重置（semanticVersion、hookCorpusSchema、cloudAstSchema、deploymentManifestSchema）。
 - 合约 ABI fixture 与 EIP-712 typed-data 不动；云侧信封键字段与链上既有 `idempotencyKey` 语义对齐。
 - 旧关键字（OUTSIDE/MERGE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
 
@@ -198,6 +198,7 @@ Stage 字段总表（目标态）：
 | 血缘闸门 | 不再是过滤开关，而是域内路由规则 + 域作用域本身 | "只有我的农户"由按单路由与 zhixu 局部命名空间免费获得 |
 | 锚定依据 | mint 声明是编译期唯一锚定依据 | 自发 str 编译期不可见；订阅方按溯源分拣是执行器责任 |
 | 孤儿 | 概念删除 | 订单天然存在，无 dock = 尚无关系，非异常态 |
+| 版本 slate 重置 | 全部协议制品版本置 v1、统一 `uvp.<artifact>.v<N>` 点号风格；合约 ABI/EIP-712 冻结侧不动 | 未上线无兼容义务，累积编号（0.7/v2/v5）是噪音；矩阵等值断言兜底漏网 |
 
 ### 补充决策（2026-08-31，安全架构审查后）
 

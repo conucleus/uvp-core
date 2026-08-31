@@ -173,7 +173,7 @@ For Cloud, the canonical compiled representation is:
 
 ```json
 {
-  "schemaVersion": "uvp/cloud-ast/v1",
+  "schemaVersion": "uvp.cloudAst.v1",
   "source": "buyer",
   "mode": "normal",
   "upstreamSource": null,
@@ -442,7 +442,7 @@ Each fixture should declare:
 ```json
 {
   "name": "string",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp.semantic.v1",
   "input": "...",
   "expected": "...",
   "portable": true
@@ -457,7 +457,7 @@ Suggested version lines:
 
 ```text
 uvp-core crate version: 0.1.x
-UVP semantic version: uvp-semantic/0.4
+UVP semantic version: uvp.semantic.v1
 artifact schema version: cloud-artifact/0.1, evm-artifact/0.1
 contract version: independent
 cloud runtime version: independent
@@ -468,7 +468,7 @@ Every generated artifact should include:
 ```json
 {
   "uvpCoreVersion": "0.1.0",
-  "semanticVersion": "uvp-semantic/0.4",
+  "semanticVersion": "uvp.semantic.v1",
   "artifactSchemaVersion": "cloud-artifact/0.1"
 }
 ```
