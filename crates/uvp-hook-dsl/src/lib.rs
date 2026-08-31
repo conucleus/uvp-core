@@ -9,7 +9,7 @@ pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
 
 /// uvp-semantic/0.6 的跨秩序四典型（::OUTSIDE@ / ::MERGE@ / 旧 ::ANCHOR@ /
-/// OUTSOURCE）在 0.7 统一退役为「订阅 + 铸单」模型；解析器保留关键字识别，
+/// OUTSOURCE）已在 uvp.semantic.v1 统一退役为「订阅 + 铸单」模型；解析器保留关键字识别，
 /// 以给出精确的迁移报错而不是笼统的语法错误。
 pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
@@ -1113,14 +1113,25 @@ fn expr_to_cloud_value(expr: &Expr) -> Value {
 }
 
 fn fold_cloud_terms(kind: &str, terms: &[Expr]) -> Value {
-    let mut iter = terms.iter();
-    let Some(first) = iter.next() else {
-        return Value::Null;
-    };
-    iter.fold(
-        expr_to_cloud_value(first),
-        |left, term| json!({ "type": kind, "left": left, "right": expr_to_cloud_value(term) }),
-    )
+    // 分治平衡折叠：AST 会被 serde_json 以递归下降反序列化（默认 128 层），
+    // 左斜折叠把 n 项链折成深度 n-1 的树，126 项即编译合法、求值必败的
+    // 毒钩子。平衡树深度 O(log n)，任意合法项数都在反序列化限界内。
+    fn fold_balanced(kind: &str, terms: &[Expr]) -> Value {
+        match terms.len() {
+            0 => Value::Null,
+            1 => expr_to_cloud_value(&terms[0]),
+            _ => {
+                let mid = terms.len() / 2;
+                let (left, right) = terms.split_at(mid);
+                json!({
+                    "type": kind,
+                    "left": fold_balanced(kind, left),
+                    "right": fold_balanced(kind, right),
+                })
+            }
+        }
+    }
+    fold_balanced(kind, terms)
 }
 
 #[derive(Clone)]
@@ -1800,7 +1811,7 @@ mod tests {
 
     #[test]
     fn retired_cross_source_keywords_fail_fast() {
-        // 嵌套构造在最外层即命中退役报错：0.7 不再解析四典型形态。
+        // 嵌套构造在最外层即命中退役报错：uvp.semantic.v1 不再解析四典型形态。
         let mut expression = "peer::task.main.cmp".to_string();
         for _ in 0..2_000 {
             expression = format!("::OUTSIDE@({expression})");
@@ -2242,7 +2253,7 @@ mod tests {
 
     #[test]
     fn retired_hook_modes_are_rejected_at_decode() {
-        // 0.6 的编译产物（outside_spawn/merge/anchor）在 0.7 解码期确定性拒绝，
+        // 旧语义线的编译产物（outside_spawn/merge/anchor）在 uvp.semantic.v1 解码期确定性拒绝，
         // 不做兼容解释。
         for mode in ["outside_spawn", "merge", "anchor"] {
             let err = eval_compiled_hook(EvalCompiledHookRequest {

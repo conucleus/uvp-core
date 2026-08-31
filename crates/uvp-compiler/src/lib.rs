@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 use uvp_hook_dsl::{
-    parse_hook, Compatibility, DependencyKind, ParseHookOutput, ParseHookRequest, Profile,
+    parse_hook, Compatibility, DependencyKind, HookMode, ParseHookOutput, ParseHookRequest, Profile,
 };
 use uvp_ir::hash_canonical;
 use uvp_model::{ZhixuDefinition, ZhixuStage};
@@ -11,7 +11,10 @@ use uvp_model::{ZhixuDefinition, ZhixuStage};
 const COMPILER_NAME: &str = "uvp-eth-compiler";
 const COMPILER_VERSION: &str = "0.1.0";
 const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v1";
-const MAX_SIGNAL_MAP_KEY_LENGTH: usize = 36;
+// hook_plan 目标的 hook_name = "signalMap." + key（10 字节前缀），hook_name
+// 上限 36 字节 ⇒ key 上限 26。cloud 目标曾放行到 36，同一份定义一个 target
+// 收一个放；两 target 统一按 26 收口。
+const MAX_SIGNAL_MAP_KEY_LENGTH: usize = 26;
 
 #[derive(Debug, Error)]
 pub enum CompilerError {
@@ -616,7 +619,16 @@ fn validate_signal_maps(entries: &[StageEntry]) -> Vec<String> {
                 continue;
             };
             match parse_hook_for_compiler("HOOK", raw_expression) {
-                Ok(hook) => parsed.push((signal.clone(), hook)),
+                Ok(hook) => {
+                    if hook.mode == HookMode::Subscription {
+                        issues.push(format!(
+                            "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: signalMap entries must not be subscription entries",
+                            entry.stage_identifier
+                        ));
+                        continue;
+                    }
+                    parsed.push((signal.clone(), hook))
+                }
                 Err(err) => issues.push(format!(
                     "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: {err}",
                     entry.stage_identifier
@@ -713,9 +725,9 @@ fn validate_hook_dependency_references(
             ));
             continue;
         }
-        if !referenced_stage.stage.send_signals.is_empty()
-            && !referenced_stage.stage.send_signals.contains(&signal_name)
-        {
+        if !referenced_stage.stage.send_signals.contains(&signal_name) {
+            // 目标 stage 未声明 sendSignals 时任何引用都是悬空引用：文档要求
+            // 引用存在，放行会把死依赖从编译期推迟为运行期静默 init。
             issues.push(format!(
                 "{path} references unknown signal {stage_identifier}.{signal_name}"
             ));
