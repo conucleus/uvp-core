@@ -398,7 +398,7 @@
       }
     },
     {
-      "name": "nested delay re-anchors on inner due during poke",
+      "name": "nested delay waits on the chained outer due after inner due poke",
       "profile": "cloud_compat",
       "hookName": "NESTED",
       "hook": "buyer::(task.a.cmp +5s) +10s",
@@ -412,11 +412,29 @@
       ],
       "expect": {
         "state": "wait",
-        "readyAt": "2026-04-27T00:00:10.000Z"
+        "readyAt": "2026-04-27T00:00:15.000Z"
       }
     },
     {
-      "name": "nested delay readies at the outer due after poke re-evaluation",
+      "name": "nested delay readies at the chained outer due",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "now": "2026-04-27T00:00:15.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:15.000Z"
+      }
+    },
+    {
+      "name": "nested delay still chained when outer window not reached",
       "profile": "cloud_compat",
       "hookName": "NESTED",
       "hook": "buyer::(task.a.cmp +5s) +10s",
@@ -429,8 +447,8 @@
         }
       ],
       "expect": {
-        "state": "ready",
-        "readyAt": "2026-04-27T00:00:10.000Z"
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:15.000Z"
       }
     }
   ],

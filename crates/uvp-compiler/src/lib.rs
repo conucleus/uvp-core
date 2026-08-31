@@ -479,10 +479,41 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     // 出的订单编译期不可见，因此不在此做静态锚定判断。
     for entry in entries {
         if let Some(mint) = &entry.stage.mint {
-            if mint.trim() != "per-fact" {
+            // 与 Go 侧口径一致：精确比较，不接受带空白的变体。
+            if mint != "per-fact" {
                 issues.push(format!(
                     "{}.mint only supports per-fact: {}",
                     entry.stage_identifier, mint
+                ));
+            }
+            if entry.stage.executor.is_some() {
+                let executor_type = entry
+                    .stage
+                    .executor
+                    .as_ref()
+                    .and_then(|value| value.get("supplierType"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if executor_type == "zhixu" {
+                    // mint 出生 + 委托执行器：signalMap hook 是同单 normal AST，
+                    // 注入 mint 后无法解码，委托阶段永不完成——组合直接拒绝。
+                    issues.push(format!(
+                        "{}.mint stage cannot use a zhixu delegation executor",
+                        entry.stage_identifier
+                    ));
+                }
+            }
+            let subscription_count = entry
+                .stage
+                .receive_signals
+                .values()
+                .filter_map(|raw| parse_hook_for_compiler("HOOK", raw).ok())
+                .filter(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
+                .count();
+            if subscription_count == 0 {
+                issues.push(format!(
+                    "{}.mint stage must declare at least one ANCHOR(@…) subscription",
+                    entry.stage_identifier
                 ));
             }
             for (hook_name, raw_expression) in &entry.stage.receive_signals {
