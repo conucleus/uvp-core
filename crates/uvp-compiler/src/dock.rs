@@ -1534,6 +1534,10 @@ pub struct DockRouteInput {
     pub target_input_signal_hash: Word,
     pub target_source_id: Word,
     pub target_signal_id: Word,
+    /// Cloud runtime 可读名称：目标 stage 标识与 canonical signal 名
+    /// （仅写入 JSON，不参与任何哈希 preimage）。
+    pub target_stage_identifier: String,
+    pub target_signal_name: String,
     pub kind: String,
     pub binding_hash: Word,
 }
@@ -1547,6 +1551,8 @@ pub struct DockRouteOutput {
     pub target_output_signal_hash: Word,
     pub target_source_id: Word,
     pub target_signal_id: Word,
+    /// Cloud runtime 可读名称（不参与哈希）。
+    pub target_signal_name: String,
     pub terminal: String,
     pub binding_hash: Word,
 }
@@ -1554,6 +1560,9 @@ pub struct DockRouteOutput {
 #[derive(Debug, Clone)]
 pub struct DockRoute {
     pub route_id: Word,
+    /// Cloud runtime 可读名称（不参与哈希）。
+    pub entrance_target_stage_identifier: String,
+    pub entrance_target_signal_name: String,
     pub local_definition_ref_hash: Word,
     pub stage_identifier: String,
     pub stage_key: Word,
@@ -1603,6 +1612,8 @@ impl DockRoute {
             "entrance": {
                 "localHookName": self.entrance_local_hook_name,
                 "targetPort": self.entrance_target_port,
+                "targetStageIdentifier": self.entrance_target_stage_identifier,
+                "targetSignalName": self.entrance_target_signal_name,
                 "targetStageKey": word_hex(&self.entrance_target_stage_key),
                 "targetHookKey": word_hex(&self.entrance_target_hook_key),
                 "targetInputSignalHash": word_hex(&self.entrance_target_input_signal_hash),
@@ -1614,6 +1625,8 @@ impl DockRoute {
                 "targetInputSignalHash": word_hex(&input.target_input_signal_hash),
                 "targetSourceId": word_hex(&input.target_source_id),
                 "targetSignalId": word_hex(&input.target_signal_id),
+                "targetStageIdentifier": input.target_stage_identifier,
+                "targetSignalName": input.target_signal_name,
                 "kind": input.kind,
                 "bindingHash": word_hex(&input.binding_hash),
             })).collect::<Vec<_>>(),
@@ -1625,6 +1638,7 @@ impl DockRoute {
                 "targetOutputSignalHash": word_hex(&output.target_output_signal_hash),
                 "targetSourceId": word_hex(&output.target_source_id),
                 "targetSignalId": word_hex(&output.target_signal_id),
+                "targetSignalName": output.target_signal_name,
                 "terminal": output.terminal,
                 "bindingHash": word_hex(&output.binding_hash),
             })).collect::<Vec<_>>(),
@@ -1833,6 +1847,8 @@ pub fn link_dock_routes(
                 target_input_signal_hash: port.canonical_input_signal_hash,
                 target_source_id: port.source_id,
                 target_signal_id: port.signal_id,
+                target_stage_identifier: port.stage_identifier.clone(),
+                target_signal_name: port.canonical_input_signal.clone(),
                 kind: port.kind.clone(),
                 binding_hash: binding,
             });
@@ -1911,6 +1927,7 @@ pub fn link_dock_routes(
                 target_output_signal_hash: port.canonical_output_signal_hash,
                 target_source_id: port.source_id,
                 target_signal_id: port.signal_id,
+                target_signal_name: port.canonical_output_signal.clone(),
                 terminal: port.terminal.clone(),
                 binding_hash: binding,
             });
@@ -2015,6 +2032,8 @@ pub fn link_dock_routes(
         );
         routes.push(DockRoute {
             route_id: route_id_word,
+            entrance_target_stage_identifier: entrance_port.stage_identifier.clone(),
+            entrance_target_signal_name: entrance_port.canonical_input_signal.clone(),
             local_definition_ref_hash: local_definition_ref,
             stage_identifier: route.stage_identifier.clone(),
             stage_key: route.stage_key,

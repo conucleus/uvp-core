@@ -68,6 +68,8 @@
           "targetHookKey": "0x716b0cb83507a044220215c145efef081759d0c745cb79a3440132f57e1e84ac",
           "targetInputSignalHash": "0x11251862ae7374b6ccc7bc7fa3ab896cf18134f51d021a14fc21dc77cc2bf525",
           "targetPort": "execute",
+          "targetSignalName": "payment::payment_flow.init.execute",
+          "targetStageIdentifier": "payment_flow.init",
           "targetStageKey": "0x45b32f9fb02968cf864bbd4dae7bcb32a0a78628ad8451c9256e383968d490a9"
         },
         "inputs": [
@@ -78,7 +80,9 @@
             "targetInputSignalHash": "0x11251862ae7374b6ccc7bc7fa3ab896cf18134f51d021a14fc21dc77cc2bf525",
             "targetPort": "execute",
             "targetSignalId": "0x24d6bcca551d3e2d3d0012283739845bbf327c61d27d62ec9cfe0e6209087077",
-            "targetSourceId": "0x1fab0c92eaead7da02fe29795732249e0861c98d6738709e6be992a170920770"
+            "targetSignalName": "payment::payment_flow.init.execute",
+            "targetSourceId": "0x1fab0c92eaead7da02fe29795732249e0861c98d6738709e6be992a170920770",
+            "targetStageIdentifier": "payment_flow.init"
           },
           {
             "bindingHash": "0xedfb0f1bce9aa580fcea7c7fa0b181ede87cc0773af44754a9ecc4358d848be4",
@@ -87,7 +91,9 @@
             "targetInputSignalHash": "0x18e97ca75d8e85e9d80b54af4cb410abeffb663010d08f2300c132373fabdf5f",
             "targetPort": "cancel",
             "targetSignalId": "0xf317d3126c268fd9fa8c65229783a38cca1e722a360c47c9f20bc70e68ca693b",
-            "targetSourceId": "0x1fab0c92eaead7da02fe29795732249e0861c98d6738709e6be992a170920770"
+            "targetSignalName": "payment::payment_flow.control.cancel",
+            "targetSourceId": "0x1fab0c92eaead7da02fe29795732249e0861c98d6738709e6be992a170920770",
+            "targetStageIdentifier": "payment_flow.control"
           }
         ],
         "inputsRoot": "0xa6251270960ea8d248aa4e552adf659c52948717d72026c3481d6ae5469764dd",
@@ -106,6 +112,7 @@
             "targetOutputSignalHash": "0x9090568ecee23acb8eb792871ed6e0e8fc502fef53077e167c7c04bf3d986d56",
             "targetPort": "started",
             "targetSignalId": "0x1ae2be0f9616054d6ae9e2af0eca753862405236d03ababf97793f296dcfed44",
+            "targetSignalName": "payment::payment_flow.init.str",
             "targetSourceId": "0x1fab0c92eaead7da02fe29795732249e0861c98d6738709e6be992a170920770",
             "terminal": "none"
           },
@@ -117,6 +124,7 @@
             "targetOutputSignalHash": "0x9254df0fb94ce94d344463df1c86235f20b895df721f6c6946645bb1407833cc",
             "targetPort": "completed",
             "targetSignalId": "0xfa3459e8aafae9b423ce5c581b918f437ac86eb5c7fce87b3b02ba31a92d4319",
+            "targetSignalName": "payment::payment_flow.settle.cmp",
             "targetSourceId": "0x1fab0c92eaead7da02fe29795732249e0861c98d6738709e6be992a170920770",
             "terminal": "success"
           },
@@ -128,6 +136,7 @@
             "targetOutputSignalHash": "0x44e1ffcfe8b84f948c1244cb0b1a6230197a64f91d3fe83a95a459d06ec4262e",
             "targetPort": "failed",
             "targetSignalId": "0x52f257dbeed0f76cd253880e9f7ea66bf4a23169fc82a9593f37981b0a9a6201",
+            "targetSignalName": "payment::payment_flow.settle.err",
             "targetSourceId": "0x1fab0c92eaead7da02fe29795732249e0861c98d6738709e6be992a170920770",
             "terminal": "failure"
           }
