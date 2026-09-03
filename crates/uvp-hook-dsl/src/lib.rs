@@ -1694,7 +1694,14 @@ fn duration_to_seconds(duration: &str) -> Result<i64> {
     if duration.len() < 2 {
         return Err(HookError::Message(format!("invalid duration: {duration}")));
     }
-    let (num, unit) = duration.split_at(duration.len() - 1);
+    // 末位单位必须按字符边界截取：毒 AST/毒输入可能携带多字节 UTF-8 结尾
+    // （如 "1ü"，编译 cloud AST 时 rawDuration 来自外部 JSON），按字节
+    // split_at 会在非边界处 panic——这里取最后一个 char，非 ASCII 单位字母
+    // 一律返回确定性错误（有界失败，绝不 panic）。
+    let (num, unit) = match duration.char_indices().next_back() {
+        Some((index, unit)) if unit.is_ascii() => (&duration[..index], unit),
+        _ => return Err(HookError::Message(format!("invalid duration: {duration}"))),
+    };
     if num.starts_with('0') {
         return Err(HookError::Message(format!("invalid duration: {duration}")));
     }
@@ -1705,10 +1712,10 @@ fn duration_to_seconds(duration: &str) -> Result<i64> {
         return Err(HookError::Message(format!("invalid duration: {duration}")));
     }
     let multiplier = match unit {
-        "s" => 1,
-        "m" => 60,
-        "h" => 60 * 60,
-        "d" => 60 * 60 * 24,
+        's' => 1,
+        'm' => 60,
+        'h' => 60 * 60,
+        'd' => 60 * 60 * 24,
         _ => return Err(HookError::Message(format!("invalid duration unit: {unit}"))),
     };
     let seconds = value
@@ -2538,5 +2545,23 @@ mod tests {
         .unwrap();
         assert_eq!(eval.state, EvalState::Ready);
         assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:30.000Z"));
+    }
+
+    #[test]
+    fn duration_with_multibyte_tail_fails_bounded_instead_of_panicking() {
+        // 毒输入回归：多字节 UTF-8 结尾曾按字节 split_at 在非字符边界 panic
+        // （有界失败纪律：毒 AST/毒输入必须返回确定性错误，绝不 panic）。
+        for raw in ["ü", "1ü", "10ü"] {
+            let err = duration_to_seconds(raw).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid duration"),
+                "unexpected error for {raw:?}: {err}"
+            );
+        }
+        // 非 ASCII 单位字母（非 s/m/h/d）同样是确定性错误。
+        assert!(duration_to_seconds("10x").is_err());
+        // 正常单位不受影响。
+        assert_eq!(duration_to_seconds("48h").unwrap(), 48 * 60 * 60);
+        assert_eq!(duration_to_seconds("30d").unwrap(), 30 * 24 * 60 * 60);
     }
 }
