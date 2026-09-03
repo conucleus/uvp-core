@@ -480,6 +480,22 @@ fn parse_hook_expr_at_depth(raw: &str, _profile: Profile) -> Result<HookExpr> {
             "empty source is only allowed for ANCHOR(@…) subscription hooks".to_string(),
         ));
     }
+    if !source.is_empty() {
+        // 标头 source 类是落库列（VARCHAR(36)）与路由键：解析期钉死长度与
+        // 字符集（对齐 Go 镜像 zhixu_schema.go 的 ≤36 与 plain-identifier
+        // 规则）。订阅形态（::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
+        // source 另有 is_plain_identifier 与 100 长度上限校验，保持不变。
+        if source.len() > 36 {
+            return Err(HookError::Message(format!(
+                "hook source class exceeds the maximum length of 36 characters: {source}"
+            )));
+        }
+        if !is_plain_identifier(&source) {
+            return Err(HookError::Message(format!(
+                "hook source must be a plain identifier: {source}"
+            )));
+        }
+    }
     reject_unsupported_operators(condition_raw)?;
     let mut parser = Parser::new(condition_raw);
     let condition = parser.parse()?;
@@ -2563,5 +2579,60 @@ mod tests {
         // 正常单位不受影响。
         assert_eq!(duration_to_seconds("48h").unwrap(), 48 * 60 * 60);
         assert_eq!(duration_to_seconds("30d").unwrap(), 30 * 24 * 60 * 60);
+    }
+
+    #[test]
+    fn non_subscription_source_header_requires_plain_identifier_of_at_most_36() {
+        // 标头 source 类落 VARCHAR(36) 且是路由键：超长/非法字符集在解析期
+        // 拒绝（对齐 Go 镜像 zhixu_schema.go 的 ≤36 与标识符规则）。
+        let overlong = "s".repeat(37);
+        for raw in [
+            format!("{overlong}::task.main.cmp"),
+            "has space::task.main.cmp".to_string(),
+            "buyer.ü::task.main.cmp".to_string(),
+        ] {
+            let err = parse_hook(ParseHookRequest {
+                profile: Profile::EvmStrict,
+                hook_name: "HOOK".to_string(),
+                hook: raw.clone(),
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("source"),
+                "unexpected error for {raw:?}: {err}"
+            );
+        }
+        // 36 字节边界恰好放行。
+        let boundary = "s".repeat(36);
+        parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "HOOK".to_string(),
+            hook: format!("{boundary}::task.main.cmp"),
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn subscription_header_form_is_unaffected_by_source_header_cap() {
+        // 订阅形态标头恒为空：不受 ≤36/plain-identifier 标头校验影响，
+        // 订阅目标 source 仍走 is_plain_identifier/100 既有校验。
+        parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "HOOK".to_string(),
+            hook: "::ANCHOR(@seller::task.main.cmp)".to_string(),
+        })
+        .unwrap();
+        // 订阅条目带非空标头仍按既有口径拒绝（而非新的标头错误）。
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "HOOK".to_string(),
+            hook: "buyer::ANCHOR(@seller::task.main.cmp)".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("subscription entries must use an empty source header"),
+            "unexpected: {err}"
+        );
     }
 }
