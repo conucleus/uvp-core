@@ -455,9 +455,21 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
         }
     }
     for entry in entries {
-        if has_static_executor(entry.stage.executor.as_ref())
-            || anchored.contains(&entry.stage_identifier)
-        {
+        if has_static_executor(entry.stage.executor.as_ref()) {
+            continue;
+        }
+        // 模-1 同族裁决（audit3 DEPLOY-01）：订阅阶段的投递目标编译期定死、
+        // 运行时禁止 executor patch。selectedStages 可达只对可 patch 的普通
+        // 阶段构成绑定——订阅阶段被 selector 指到也不豁免，否则定义可编译
+        // 却没有 executor route、又禁补绑，永远无法形成可执行静态绑定。
+        if stage_is_subscription(&entry.stage) {
+            issues.push(format!(
+                "{} is a subscription stage and requires its own static executor; selectedStages reachability cannot bind it because subscription stages reject runtime executor patches",
+                entry.stage_identifier
+            ));
+            continue;
+        }
+        if anchored.contains(&entry.stage_identifier) {
             continue;
         }
         issues.push(format!(
@@ -466,6 +478,16 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
         ));
     }
     issues
+}
+
+// stage_is_subscription 报告阶段是否声明了 ANCHOR 订阅入口。解析失败的
+// hook 不算订阅形态：语法错误由引用存在性校验统一上报。
+fn stage_is_subscription(stage: &ZhixuStage) -> bool {
+    stage.receive_signals.values().any(|raw| {
+        parse_hook_for_compiler("HOOK", raw)
+            .map(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
+            .unwrap_or(false)
+    })
 }
 
 fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
@@ -1152,6 +1174,32 @@ mod tests {
                 .to_string()
                 .contains("must start with an ASCII letter"));
         }
+    }
+
+    #[test]
+    fn rejects_subscription_stage_bound_only_through_selected_stages() {
+        // audit3 DEPLOY-01：订阅阶段的投递目标编译期定死、运行时禁止
+        // executor patch。selectedStages 可达只对可 patch 的普通阶段构成
+        // 绑定——被 selector 指到的订阅阶段仍必须有自身静态 executor，
+        // 否则编译放行却没有 executor route、又禁补绑，投递必败。
+        let mut definition = demo_definition();
+        let execution = &mut definition["spec"]["taskPatterns"][1]["stages"][0];
+        let object = execution.as_object_mut().expect("stage is an object");
+        object.insert("executor".to_string(), serde_json::Value::Null);
+        object.insert(
+            "receiveSignals".to_string(),
+            json!({ "OBS": "::ANCHOR(@buyer::selector.assign.executor_selected)" }),
+        );
+        object.remove("sendSignals");
+
+        let error = compile_zhixu_hook_plan(&definition)
+            .expect_err("subscription stage without its own static executor must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("requires its own static executor"),
+            "unexpected error: {error}"
+        );
     }
 
     fn demo_definition() -> Value {

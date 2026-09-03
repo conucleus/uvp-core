@@ -614,14 +614,26 @@ fn merge_value(left: EvalValue, right: EvalValue) -> EvalValue {
 
 fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
     // Arrival-time causality (semantic 0.5): the earliest RECEIVED signal is
-    // the cause, so OR merges keep the minimum anchor instead of the maximum.
+    // the cause. Only READY branches compete for the anchor; a waiting
+    // branch's stale anchor must not win — the ready winner keeps its own
+    // timer. Matches the core evaluator (uvp-hook-dsl Expr::Or) and the
+    // contract's _orValue (P1-5: the replay oracle previously min-merged a
+    // waiting branch's anchor into a ready result, producing due dates
+    // earlier than the contract for `(a | (b +delay)) +outer` plans).
     if left.value || right.value {
+        let anchor = if left.value && right.value {
+            min_anchor(left.anchor_at, right.anchor_at)
+        } else if left.value {
+            left.anchor_at
+        } else {
+            right.anchor_at
+        };
         return EvalValue {
             value: true,
             wait: false,
             cancel: false,
             due_at: 0,
-            anchor_at: min_anchor(left.anchor_at, right.anchor_at),
+            anchor_at: anchor,
         };
     }
     if left.wait || right.wait {
@@ -908,6 +920,35 @@ mod tests {
         };
         let merged = or_value(left, right);
         assert_eq!(merged.anchor_at, 5);
+    }
+
+    #[test]
+    fn or_merge_ready_winner_keeps_own_anchor_without_waiting_branch() {
+        // P1-5 回归：ready×wait 混合时，等待分支的陈旧锚点不得参与归约——
+        // 就绪胜者自带计时器（对齐 hook-dsl Expr::Or 与合约 _orValue）。
+        // 此前 oracle 取 min(1000, 10)=10，对 `(a | (b +100s)) +50s` 形态
+        // 给出比合约更早的 due，产生假 mismatch。
+        let ready = EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: 0,
+            anchor_at: 1000,
+        };
+        let waiting = EvalValue {
+            value: false,
+            wait: true,
+            cancel: false,
+            due_at: 110,
+            anchor_at: 10,
+        };
+        let merged = or_value(ready, waiting);
+        assert!(merged.value);
+        assert!(!merged.wait);
+        assert_eq!(merged.anchor_at, 1000);
+        let merged = or_value(waiting, ready);
+        assert!(merged.value);
+        assert_eq!(merged.anchor_at, 1000);
     }
 
     #[test]
