@@ -247,23 +247,14 @@ fn record_signal_and_evaluate(state: &mut OracleState, event: &Value) -> Result<
         .map(|hook_id| find_hook(&plan, hook_id.as_str().unwrap_or_default()))
         .collect::<Result<Vec<_>>>()?;
     let mut observations = Vec::new();
-    for hook in hooks.iter().filter(|hook| {
-        hook.get("isTrigger")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }) {
+    for hook in hooks.iter().filter(|hook| hook_is_order_trigger(hook)) {
         observations.extend(evaluate_hook(
             order,
             hook,
             value_str(event, "submittedAt")?,
         )?);
     }
-    for hook in hooks.iter().filter(|hook| {
-        !hook
-            .get("isTrigger")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }) {
+    for hook in hooks.iter().filter(|hook| !hook_is_order_trigger(hook)) {
         observations.extend(evaluate_hook(
             order,
             hook,
@@ -287,6 +278,18 @@ fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Result<Vec<Val
     evaluate_hook(order, &hook, value_str(event, "pokedAt")?)
 }
 
+/// hook-plan v2 把单一 `isTrigger` 拆成 `orderTriggerKind`(mint|dock|none)
+/// 加 `emitReady`（PRD94 §3.4）：订单创建/出生语义只由 orderTriggerKind 决定，历史 v1 产物（isTrigger 布尔）保留兼容读取。
+fn hook_is_order_trigger(hook: &Value) -> bool {
+    match hook.get("orderTriggerKind").and_then(Value::as_str) {
+        Some(kind) => kind == "mint" || kind == "dock",
+        None => hook
+            .get("isTrigger")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
 fn evaluate_hook(order: &mut OracleOrderState, hook: &Value, now: &str) -> Result<Vec<Value>> {
     let hook_id = value_str(hook, "hookId")?;
     let previous = order
@@ -297,10 +300,7 @@ fn evaluate_hook(order: &mut OracleOrderState, hook: &Value, now: &str) -> Resul
     if previous.status == "cxl" || previous.status == "reg" {
         return Ok(Vec::new());
     }
-    let is_trigger = hook
-        .get("isTrigger")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let is_trigger = hook_is_order_trigger(hook);
     let stage_id = value_str(hook, "stageId")?;
     if !is_trigger
         && !order

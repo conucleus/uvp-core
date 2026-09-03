@@ -30,6 +30,10 @@ pub struct ZhixuSpec {
     pub nucleation: Nucleation,
     #[serde(default)]
     pub task_patterns: Vec<ZhixuTaskPattern>,
+    /// 目标侧公开的版本化对接接口（PRD94 §3）。`uvp.dock.v1` 子协议；
+    /// 调用方只能引用端口名，不能看到目标内部 stage/signal。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock_interface: Option<DockInterfaceSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +77,7 @@ pub struct ZhixuStage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub executor: Option<Value>,
+    pub executor: Option<ZhixuExecutor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_stages: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -82,4 +86,63 @@ pub struct ZhixuStage {
     pub receive_signals: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_resources: BTreeMap<String, Value>,
+}
+
+/// typed executor（PRD94 §2/§12.1：executor 不再是不透明 Value）。
+/// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）；
+/// 非安全扩展保留在 extension map 中透传。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZhixuExecutor {
+    pub supplier_type: String,
+    /// schema 字段名为全大写 `supplierID`（历史约定），非 camelCase。
+    #[serde(
+        rename = "supplierID",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub supplier_id: Option<String>,
+    /// 保持 Value 以便编译器产出带 JSON path / 错误码（D001-D007）的
+    /// 结构化迁移错误，而不是裸 serde 报错。语义权威在 uvp-compiler::dock。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zhixu_executor_config: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selectable_resource: Option<Value>,
+    #[serde(flatten)]
+    pub extensions: BTreeMap<String, Value>,
+}
+
+/// `spec.dockInterface` source 形状（`uvp.dock.v1`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockInterfaceSource {
+    pub schema_version: String,
+    #[serde(default)]
+    pub inputs: BTreeMap<String, DockInputPortSource>,
+    #[serde(default)]
+    pub outputs: BTreeMap<String, DockOutputPortSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockInputPortSource {
+    pub kind: String,
+    /// `<task>.<stage>#<receiveHookName>`
+    pub hook: String,
+    pub access: DockPortAccessSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockPortAccessSource {
+    pub policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockOutputPortSource {
+    /// `<source>::<task>.<stage>.<signal>`
+    pub signal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<String>,
 }

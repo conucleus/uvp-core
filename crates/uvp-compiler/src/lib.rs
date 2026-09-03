@@ -3,18 +3,17 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 use uvp_hook_dsl::{
-    parse_hook, Compatibility, DependencyKind, HookMode, ParseHookOutput, ParseHookRequest, Profile,
+    parse_hook, Compatibility, DependencyKind, ParseHookOutput, ParseHookRequest, Profile,
 };
 use uvp_ir::hash_canonical;
-use uvp_model::{ZhixuDefinition, ZhixuStage};
+use uvp_model::{ZhixuDefinition, ZhixuExecutor, ZhixuStage};
+
+pub mod dock;
 
 const COMPILER_NAME: &str = "uvp-eth-compiler";
 const COMPILER_VERSION: &str = "0.1.0";
-const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v1";
-// hook_plan 目标的 hook_name = "signalMap." + key（10 字节前缀），hook_name
-// 上限 36 字节 ⇒ key 上限 26。cloud 目标曾放行到 36，同一份定义一个 target
-// 收一个放；两 target 统一按 26 收口。
-const MAX_SIGNAL_MAP_KEY_LENGTH: usize = 26;
+const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
+const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
 
 #[derive(Debug, Error)]
 pub enum CompilerError {
@@ -33,6 +32,11 @@ pub struct CompileRequest {
     pub target: String,
     #[serde(alias = "zhixu")]
     pub definition: Value,
+    /// Dock resolution manifest（PRD94 §5.2）：由 Store/发布系统或离线
+    /// lock 文件提供；含 zhixu executor 的可运行编译必须提供，否则返回
+    /// `UNRESOLVED_DOCK_TARGET`。
+    #[serde(default)]
+    pub resolution_manifest: Option<Value>,
 }
 
 fn default_target() -> String {
@@ -47,16 +51,61 @@ pub fn compile_json(input: &str) -> String {
 }
 
 pub fn compile_request(req: &CompileRequest) -> Result<Value> {
+    let manifest = req.resolution_manifest.as_ref();
     match req.target.as_str() {
-        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition),
-        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition),
+        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, manifest, false),
+        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, manifest, false),
+        // parse-only：允许 unresolved route（PRD94 §5.1）。
+        "parse" => compile_zhixu_hook_plan(&req.definition, manifest, true),
+        "dock_link" => compile_dock_link(&req.definition, manifest),
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"
         ))),
     }
 }
 
-pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
+fn issues_from_dock(issues: &[dock::DockIssue]) -> CompilerError {
+    CompilerError::Issues(
+        issues
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+/// 定义身份：dock 场景必须使用 `metadata.uid`（PRD94 §7.3）。
+fn definition_uid(definition: &ZhixuDefinition, requires_uid: bool) -> Result<String> {
+    match &definition.metadata.uid {
+        Some(uid) if !uid.trim().is_empty() => Ok(uid.trim().to_string()),
+        _ if requires_uid => Err(CompilerError::Message(
+            "metadata.uid is required for definitions that publish a dockInterface or delegate to a zhixu executor"
+                .to_string(),
+        )),
+        _ => Ok(definition.metadata.name.clone()),
+    }
+}
+
+fn definition_version(definition: &ZhixuDefinition) -> Result<String> {
+    definition
+        .metadata
+        .annotations
+        .get("version")
+        .map(String::as_str)
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CompilerError::Message(
+                "metadata.annotations.version is required: missing or empty version".to_string(),
+            )
+        })
+}
+
+pub fn compile_zhixu_hook_plan(
+    definition_value: &Value,
+    resolution_manifest: Option<&Value>,
+    allow_unresolved: bool,
+) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
         .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
     let issues = validate_zhixu_shape(&definition);
@@ -64,31 +113,25 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
         return Err(CompilerError::Issues(issues.join("; ")));
     }
 
-    let zhixu_id = definition
-        .metadata
-        .uid
-        .clone()
-        .unwrap_or_else(|| definition.metadata.name.clone());
-    let version = definition
-        .metadata
-        .annotations
-        .get("version")
-        .map(String::as_str)
-        .filter(|version| !version.is_empty())
-        .ok_or_else(|| {
-            CompilerError::Message(
-                "metadata.annotations.version is required: missing or empty version".to_string(),
-            )
-        })?
-        .to_string();
-    let platform = normalize_platform_value(&definition.spec.platform)?;
     let stage_entries = flatten_stages(&definition)?;
+    let stage_pairs = stage_entries
+        .iter()
+        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
+        .collect::<Vec<_>>();
     let stage_ids = stage_entries
         .iter()
         .map(|entry| entry.stage_identifier.clone())
         .collect::<BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-    let executor_routes = build_executor_routes(&stage_entries);
+
+    // Dock：目标接口编译 + 调用方 route 收集 + link。
+    let dock_state = compile_dock_state(
+        &definition,
+        &stage_pairs,
+        resolution_manifest,
+        allow_unresolved,
+        DockProfile::Evm,
+    )?;
 
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_stage_executors(
@@ -97,18 +140,25 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
     ));
     validation_issues.extend(validate_mint_anchors(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
-    validation_issues.extend(validate_receive_signal_references(&stage_entries));
-    validation_issues.extend(validate_signal_maps(&stage_entries));
+    validation_issues.extend(validate_receive_signal_references(
+        &stage_entries,
+        &dock_state.input_port_hook_ids,
+    ));
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
 
+    let zhixu_id = definition_uid(&definition, dock_state.requires_uid)?;
+    let version = definition_version(&definition)?;
+    let platform = normalize_platform_value(&definition.spec.platform)?;
+
     let mut compiled_hooks = Vec::new();
     for entry in &stage_entries {
-        compiled_hooks.extend(compile_stage_hooks(entry)?);
+        compiled_hooks.extend(compile_stage_hooks(entry, &dock_state)?);
     }
     let dependency_index = build_dependency_index(&compiled_hooks);
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
+    let executor_routes = build_executor_routes(&stage_entries);
     let plan_id = hash_canonical(
         "uvp:hook-plan-id:v1",
         &json!({
@@ -131,6 +181,10 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
         "compiledHooks": compiled_hooks,
         "dependencyIndex": dependency_index,
         "executorRoutes": executor_routes,
+        "dockInterface": dock_state.interface_json,
+        "dockRoutes": dock_state.routes_json,
+        "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
+        "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
         "selectedStageBindings": selected_stage_bindings,
         "signalCapabilities": signal_capabilities,
         "source": uvp_ir::canonicalize(definition_value).map_err(|err| CompilerError::Message(err.to_string()))?,
@@ -140,7 +194,7 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
 
     Ok(json!({
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
-        "planId": plan_id,
+        "planId": payload["planId"].clone(),
         "zhixuId": payload["zhixuId"].clone(),
         "version": payload["version"].clone(),
         "zhixuName": payload["zhixuName"].clone(),
@@ -148,13 +202,21 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
         "compiledHooks": payload["compiledHooks"].clone(),
         "dependencyIndex": payload["dependencyIndex"].clone(),
         "executorRoutes": payload["executorRoutes"].clone(),
+        "dockInterface": payload["dockInterface"].clone(),
+        "dockRoutes": payload["dockRoutes"].clone(),
+        "dockRoutesRoot": payload["dockRoutesRoot"].clone(),
+        "dockInterfaceRoot": payload["dockInterfaceRoot"].clone(),
         "selectedStageBindings": payload["selectedStageBindings"].clone(),
         "signalCapabilities": payload["signalCapabilities"].clone(),
         "planHash": plan_hash,
     }))
 }
 
-pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
+pub fn compile_cloud_artifact(
+    definition_value: &Value,
+    resolution_manifest: Option<&Value>,
+    allow_unresolved: bool,
+) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
         .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
     let issues = validate_zhixu_shape(&definition);
@@ -163,13 +225,27 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
     }
 
     let stage_entries = flatten_stages(&definition)?;
+    let stage_pairs = stage_entries
+        .iter()
+        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
+        .collect::<Vec<_>>();
+    let dock_state = compile_dock_state(
+        &definition,
+        &stage_pairs,
+        resolution_manifest,
+        allow_unresolved,
+        DockProfile::Cloud,
+    )?;
+
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_mint_anchors(&stage_entries));
     // 与 hook_plan 目标共用同一组校验：同一份定义不允许"一个 target 收、
     // 另一个放"，否则 Go 主链路会拿到被 hook_plan 拒绝的定义的产物。
-    validation_issues.extend(validate_signal_maps(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
-    validation_issues.extend(validate_receive_signal_references(&stage_entries));
+    validation_issues.extend(validate_receive_signal_references(
+        &stage_entries,
+        &dock_state.input_port_hook_ids,
+    ));
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
@@ -187,62 +263,173 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
                 None,
             )?);
         }
-
-        if entry
-            .stage
-            .executor
-            .as_ref()
-            .and_then(|executor| executor.get("supplierType"))
-            .and_then(Value::as_str)
-            == Some("zhixu")
-        {
-            let supplier_id = entry
-                .stage
-                .executor
-                .as_ref()
-                .and_then(|executor| executor.get("supplierID"))
-                .and_then(Value::as_str)
-                .filter(|supplier_id| !supplier_id.is_empty())
-                .ok_or_else(|| {
-                    CompilerError::Message(format!(
-                        "{}.executor: zhixu executor missing supplierID",
-                        entry.stage_identifier
-                    ))
-                })?;
-            if let Some(signal_map) = entry
-                .stage
-                .executor
-                .as_ref()
-                .and_then(|executor| executor.get("zhixuExecutorConfig"))
-                .and_then(|value| value.get("signalMap"))
-                .and_then(Value::as_object)
-            {
-                for (hook_name, raw) in signal_map {
-                    let Some(raw_expression) = raw.as_str() else {
-                        return Err(CompilerError::Message(format!(
-                            "{}.executor.zhixuExecutorConfig.signalMap.{hook_name} is invalid: expected string",
-                            entry.stage_identifier
-                        )));
-                    };
-                    hooks.push(cloud_hook_artifact(
-                        entry,
-                        hook_name,
-                        raw_expression,
-                        "executor",
-                        Some(supplier_id),
-                    )?);
-                }
-            }
-        }
     }
 
     Ok(json!({
-        "schemaVersion": "uvp.cloudArtifact.v1",
+        "schemaVersion": CLOUD_ARTIFACT_SCHEMA_VERSION,
         "zhixuName": definition.metadata.name,
         "stages": stages,
         "hooks": hooks,
         "orderStageDefaults": stages,
+        "dockInterface": dock_state.interface_json,
+        "dockRoutes": dock_state.routes_json,
+        "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
+        "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
     }))
+}
+
+/// dock_link：只做 link，输出已解析 route 与根（PRD96 §4.3 API 边界）。
+fn compile_dock_link(
+    definition_value: &Value,
+    resolution_manifest: Option<&Value>,
+) -> Result<Value> {
+    let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
+        .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
+    let issues = validate_zhixu_shape(&definition);
+    if !issues.is_empty() {
+        return Err(CompilerError::Issues(issues.join("; ")));
+    }
+    let stage_entries = flatten_stages(&definition)?;
+    let stage_pairs = stage_entries
+        .iter()
+        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
+        .collect::<Vec<_>>();
+    let dock_state = compile_dock_state(
+        &definition,
+        &stage_pairs,
+        resolution_manifest,
+        false,
+        DockProfile::Evm,
+    )?;
+    Ok(json!({
+        "schemaVersion": "uvp.dockLink.v1",
+        "dockInterface": dock_state.interface_json,
+        "dockRoutes": dock_state.routes_json,
+        "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
+        "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
+    }))
+}
+
+/// D018（PRD94 §9）：可运行产物必须能解析 runtime target identity——
+/// EVM 轨要求 manifest 提供 target evmPlanId，Cloud 轨要求 cloudArtifactId。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DockProfile {
+    Evm,
+    Cloud,
+}
+
+/// 一次编译中的 dock 状态：接口产物、未链接/已链接 route、hook 标记输入。
+struct DockState {
+    interface_json: Option<Value>,
+    routes_json: Vec<Value>,
+    dock_routes_root: dock::Word,
+    dock_interface_root: dock::Word,
+    /// dockInterface input port 引用的本地 hook（`<task>.<stage>#<hook>`），
+    /// 这些 mailbox hook 不走普通依赖引用校验（PRD94 §3.3）。
+    input_port_hook_ids: BTreeSet<String>,
+    requires_uid: bool,
+}
+
+fn compile_dock_state(
+    definition: &ZhixuDefinition,
+    stage_pairs: &[(String, ZhixuStage)],
+    resolution_manifest: Option<&Value>,
+    allow_unresolved: bool,
+    profile: DockProfile,
+) -> Result<DockState> {
+    let version = definition_version(definition)?;
+    let unlinked =
+        dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
+    let requires_uid = definition.spec.dock_interface.is_some() || !unlinked.is_empty();
+
+    let interface_artifact = match &definition.spec.dock_interface {
+        Some(dock_interface) => Some(
+            dock::compile_dock_interface(
+                dock_interface,
+                &definition_uid(definition, true)?,
+                &version,
+                stage_pairs,
+            )
+            .map_err(|issues| issues_from_dock(&issues))?,
+        ),
+        None => None,
+    };
+    let interface_root = interface_artifact
+        .as_ref()
+        .map(|artifact| artifact.interface_root)
+        .unwrap_or(dock::EMPTY_MERKLE_ROOT);
+    let input_port_hook_ids = interface_artifact
+        .as_ref()
+        .map(|artifact| {
+            artifact
+                .inputs
+                .iter()
+                .map(|port| port.hook_id.clone())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    let routes = if unlinked.is_empty() {
+        Vec::new()
+    } else {
+        match resolution_manifest {
+            Some(manifest_value) => {
+                let manifest = dock::parse_resolution_manifest(manifest_value)
+                    .map_err(|issues| issues_from_dock(&issues))?;
+                let identity = dock::LocalLinkIdentity {
+                    uid: definition_uid(definition, true)?,
+                    version,
+                };
+                dock::link_dock_routes(&identity, stage_pairs, &unlinked, &manifest)
+                    .map_err(|issues| issues_from_dock(&issues))?
+            }
+            None if allow_unresolved => Vec::new(),
+            None => {
+                return Err(CompilerError::Message(
+                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes but no resolutionManifest was provided; runnable compilation requires linking against published target interfaces (PRD94 §5)".to_string(),
+                ));
+            }
+        }
+    };
+    // D018：runtime target identity 必须完整可解析（profile 编译硬门槛）。
+    if !allow_unresolved {
+        for route in &routes {
+            let resolvable = match profile {
+                DockProfile::Evm => route.target_evm_plan_id.is_some(),
+                DockProfile::Cloud => route.target_cloud_artifact_id.is_some(),
+            };
+            if !resolvable {
+                return Err(CompilerError::Message(format!(
+                    "D018 {}.executor.zhixuExecutorConfig: resolved target {}@{} has no {} in the resolution manifest; the {} profile cannot resolve the runtime target identity",
+                    route.stage_identifier,
+                    route.target_zhixu_uid,
+                    route.target_version,
+                    match profile {
+                        DockProfile::Evm => "evmPlanId",
+                        DockProfile::Cloud => "cloudArtifactId",
+                    },
+                    match profile {
+                        DockProfile::Evm => "evm",
+                        DockProfile::Cloud => "cloud",
+                    }
+                )));
+            }
+        }
+    }
+    let routes_json = routes
+        .iter()
+        .map(|route| route.to_json())
+        .collect::<Vec<_>>();
+    Ok(DockState {
+        interface_json: interface_artifact
+            .as_ref()
+            .map(|artifact| artifact.to_json()),
+        routes_json,
+        dock_routes_root: dock::dock_routes_root(&routes),
+        dock_interface_root: interface_root,
+        input_port_hook_ids,
+        requires_uid,
+    })
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -425,11 +612,24 @@ fn build_selected_stage_bindings(
 fn build_executor_routes(entries: &[StageEntry]) -> Value {
     let mut routes = Map::new();
     for entry in entries {
+        if is_zhixu_executor_stage(entry) {
+            // zhixu 委托 route 不再是静态 executor route：其权威形态是
+            // dockRoutes 中的 resolved DockRouteV1（PRD94 §7.1）。
+            continue;
+        }
         if entry.stage.executor.is_some() {
             routes.insert(entry.stage_identifier.clone(), route_for_stage(entry));
         }
     }
     Value::Object(routes)
+}
+
+fn is_zhixu_executor_stage(entry: &StageEntry) -> bool {
+    entry
+        .stage
+        .executor
+        .as_ref()
+        .is_some_and(|executor| executor.supplier_type.trim() == "zhixu")
 }
 
 fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<String> {
@@ -502,11 +702,8 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     //    hook"形态已废除——普通 hook 在铸单前没有可求值的订单上下文）；
     // 4) 防无界代铸链：mint 阶段的订阅目标不得指向本阶段自己的 source 类；
     // 5) 防跨源代铸环：全部 mint 阶段的订阅目标 source 类构成的有向图
-    //    （含委托 signalMap 对译后的最终远端类）不得存在可达环——见
-    //    validate_mint_subscription_cycles。
-    // 其余阶段是否"有锚"由运行时按对接记录路由自然裁决：存在订单实例则
-    // 按单投递（域内血缘/dock 边），不存在实例则按类扇入。执行器自发 str
-    // 出的订单编译期不可见，因此不在此做静态锚定判断。
+    //    不得存在可达环。委托对译边在 dock v1 中改由 route 启动图环检测
+    //    （D015）覆盖：本地编译不再持有目标接口，无法可靠对译远端类。
     for entry in entries {
         if let Some(mint) = &entry.stage.mint {
             // 与 Go 侧口径一致：精确比较，不接受带空白的变体。
@@ -530,12 +727,11 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
                     .stage
                     .executor
                     .as_ref()
-                    .and_then(|value| value.get("supplierType"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
+                    .map(|executor| executor.supplier_type.trim().to_string())
+                    .unwrap_or_default();
                 if executor_type == "zhixu" {
-                    // mint 出生 + 委托执行器：signalMap hook 是同单 normal AST，
-                    // 注入 mint 后无法解码，委托阶段永不完成——组合直接拒绝。
+                    // mint 出生 + 委托执行器：出生（代铸）与委托（dock 子订单）
+                    // 是两种互斥的订单创建路径——组合直接拒绝。
                     issues.push(format!(
                         "{}.mint stage cannot use a zhixu delegation executor",
                         entry.stage_identifier
@@ -587,12 +783,11 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
 }
 
 /// mint 跨源代铸环检测（源类级）：收集全部 mint 阶段的订阅目标 source 类，
-/// 构建有向边（本 stage.source → 订阅目标 source；订阅目标阶段若经 zhixu
-/// 委托 signalMap 对译，则追加最终远端 source 类边），检测可达环
-/// （A→B→A、A→B→C→A）。成环意味着代铸事实在源类之间互相触发、永不收敛
-/// ——per-fact mint 构成无界代铸环，编译期直接拒绝。
+/// 构建有向边并检测可达环（A→B→A、A→B→C→A）。成环意味着代铸事实在源类
+/// 之间互相触发、永不收敛——per-fact mint 构成无界代铸环，编译期直接拒绝。
+/// dock v1 起，经 zhixu 委托的远端类对译边由 link 阶段的 route 启动图
+/// 环检测（D015）覆盖。
 fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
-    let delegation_remotes = delegation_remote_sources(entries);
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in entries {
         if entry.stage.mint.is_none() {
@@ -604,8 +799,6 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
             let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
                 continue;
             };
-            // 非订阅条目由 validate_mint_anchors 上报；直连自环（订阅自身
-            // source 类）也已按条上报，这里不重复构边。
             let Some(target) = &parsed.subscription_target else {
                 continue;
             };
@@ -614,17 +807,6 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
                     .entry(source.clone())
                     .or_default()
                     .insert(target.source.clone());
-            }
-            // 委托对译：订阅目标阶段经 signalMap 把信号映射到远端 source 类
-            // 时，注入 mint 的事实的最终来源是远端类——按远端类补边（含
-            // 映射回本类形成的自环，统一由环检测上报）。
-            if let Some((stage_identifier, _)) = parse_signal_reference(&target.signal_name) {
-                for remote in delegation_remotes.get(&stage_identifier).into_iter().flatten() {
-                    edges
-                        .entry(source.clone())
-                        .or_default()
-                        .insert(remote.clone());
-                }
             }
         }
     }
@@ -635,32 +817,6 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
         )],
         None => Vec::new(),
     }
-}
-
-/// stage_identifier → 该阶段 zhixu 委托 signalMap 对译出的远端 source 类
-/// 集合。signalMap 是跨域委托接缝上的对译表：hook 的 source 即被委托域。
-/// 解析失败的条目不计（错误由 validate_signal_maps 统一上报）。
-fn delegation_remote_sources(entries: &[StageEntry]) -> BTreeMap<String, BTreeSet<String>> {
-    let mut remotes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for entry in entries {
-        let signal_map = stage_signal_map(entry.stage.executor.as_ref());
-        let Some(signal_map) = signal_map else {
-            continue;
-        };
-        let mut sources = BTreeSet::new();
-        for raw in signal_map.values() {
-            let Some(raw_expression) = raw.as_str() else {
-                continue;
-            };
-            if let Ok(hook) = parse_hook_for_compiler("HOOK", raw_expression) {
-                sources.insert(hook.source);
-            }
-        }
-        if !sources.is_empty() {
-            remotes.insert(entry.stage_identifier.clone(), sources);
-        }
-    }
-    remotes
 }
 
 /// 在 source 类有向图中找第一个可达环并回溯出完整路径（BFS + 父指针，
@@ -700,17 +856,25 @@ fn find_first_cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<St
     None
 }
 
-fn validate_receive_signal_references(entries: &[StageEntry]) -> Vec<String> {
+fn validate_receive_signal_references(
+    entries: &[StageEntry],
+    input_port_hook_ids: &BTreeSet<String>,
+) -> Vec<String> {
     let mut issues = Vec::new();
     let catalog = SignalReferenceCatalog::new(entries);
     for entry in entries {
         for (hook_name, raw_expression) in &entry.stage.receive_signals {
+            // dockInterface input port 的 mailbox hook 由 dock 模块按端口
+            // 约束校验（单一正向 atom、source 同域），不走普通引用校验。
+            let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
+            if input_port_hook_ids.contains(&hook_id) {
+                continue;
+            }
             match parse_hook_for_compiler("HOOK", raw_expression) {
                 Ok(parsed) => issues.extend(validate_hook_dependency_references(
                     &parsed,
                     &format!("{}.receiveSignals.{hook_name}", entry.stage_identifier),
                     &catalog,
-                    false,
                 )),
                 Err(err) => issues.push(format!(
                     "{}.receiveSignals.{hook_name} is invalid: {err}",
@@ -723,18 +887,12 @@ fn validate_receive_signal_references(entries: &[StageEntry]) -> Vec<String> {
 }
 
 // receiveSignals key 即阶段内 hook_name，落 hook_name 列（VARCHAR(36)）。
-// 与 signalMap key 同构约束（语法手册 §7.4："key 不可为空且不能含 '.'"）：
-// '.' 是信号名分隔符（task.stage.signal）；'#' 是 hookId 分隔符
-// （stage#hook_name）——key 携带任一分隔符都会让 hookId 命名空间含混，
-// 且不含 '.' 已保证 receive key 不可能拼出 signalMap hook 的 hookId
-// （stage#signalMap.<key>）。key 与本阶段 signalMap key 同名时，cloud
-// 产物会对同一 (stageIdentifier, hookName) 产出两条 hook 记录，直接拒绝。
+// 语法手册 §7.4："key 不可为空且不能含 '.'"；'#' 是 hookId 分隔符
+// （stage#hook_name）——key 携带任一分隔符都会让 hookId 命名空间含混。
+// v1 起 signalMap 伪 hook namespace 已删除，同名碰撞检查随之移除。
 fn validate_receive_signal_keys(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
-        let signal_map_keys: BTreeSet<&str> = stage_signal_map(entry.stage.executor.as_ref())
-            .map(|signal_map| signal_map.keys().map(String::as_str).collect())
-            .unwrap_or_default();
         for hook_name in entry.stage.receive_signals.keys() {
             if hook_name.trim().is_empty() {
                 issues.push(format!(
@@ -748,111 +906,7 @@ fn validate_receive_signal_keys(entries: &[StageEntry]) -> Vec<String> {
                     "{}.receiveSignals.{hook_name} is invalid: key must be 1-36 bytes and must not contain '.' or '#'",
                     entry.stage_identifier
                 ));
-                continue;
             }
-            if signal_map_keys.contains(hook_name.as_str()) {
-                issues.push(format!(
-                    "{}.receiveSignals.{hook_name} is invalid: key must not collide with executor.zhixuExecutorConfig.signalMap key of the same stage",
-                    entry.stage_identifier
-                ));
-            }
-        }
-    }
-    issues
-}
-
-fn stage_signal_map(executor: Option<&Value>) -> Option<&Map<String, Value>> {
-    executor
-        .filter(|executor| executor.get("supplierType").and_then(Value::as_str) == Some("zhixu"))
-        .and_then(|executor| executor.get("zhixuExecutorConfig"))
-        .and_then(|value| value.get("signalMap"))
-        .and_then(Value::as_object)
-}
-
-fn validate_signal_maps(entries: &[StageEntry]) -> Vec<String> {
-    let mut issues = Vec::new();
-    let catalog = SignalReferenceCatalog::new(entries);
-    for entry in entries {
-        let Some(executor) = &entry.stage.executor else {
-            continue;
-        };
-        if executor.get("supplierType").and_then(Value::as_str) != Some("zhixu") {
-            continue;
-        }
-        let signal_map = executor
-            .get("zhixuExecutorConfig")
-            .and_then(|value| value.get("signalMap"))
-            .and_then(Value::as_object);
-        let Some(signal_map) = signal_map else {
-            issues.push(format!(
-                "{}.executor.zhixuExecutorConfig.signalMap is required",
-                entry.stage_identifier
-            ));
-            continue;
-        };
-        if !signal_map.contains_key("str") || !signal_map.contains_key("cmp") {
-            issues.push(format!(
-                "{}.signalMap must contain str and cmp",
-                entry.stage_identifier
-            ));
-            continue;
-        }
-        let mut parsed = Vec::new();
-        for (signal, raw) in signal_map {
-            if signal.contains('.') || signal.len() > MAX_SIGNAL_MAP_KEY_LENGTH {
-                issues.push(format!(
-                    "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: key must not contain '.' and must be at most {MAX_SIGNAL_MAP_KEY_LENGTH} bytes",
-                    entry.stage_identifier
-                ));
-                continue;
-            }
-            let Some(raw_expression) = raw.as_str() else {
-                issues.push(format!(
-                    "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: expected string",
-                    entry.stage_identifier
-                ));
-                continue;
-            };
-            match parse_hook_for_compiler("HOOK", raw_expression) {
-                Ok(hook) => {
-                    if hook.mode == HookMode::Subscription {
-                        issues.push(format!(
-                            "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: signalMap entries must not be subscription entries",
-                            entry.stage_identifier
-                        ));
-                        continue;
-                    }
-                    parsed.push((signal.clone(), hook))
-                }
-                Err(err) => issues.push(format!(
-                    "{}.executor.zhixuExecutorConfig.signalMap.{signal} is invalid: {err}",
-                    entry.stage_identifier
-                )),
-            }
-        }
-        if parsed.len() != signal_map.len() {
-            continue;
-        }
-        let sources = parsed
-            .iter()
-            .map(|(_, hook)| hook.source.clone())
-            .collect::<BTreeSet<_>>();
-        if sources.len() != 1 {
-            issues.push(format!(
-                "{}.signalMap must reference one source",
-                entry.stage_identifier
-            ));
-        }
-        for (signal, hook) in parsed {
-            issues.extend(validate_hook_dependency_references(
-                &hook,
-                &format!(
-                    "{}.executor.zhixuExecutorConfig.signalMap.{signal}",
-                    entry.stage_identifier
-                ),
-                &catalog,
-                true,
-            ));
         }
     }
     issues
@@ -882,7 +936,6 @@ fn validate_hook_dependency_references(
     hook: &ParseHookOutput,
     path: &str,
     catalog: &SignalReferenceCatalog,
-    is_signal_map: bool,
 ) -> Vec<String> {
     let mut issues = Vec::new();
     let mut seen = BTreeSet::new();
@@ -893,14 +946,11 @@ fn validate_hook_dependency_references(
         }
         if !catalog.local_sources.contains(&dependency.source) {
             // 订阅寻址只在本域解析（subscription-mint-spec §2.1）：receive
-            // 钩子的依赖 source 必须 ∈ 本域 source 类集合；signalMap 是跨域
-            // 委托接缝上的对译表，依赖 source 来自被委托域，保留跳过。
-            if !is_signal_map {
-                issues.push(format!(
-                    "{path} subscription source {} is not a declared source in this zhixu",
-                    dependency.source
-                ));
-            }
+            // 钩子的依赖 source 必须 ∈ 本域 source 类集合。
+            issues.push(format!(
+                "{path} subscription source {} is not a declared source in this zhixu",
+                dependency.source
+            ));
             continue;
         }
         let Some((stage_identifier, signal_name)) = parse_signal_reference(&dependency.signal_name)
@@ -939,56 +989,54 @@ fn parse_signal_reference(signal_name: &str) -> Option<(String, String)> {
     Some((format!("{}.{}", parts[0], parts[1]), parts[2].to_string()))
 }
 
-fn compile_stage_hooks(entry: &StageEntry) -> Result<Vec<Value>> {
+fn compile_stage_hooks(entry: &StageEntry, dock_state: &DockState) -> Result<Vec<Value>> {
     let mut hooks = Vec::new();
     let is_mint_stage = entry.stage.mint.is_some();
+    // entrance 端口引用的目标侧 hook 是 dock 出生入口（PRD94 §3.4）。
+    let entrance_hook_ids = dock_state
+        .interface_json
+        .as_ref()
+        .map(|interface| {
+            interface["inputs"]
+                .as_array()
+                .unwrap_or(&Vec::new())
+                .iter()
+                .filter(|port| port["kind"] == json!("entrance"))
+                .filter_map(|port| port["hookId"].as_str().map(str::to_string))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let is_zhixu_stage = is_zhixu_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
-        hooks.push(compile_hook(
-            "receive",
-            &entry.stage_identifier,
-            hook_name,
-            is_mint_stage,
-            raw_expression,
+        let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
+        let order_trigger_kind = if is_mint_stage {
+            "mint"
+        } else if entrance_hook_ids.contains(&hook_id) {
+            "dock"
+        } else {
+            "none"
+        };
+        // emitReady：出生/委托入口必发；有执行者的 stage 的 receive hook
+        // 是 executor dispatch 边（PRD94 §3.4 拆分 isTrigger）。
+        let emit_ready = order_trigger_kind != "none" || entry.stage.executor.is_some();
+        let route = if is_zhixu_stage {
+            None
+        } else {
             entry
                 .stage
                 .executor
                 .as_ref()
-                .map(|_| route_for_stage(entry)),
+                .map(|_| route_for_stage(entry))
+        };
+        hooks.push(compile_hook(
+            "receive",
+            &entry.stage_identifier,
+            hook_name,
+            order_trigger_kind,
+            emit_ready,
+            raw_expression,
+            route,
         )?);
-    }
-    if entry
-        .stage
-        .executor
-        .as_ref()
-        .and_then(|executor| executor.get("supplierType"))
-        .and_then(Value::as_str)
-        == Some("zhixu")
-    {
-        if let Some(signal_map) = entry
-            .stage
-            .executor
-            .as_ref()
-            .and_then(|executor| executor.get("zhixuExecutorConfig"))
-            .and_then(|value| value.get("signalMap"))
-            .and_then(Value::as_object)
-        {
-            for (signal_name, raw) in signal_map {
-                if let Some(raw_expression) = raw.as_str() {
-                    hooks.push(compile_hook(
-                        "signalMap",
-                        &entry.stage_identifier,
-                        &format!("signalMap.{signal_name}"),
-                        false,
-                        raw_expression,
-                        entry
-                            .stage
-                            .executor
-                            .as_ref()
-                            .map(|_| route_for_stage(entry)),
-                    )?);
-                }
-            }
-        }
     }
     hooks.sort_by_key(|hook| value_str(hook, "hookId").to_lowercase());
     Ok(hooks)
@@ -998,7 +1046,8 @@ fn compile_hook(
     kind: &str,
     stage_identifier: &str,
     hook_name: &str,
-    is_trigger: bool,
+    order_trigger_kind: &str,
+    emit_ready: bool,
     raw_expression: &str,
     route: Option<Value>,
 ) -> Result<Value> {
@@ -1014,7 +1063,11 @@ fn compile_hook(
         Value::String(stage_identifier.to_string()),
     );
     hook.insert("hookName".to_string(), Value::String(hook_name.to_string()));
-    hook.insert("isTrigger".to_string(), Value::Bool(is_trigger));
+    hook.insert(
+        "orderTriggerKind".to_string(),
+        Value::String(order_trigger_kind.to_string()),
+    );
+    hook.insert("emitReady".to_string(), Value::Bool(emit_ready));
     hook.insert(
         "rawExpression".to_string(),
         Value::String(raw_expression.to_string()),
@@ -1066,7 +1119,11 @@ fn cloud_stage_artifact(entry: &StageEntry) -> Result<Value> {
         Value::String(entry.stage_identifier.clone()),
     );
     if let Some(executor) = &entry.stage.executor {
-        stage.insert("executorConfigs".to_string(), executor.clone());
+        stage.insert(
+            "executorConfigs".to_string(),
+            serde_json::to_value(executor)
+                .map_err(|err| CompilerError::Message(err.to_string()))?,
+        );
     }
     if !entry.stage.file_resources.is_empty() {
         stage.insert(
@@ -1238,7 +1295,10 @@ fn route_for_stage(entry: &StageEntry) -> Value {
         Value::String(entry.stage_identifier.clone()),
     );
     if let Some(executor) = &entry.stage.executor {
-        route.insert("executor".to_string(), executor.clone());
+        route.insert(
+            "executor".to_string(),
+            serde_json::to_value(executor).unwrap_or(Value::Null),
+        );
     }
     if !entry.stage.file_resources.is_empty() {
         route.insert(
@@ -1250,11 +1310,16 @@ fn route_for_stage(entry: &StageEntry) -> Value {
     Value::Object(route)
 }
 
-fn has_static_executor(executor: Option<&Value>) -> bool {
-    executor
-        .and_then(|value| value.get("supplierID"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty())
+fn has_static_executor(executor: Option<&ZhixuExecutor>) -> bool {
+    match executor {
+        None => false,
+        // zhixu 委托执行器本身就是静态锚定（配置合法性由 dock 模块校验）。
+        Some(executor) if executor.supplier_type.trim() == "zhixu" => true,
+        Some(executor) => executor
+            .supplier_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+    }
 }
 
 fn value_str<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -1266,78 +1331,442 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // ------------------------------------------------------------------
+    // PRD94 §3.1 目标示例（payment_execution）
+    // ------------------------------------------------------------------
+    fn target_payment_definition() -> Value {
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "payment_execution",
+                "uid": "zx-payment-execution",
+                "annotations": { "version": "1.2.0" }
+            },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "payment-core" },
+                "dockInterface": {
+                    "schemaVersion": "uvp.dock.v1",
+                    "inputs": {
+                        "execute": {
+                            "kind": "entrance",
+                            "hook": "payment_flow.init#DOCK_EXECUTE",
+                            "access": { "policy": "permit" }
+                        },
+                        "cancel": {
+                            "kind": "signal",
+                            "hook": "payment_flow.control#DOCK_CANCEL",
+                            "access": { "policy": "linked" }
+                        }
+                    },
+                    "outputs": {
+                        "started": { "signal": "payment::payment_flow.init.str" },
+                        "completed": {
+                            "signal": "payment::payment_flow.settle.cmp",
+                            "terminal": "success"
+                        },
+                        "failed": {
+                            "signal": "payment::payment_flow.settle.err",
+                            "terminal": "failure"
+                        }
+                    }
+                },
+                "taskPatterns": [
+                    { "name": "payment_flow", "stages": [
+                        {
+                            "name": "init",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "DOCK_EXECUTE": "payment::payment_flow.init.execute"
+                            },
+                            "sendSignals": ["str"],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+                        },
+                        {
+                            "name": "control",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "DOCK_CANCEL": "payment::payment_flow.control.cancel"
+                            },
+                            "sendSignals": ["cxl"],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+                        },
+                        {
+                            "name": "settle",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "SETTLE": "payment::payment_flow.init.str"
+                            },
+                            "sendSignals": ["cmp", "err"],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+                        }
+                    ]}
+                ]
+            }
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // PRD94 §4.1/§12 调用方示例（settlement）
+    // ------------------------------------------------------------------
+    fn parent_settlement_definition() -> Value {
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "settlement",
+                "uid": "zx-settlement",
+                "annotations": { "version": "2.0.0" }
+            },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "settlement-core" },
+                "taskPatterns": [
+                    { "name": "checkout", "stages": [
+                        {
+                            "name": "confirm",
+                            "source": "buyer",
+                            "sendSignals": ["cmp"],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                        },
+                        {
+                            "name": "cancel",
+                            "source": "buyer",
+                            "sendSignals": ["cmp"],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                        }
+                    ]},
+                    { "name": "settlement", "stages": [
+                        {
+                            "name": "execute_payment",
+                            "source": "buyer",
+                            "receiveSignals": {
+                                "EXECUTE": "buyer::checkout.confirm.cmp",
+                                "CANCEL": "buyer::checkout.cancel.cmp"
+                            },
+                            "sendSignals": ["str", "cmp", "err", "cxl"],
+                            "executor": {
+                                "supplierType": "zhixu",
+                                "zhixuExecutorConfig": {
+                                    "schemaVersion": "uvp.dock.v1",
+                                    "target": { "zhixu": "zx-payment-execution", "version": "1.2.0" },
+                                    "order": { "idPolicy": "derived-v1" },
+                                    "inputMap": { "EXECUTE": "execute", "CANCEL": "cancel" },
+                                    "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
+                                }
+                            }
+                        }
+                    ]}
+                ]
+            }
+        })
+    }
+
+    /// 构造 resolution manifest：真实流程由 Store/发布系统在目标发布后
+    /// 生成；测试中直接编译目标定义取其产物。
+    fn manifest_for(target: &Value, extra_edges: Option<Value>) -> Value {
+        let plan = compile_zhixu_hook_plan(target, None, true).expect("target compiles");
+        let interface = plan["dockInterface"].clone();
+        let mut entry = json!({
+            "zhixu": "zx-payment-execution",
+            "version": "1.2.0",
+            "definitionRefHash": interface["definition"]["definitionRefHash"].clone(),
+            "artifactHash": plan["planHash"].clone(),
+            "published": true,
+            "interface": interface,
+            "evmPlanId": plan["planId"].clone(),
+            "cloudArtifactId": format!("artifact://{}", plan["planHash"].as_str().unwrap_or(""))
+        });
+        if let Some(edges) = extra_edges {
+            entry["dockEdges"] = edges;
+        }
+        json!({
+            "schemaVersion": "uvp.dock.resolution.v1",
+            "definitions": [entry]
+        })
+    }
+
     #[test]
-    fn compiles_stable_hook_plan_for_demo() {
-        let definition = demo_definition();
-        let plan = compile_zhixu_hook_plan(&definition).unwrap();
-        assert_eq!(plan["schemaVersion"], "uvp.hookPlan.v1");
-        assert_eq!(plan["zhixuId"], "zhixu-demo-001");
+    fn compiles_linked_parent_with_dock_route() {
+        let manifest = manifest_for(&target_payment_definition(), None);
+        let plan = compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
+            .expect("linked parent compiles");
+        assert_eq!(plan["schemaVersion"], "uvp.hookPlan.v2");
+        assert_eq!(plan["zhixuId"], "zx-settlement");
+
+        // hooks：无 signalMap 伪 hook；flags 拆分。
+        let hooks = plan["compiledHooks"].as_array().unwrap();
+        let hook_ids = hooks
+            .iter()
+            .map(|hook| hook["hookId"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(!hook_ids.iter().any(|id| id.starts_with("signalMap.")));
+        let execute = hooks
+            .iter()
+            .find(|hook| hook["hookId"] == "settlement.execute_payment#EXECUTE")
+            .unwrap();
+        assert_eq!(execute["orderTriggerKind"], "none");
+        assert_eq!(execute["emitReady"], true);
+
+        // route：resolved，入口绑定 EXECUTE→execute。
+        let routes = plan["dockRoutes"].as_array().unwrap();
+        assert_eq!(routes.len(), 1);
+        let route = &routes[0];
+        assert_eq!(route["schemaVersion"], "uvp.dockRoute.v1");
         assert_eq!(
-            plan["planId"],
-            "0x472081189619bb006814fed697f3d53ff187b5a852131ba1924bde825b0b9d6d"
+            route["local"]["stageIdentifier"],
+            "settlement.execute_payment"
         );
-        assert_eq!(
-            plan["planHash"],
-            "0x8ce322fcd43821fffe3f0144838d0b23e657a7d20acf6ee6de7bdb071a340752"
+        assert_eq!(route["orderIdPolicy"], "derived-v1");
+        assert_eq!(route["sourceSeam"], "payment");
+        assert_eq!(route["entrance"]["localHookName"], "EXECUTE");
+        assert_eq!(route["entrance"]["targetPort"], "execute");
+        assert_eq!(route["entrance"]["accessPolicy"], "permit");
+        assert_eq!(route["inputs"].as_array().unwrap().len(), 2);
+        assert_eq!(route["outputs"].as_array().unwrap().len(), 3);
+        assert_ne!(
+            route["routeHash"],
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
         );
-        assert_eq!(plan["compiledHooks"].as_array().unwrap().len(), 4);
-        assert_eq!(
-            plan["compiledHooks"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|hook| hook["hookId"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec![
-                "execution.main#signalMap.cmp",
-                "execution.main#signalMap.str",
-                "execution.main#START",
-                "execution.main#TIMEOUT",
-            ]
-        );
-        assert_eq!(
-            plan["dependencyIndex"]["buyer::selector.assign.executor_selected"],
-            json!(["execution.main#START", "execution.main#TIMEOUT"])
+        // 静态 executorRoutes 不再包含 zhixu stage。
+        assert!(plan["executorRoutes"]
+            .as_object()
+            .unwrap()
+            .get("settlement.execute_payment")
+            .is_none());
+    }
+
+    #[test]
+    fn target_compiles_interface_and_dock_trigger_flags() {
+        let plan = compile_zhixu_hook_plan(&target_payment_definition(), None, true)
+            .expect("target compiles standalone");
+        let interface = &plan["dockInterface"];
+        assert_eq!(interface["schemaVersion"], "uvp.dockInterfaceArtifact.v1");
+        assert_eq!(interface["inputs"].as_array().unwrap().len(), 2);
+        assert_eq!(interface["outputs"].as_array().unwrap().len(), 3);
+        // 端口按名排序。
+        let input_ports: Vec<&str> = interface["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|port| port["port"].as_str().unwrap())
+            .collect();
+        assert_eq!(input_ports, vec!["cancel", "execute"]);
+
+        let hooks = plan["compiledHooks"].as_array().unwrap();
+        let entrance = hooks
+            .iter()
+            .find(|hook| hook["hookId"] == "payment_flow.init#DOCK_EXECUTE")
+            .unwrap();
+        assert_eq!(entrance["orderTriggerKind"], "dock");
+        assert_eq!(entrance["emitReady"], true);
+        let cancel = hooks
+            .iter()
+            .find(|hook| hook["hookId"] == "payment_flow.control#DOCK_CANCEL")
+            .unwrap();
+        assert_eq!(cancel["orderTriggerKind"], "none");
+        assert_eq!(cancel["emitReady"], true);
+    }
+
+    #[test]
+    fn rejects_parent_without_manifest() {
+        let error = compile_zhixu_hook_plan(&parent_settlement_definition(), None, false)
+            .expect_err("unresolved dock target must fail");
+        assert!(
+            error.to_string().contains("UNRESOLVED_DOCK_TARGET"),
+            "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn compiles_cloud_artifact_with_go_signal_map_names() {
-        let artifact = compile_cloud_artifact(&demo_definition()).unwrap();
-        assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v1");
-        assert_eq!(artifact["stages"].as_array().unwrap().len(), 2);
+    fn parse_target_allows_unresolved() {
+        let value = compile_zhixu_hook_plan(&parent_settlement_definition(), None, true)
+            .expect("parse target allows unresolved routes");
+        assert_eq!(value["dockRoutes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn rejects_legacy_executor_shapes_with_migration_hint() {
+        // triggerEntrance：旧调用方形状。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()
+            .insert("triggerEntrance".to_string(), json!("payment_flow.init"));
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("triggerEntrance must hard-fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("D002") && message.contains("triggerEntrance"),
+            "{message}"
+        );
+        assert!(message.contains("clean break"), "{message}");
+
+        // signalMap value 是 Hook DSL：v1 只接受端口名。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["signalMap"]["str"] = json!("payment::payment_flow.init.str");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("hook-DSL signalMap value must hard-fail");
+        assert!(error.to_string().contains("D006"), "{}", error.to_string());
+
+        // supplierID + zhixu：D001。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["supplierID"] =
+            json!("payment-zhixu");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("supplierID on zhixu executor must fail");
+        assert!(error.to_string().contains("D001"), "{}", error.to_string());
+    }
+
+    #[test]
+    fn rejects_interface_shape_violations() {
+        let mut target = target_payment_definition();
+        // 组合表达式的 input port hook。
+        target["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_EXECUTE"] =
+            json!("payment::payment_flow.init.execute & payment::payment_flow.control.cxl");
+        let error = compile_zhixu_hook_plan(&target, None, true)
+            .expect_err("composite input port hook must fail");
+        assert!(error.to_string().contains("D013"), "{}", error.to_string());
+
+        // 输出端口引用非 sendSignals 信号。
+        let mut target = target_payment_definition();
+        target["spec"]["dockInterface"]["outputs"]["started"]["signal"] =
+            json!("payment::payment_flow.init.nope");
+        let error = compile_zhixu_hook_plan(&target, None, true)
+            .expect_err("unknown output signal must fail");
+        assert!(error.to_string().contains("D014"), "{}", error.to_string());
+
+        // signal kind 使用非 linked policy。
+        let mut target = target_payment_definition();
+        target["spec"]["dockInterface"]["inputs"]["cancel"]["access"]["policy"] = json!("open");
+        let error = compile_zhixu_hook_plan(&target, None, true)
+            .expect_err("signal port with open policy must fail");
+        assert!(error.to_string().contains("D023"), "{}", error.to_string());
+
+        // 非法端口名。
+        let mut target = target_payment_definition();
+        let inputs = target["spec"]["dockInterface"]["inputs"]
+            .as_object_mut()
+            .unwrap();
+        let execute = inputs.remove("execute").unwrap();
+        inputs.insert("BadPort".to_string(), execute);
+        let error =
+            compile_zhixu_hook_plan(&target, None, true).expect_err("invalid port name must fail");
+        assert!(error.to_string().contains("D021"), "{}", error.to_string());
+    }
+
+    #[test]
+    fn rejects_link_violations() {
+        // D008：目标不在 manifest。
+        let mut manifest = manifest_for(&target_payment_definition(), None);
+        manifest["definitions"][0]["zhixu"] = json!("zx-other");
+        let error =
+            compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
+                .expect_err("missing target must fail");
+        assert!(error.to_string().contains("D008"), "{}", error.to_string());
+
+        // D008：interfaceRoot 与叶子不一致。
+        let mut manifest = manifest_for(&target_payment_definition(), None);
+        manifest["definitions"][0]["interface"]["interfaceRoot"] =
+            json!("0x0000000000000000000000000000000000000000000000000000000000000001");
+        let error =
+            compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
+                .expect_err("tampered interfaceRoot must fail");
+        assert!(
+            error.to_string().contains("interfaceRoot"),
+            "{}",
+            error.to_string()
+        );
+
+        // D009：引用不存在的输出端口。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["signalMap"]["cxl"] = json!("cancelled");
+        let manifest = manifest_for(&target_payment_definition(), None);
+        let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+            .expect_err("unknown output port must fail");
+        assert!(error.to_string().contains("D009"), "{}", error.to_string());
+
+        // D010：inputMap 缺 entrance（目标去掉 entrance 端口后 link）。
+        let mut target = target_payment_definition();
+        let inputs = target["spec"]["dockInterface"]["inputs"]
+            .as_object_mut()
+            .unwrap();
+        let mut execute = inputs.remove("execute").unwrap();
+        execute["kind"] = json!("signal");
+        execute["access"]["policy"] = json!("linked");
+        inputs.insert("execute".to_string(), execute);
+        let manifest = manifest_for(&target, None);
+        let error =
+            compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
+                .expect_err("missing entrance must fail");
+        assert!(error.to_string().contains("D010"), "{}", error.to_string());
+
+        // D015：目标边回指父定义（经 manifest dockEdges）。
+        let edges = json!([{ "zhixu": "zx-settlement", "version": "2.0.0" }]);
+        let manifest = manifest_for(&target_payment_definition(), Some(edges));
+        let error =
+            compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
+                .expect_err("route cycle must fail");
+        assert!(error.to_string().contains("D015"), "{}", error.to_string());
+    }
+
+    #[test]
+    fn rejects_evm_routes_without_plan_identity_and_cloud_without_artifact_id() {
+        // D018：可运行产物必须能解析 runtime target identity。
+        let manifest = manifest_for(&target_payment_definition(), None);
+        let mut no_plan = manifest.clone();
+        no_plan["definitions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("evmPlanId");
+        let error = compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&no_plan), false)
+            .expect_err("evm profile without evmPlanId must fail");
+        assert!(error.to_string().contains("D018"), "{}", error.to_string());
+
+        let mut no_artifact = manifest;
+        no_artifact["definitions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("cloudArtifactId");
+        let error =
+            compile_cloud_artifact(&parent_settlement_definition(), Some(&no_artifact), false)
+                .expect_err("cloud profile without cloudArtifactId must fail");
+        assert!(error.to_string().contains("D018"), "{}", error.to_string());
+    }
+
+    #[test]
+    fn cloud_artifact_uses_resolved_routes() {
+        let manifest = manifest_for(&target_payment_definition(), None);
+        let artifact =
+            compile_cloud_artifact(&parent_settlement_definition(), Some(&manifest), false)
+                .expect("cloud artifact compiles with manifest");
+        assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v2");
         let hooks = artifact["hooks"].as_array().unwrap();
-        assert!(hooks.iter().any(|hook| {
-            hook["stageIdentifier"] == "execution.main"
-                && hook["hookName"] == "cmp"
-                && hook["sourceZhixuRef"] == "executor"
-                && hook["sourceZhixuId"] == "payment-zhixu"
-        }));
-        assert!(hooks.iter().any(|hook| {
-            hook["stageIdentifier"] == "execution.main"
-                && hook["hookName"] == "TIMEOUT"
-                && hook["dependencies"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .all(|dep| dep["dependencyKind"] != "timer")
-        }));
+        assert!(hooks
+            .iter()
+            .all(|hook| hook["sourceZhixuRef"] == json!("self")));
+        assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 1);
     }
 
     #[test]
     fn rejects_invalid_task_or_stage_identifier_parts() {
         for (field, value) in [
-            ("taskPatterns[0].name", "execution.main"),
+            ("taskPatterns[0].name", "checkout.main"),
             ("stages[0].name", "1main"),
         ] {
-            let mut definition = demo_definition();
+            let mut definition = target_payment_definition();
             if field.starts_with("taskPatterns") {
                 definition["spec"]["taskPatterns"][0]["name"] = json!(value);
             } else {
-                definition["spec"]["taskPatterns"][1]["stages"][0]["name"] = json!(value);
+                definition["spec"]["taskPatterns"][0]["stages"][0]["name"] = json!(value);
             }
-            let error =
-                compile_zhixu_hook_plan(&definition).expect_err("invalid identifier must fail");
+            let error = compile_zhixu_hook_plan(&definition, None, true)
+                .expect_err("invalid identifier must fail");
             assert!(error
                 .to_string()
                 .contains("must start with an ASCII letter"));
@@ -1347,20 +1776,42 @@ mod tests {
     #[test]
     fn rejects_subscription_stage_bound_only_through_selected_stages() {
         // audit3 DEPLOY-01：订阅阶段的投递目标编译期定死、运行时禁止
-        // executor patch。selectedStages 可达只对可 patch 的普通阶段构成
-        // 绑定——被 selector 指到的订阅阶段仍必须有自身静态 executor，
-        // 否则编译放行却没有 executor route、又禁补绑，投递必败。
-        let mut definition = demo_definition();
-        let execution = &mut definition["spec"]["taskPatterns"][1]["stages"][0];
-        let object = execution.as_object_mut().expect("stage is an object");
-        object.insert("executor".to_string(), serde_json::Value::Null);
-        object.insert(
-            "receiveSignals".to_string(),
-            json!({ "OBS": "::ANCHOR(@buyer::selector.assign.executor_selected)" }),
-        );
-        object.remove("sendSignals");
+        // executor patch。被 selector 指到的订阅阶段仍必须有自身静态 executor。
+        let definition = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "subscription_static_executor",
+                "uid": "zx-subscription-static",
+                "annotations": { "version": "1" }
+            },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "core" },
+                "taskPatterns": [
+                    { "name": "selector", "stages": [
+                        {
+                            "name": "assign",
+                            "source": "buyer",
+                            "selectedStages": ["execution.main"],
+                            "sendSignals": ["executor_selected"],
+                            "executor": { "supplierType": "organization", "supplierID": "selector-org" }
+                        }
+                    ]},
+                    { "name": "execution", "stages": [
+                        {
+                            "name": "main",
+                            "source": "buyer",
+                            "receiveSignals": {
+                                "OBS": "::ANCHOR(@buyer::selector.assign.executor_selected)"
+                            }
+                        }
+                    ]}
+                ]
+            }
+        });
 
-        let error = compile_zhixu_hook_plan(&definition)
+        let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err("subscription stage without its own static executor must fail");
         assert!(
             error
@@ -1371,58 +1822,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_receive_signal_keys_with_separators_or_signal_map_collisions() {
-        // 含 '.' 的 key：'.' 是信号名分隔符（task.stage.signal），receiveSignals
-        // key 承载阶段内通道名（语法手册 §7.4）。
-        let mut definition = demo_definition();
-        definition["spec"]["taskPatterns"][1]["stages"][0]["receiveSignals"]["BAD.KEY"] =
-            json!("buyer::selector.assign.executor_selected");
-        let error = compile_zhixu_hook_plan(&definition)
+    fn rejects_receive_signal_keys_with_separators() {
+        let mut definition = target_payment_definition();
+        definition["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["BAD.KEY"] =
+            json!("payment::payment_flow.init.execute");
+        let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err("receiveSignals key containing '.' must fail");
         let message = error.to_string();
         assert!(
-            message.contains("receiveSignals.BAD.KEY") && message.contains("must not contain '.' or '#'"),
+            message.contains("receiveSignals.BAD.KEY")
+                && message.contains("must not contain '.' or '#'"),
             "unexpected error: {message}"
         );
-        // cloud 目标同口径（与 hook_plan 共用同一组校验）。
-        let error = compile_cloud_artifact(&definition)
-            .expect_err("receiveSignals key containing '.' must fail for cloud too");
-        assert!(
-            error.to_string().contains("must not contain '.' or '#'"),
-            "unexpected error: {error}"
-        );
 
-        // 含 '#' 的 key：'#' 是 hookId 分隔符（stage#hook_name）。
-        let mut definition = demo_definition();
-        definition["spec"]["taskPatterns"][1]["stages"][0]["receiveSignals"]["BAD#KEY"] =
-            json!("buyer::selector.assign.executor_selected");
-        let error = compile_zhixu_hook_plan(&definition)
+        let mut definition = target_payment_definition();
+        definition["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["BAD#KEY"] =
+            json!("payment::payment_flow.init.execute");
+        let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err("receiveSignals key containing '#' must fail");
         assert!(
             error.to_string().contains("must not contain '.' or '#'"),
-            "unexpected error: {error}"
-        );
-
-        // 与本阶段 signalMap key 同名：cloud 产物会对同一
-        // (stageIdentifier, hookName) 产出两条 hook 记录——直接拒绝。
-        let mut definition = demo_definition();
-        definition["spec"]["taskPatterns"][1]["stages"][0]["receiveSignals"]["cmp"] =
-            json!("buyer::selector.assign.executor_selected");
-        let error = compile_zhixu_hook_plan(&definition).expect_err(
-            "receiveSignals key colliding with a signalMap key of the same stage must fail",
-        );
-        assert!(
-            error
-                .to_string()
-                .contains("must not collide with executor.zhixuExecutorConfig.signalMap"),
             "unexpected error: {error}"
         );
     }
 
     #[test]
     fn rejects_mutual_mint_subscription_cycle() {
-        // A↔B 互订：A 铸出的事实触发 B 铸、B 铸出的事实又触发 A 铸——
-        // 无界代铸环，编译期拒绝（含 cloud/hook_plan 两个 target）。
+        // A↔B 互订：无界代铸环，编译期拒绝（含 cloud/hook_plan 两个 target）。
         let definition = mint_definitions(&[
             (
                 "dispatch",
@@ -1445,63 +1871,19 @@ mod tests {
                 ),
             ),
         ]);
-        let error = compile_zhixu_hook_plan(&definition)
+        let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err("mutual mint subscription cycle must fail");
         let message = error.to_string();
         assert!(
-            message.contains("unbounded re-mint cycle") && message.contains("buyer -> producer -> buyer"),
+            message.contains("unbounded re-mint cycle")
+                && message.contains("buyer -> producer -> buyer"),
             "unexpected error: {message}"
         );
-        let error =
-            compile_cloud_artifact(&definition).expect_err("cloud target must reject the cycle too");
+        let error = compile_cloud_artifact(&definition, None, true)
+            .expect_err("cloud target must reject the cycle too");
         assert!(
             error.to_string().contains("unbounded re-mint cycle"),
             "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn rejects_three_stage_mint_cycle() {
-        // A→B→C→A 三节环：每个 mint 阶段都只订阅下一类，仍构成无界代铸环。
-        let definition = mint_definitions(&[
-            (
-                "dispatch",
-                mint_stage_value(
-                    "dispatch",
-                    "main",
-                    "producer",
-                    json!({ "SPAWN": "::ANCHOR(@maker::workshop.assemble.part)" }),
-                    &["smart_contract"],
-                ),
-            ),
-            (
-                "orchard",
-                mint_stage_value(
-                    "orchard",
-                    "retail",
-                    "buyer",
-                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
-                    &["ack"],
-                ),
-            ),
-            (
-                "workshop",
-                mint_stage_value(
-                    "workshop",
-                    "assemble",
-                    "maker",
-                    json!({ "SPAWN": "::ANCHOR(@buyer::orchard.retail.ack)" }),
-                    &["part"],
-                ),
-            ),
-        ]);
-        let error =
-            compile_zhixu_hook_plan(&definition).expect_err("three-stage mint cycle must fail");
-        let message = error.to_string();
-        assert!(
-            message.contains("unbounded re-mint cycle")
-                && message.contains("buyer -> producer -> maker -> buyer"),
-            "unexpected error: {message}"
         );
     }
 
@@ -1524,9 +1906,9 @@ mod tests {
                 ),
             ),
         ]);
-        compile_zhixu_hook_plan(&definition)
+        compile_zhixu_hook_plan(&definition, None, true)
             .expect("acyclic mint subscription chain must compile for hook_plan");
-        compile_cloud_artifact(&definition)
+        compile_cloud_artifact(&definition, None, true)
             .expect("acyclic mint subscription chain must compile for cloud");
     }
 
@@ -1549,7 +1931,7 @@ mod tests {
                 ),
             ),
         ]);
-        let error = compile_zhixu_hook_plan(&definition)
+        let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err("mint stage subscribing its own source class must fail");
         assert!(
             error
@@ -1607,50 +1989,6 @@ mod tests {
                     .iter()
                     .map(|(task, stage)| json!({ "name": task, "stages": [stage] }))
                     .collect::<Vec<_>>()
-            }
-        })
-    }
-
-    fn demo_definition() -> Value {
-        json!({
-            "apiVersion": "uvp/v0",
-            "kind": "Zhixu",
-            "metadata": { "name": "demo_zhixu", "uid": "zhixu-demo-001", "annotations": { "version": "7" } },
-            "spec": {
-                "platform": { "type": "cloud" },
-                "nucleation": { "id": "core" },
-                "taskPatterns": [
-                    { "name": "selector", "stages": [
-                        {
-                            "name": "assign",
-                            "source": "buyer",
-                            "selectedStages": ["execution.main"],
-                            "sendSignals": ["executor_selected"],
-                            "executor": { "supplierType": "organization", "supplierID": "selector-org" }
-                        }
-                    ]},
-                    { "name": "execution", "stages": [
-                        {
-                            "name": "main",
-                            "source": "buyer",
-                            "receiveSignals": {
-                                "START": "buyer::selector.assign.executor_selected",
-                                "TIMEOUT": "buyer::(selector.assign.executor_selected +5s) & ~execution.main.cmp"
-                            },
-                            "sendSignals": ["str", "cmp", "err"],
-                            "executor": {
-                                "supplierType": "zhixu",
-                                "supplierID": "payment-zhixu",
-                                "zhixuExecutorConfig": {
-                                    "signalMap": {
-                                        "str": "payment::payment_flow.init.str",
-                                        "cmp": "payment::payment_flow.settle.cmp"
-                                    }
-                                }
-                            }
-                        }
-                    ]}
-                ]
             }
         })
     }

@@ -154,7 +154,7 @@ Stage 字段总表（目标态）：
 | `mint` | 新增，可选，仅 `per-fact`；由出生阶段声明，是该类铸单的唯一声明点 |
 | `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
 | `sendSignals` | 保留 |
-| `executor` | 保留；委托（supplierType=zhixu + signalMap/triggerEntrance）原样 |
+| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target, order.idPolicy, inputMap, signalMap→端口名} |
 | `trigger` | **删除**（原必填入口表） |
 | `externalSignals` | **删除** |
 | `fileResources`、`selectedStages` | 保留 |
@@ -170,7 +170,7 @@ Stage 字段总表（目标态）：
 | 收购回流 | `::ANCHOR@(裸三段)` | 有锚阶段 + `ANCHOR(@…)`（按单路由） |
 | 观察入口（k=1） | k=1 MERGE | 无锚监听 + 单条 `ANCHOR(@…)` |
 | 交易所开门/关门 | 无（外部 trigger + 载体单） | match source 上一个发开门/关门事实的 stage，通道锚定 |
-| 委托 | signalMap + triggerEntrance | **不变** |
+| 委托 | 目标 dockInterface 端口 + inputMap/signalMap，独立子订单 | 支持 |
 
 ---
 

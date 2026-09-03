@@ -16,6 +16,10 @@ struct ProfileFixture {
     #[allow(dead_code)]
     portable: bool,
     input: Value,
+    /// 可选 dock resolution manifest（PRD94 §5.2）：含 zhixu executor 的
+    /// 可运行 fixture 必须内嵌 manifest。
+    #[serde(default)]
+    resolution_manifest: Option<Value>,
     expect: FixtureExpect,
 }
 
@@ -38,6 +42,9 @@ struct FixtureExpect {
     /// Assert `astJson.mode` per hookName on cloud-artifact success.
     #[serde(default)]
     cloud_hook_modes: Option<BTreeMap<String, String>>,
+    /// Assert `dockRoutes.len()` on hook_plan success.
+    #[serde(default)]
+    dock_route_count: Option<usize>,
 }
 
 use std::collections::BTreeMap;
@@ -82,6 +89,7 @@ fn run_fixture(fixture: &ProfileFixture) {
     let result = compile_request(&CompileRequest {
         target: fixture.target.clone(),
         definition: fixture.input.clone(),
+        resolution_manifest: fixture.resolution_manifest.clone(),
     });
     match (&fixture.expect.error_contains, result) {
         (Some(expected), Err(err)) => {
@@ -145,6 +153,17 @@ fn assert_success_fields(fixture: &ProfileFixture, value: &Value) {
                 fixture.name
             );
         }
+    }
+    if let Some(expected_count) = &fixture.expect.dock_route_count {
+        let actual = value["dockRoutes"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default();
+        assert_eq!(
+            &actual, expected_count,
+            "{} dock route count mismatch",
+            fixture.name
+        );
     }
     if let Some(expected_modes) = &fixture.expect.cloud_hook_modes {
         let hooks = value["hooks"]

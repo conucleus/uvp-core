@@ -765,7 +765,7 @@ fn validate_hook(expr: &Expr, profile: Profile) -> Result<()> {
     Ok(())
 }
 
-fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
+fn validate_anchors(expr: &Expr, _profile: Profile) -> Result<bool> {
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
         Expr::Not(inner) => {
@@ -784,7 +784,7 @@ fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
             if *duration_seconds <= 0 {
                 return Err(HookError::Message("delay must be positive".to_string()));
             }
-            let anchored = validate_anchors(expr, profile)?;
+            let anchored = validate_anchors(expr, _profile)?;
             if !anchored {
                 return Err(HookError::Message(
                     "delay requires a positive signal anchor".to_string(),
@@ -795,14 +795,14 @@ fn validate_anchors(expr: &Expr, profile: Profile) -> Result<bool> {
         Expr::And(terms) => {
             let mut anchored = false;
             for term in terms {
-                anchored |= validate_anchors(term, profile)?;
+                anchored |= validate_anchors(term, _profile)?;
             }
             Ok(anchored)
         }
         Expr::Or(terms) => {
             let mut anchored = false;
             for term in terms {
-                let term_anchored = validate_anchors(term, profile)?;
+                let term_anchored = validate_anchors(term, _profile)?;
                 if !term_anchored {
                     return Err(HookError::Message(
                         "each OR branch must contain a positive signal anchor".to_string(),
