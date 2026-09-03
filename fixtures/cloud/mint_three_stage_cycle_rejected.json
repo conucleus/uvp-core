@@ -1,0 +1,90 @@
+{
+  "name": "three-stage mint subscription cycle (A->B->C->A) is rejected as an unbounded re-mint cycle",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "mint_three_stage_cycle",
+      "uid": "fx-mintcycle-002",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "dispatch",
+          "stages": [
+            {
+              "name": "main",
+              "source": "producer",
+              "receiveSignals": {
+                "SPAWN": "::ANCHOR(@maker::workshop.assemble.part)"
+              },
+              "sendSignals": [
+                "smart_contract"
+              ],
+              "mint": "per-fact",
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "dispatch-main-executor"
+              }
+            }
+          ]
+        },
+        {
+          "name": "orchard",
+          "stages": [
+            {
+              "name": "retail",
+              "source": "buyer",
+              "receiveSignals": {
+                "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)"
+              },
+              "sendSignals": [
+                "ack"
+              ],
+              "mint": "per-fact",
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "orchard-retail-executor"
+              }
+            }
+          ]
+        },
+        {
+          "name": "workshop",
+          "stages": [
+            {
+              "name": "assemble",
+              "source": "maker",
+              "receiveSignals": {
+                "SPAWN": "::ANCHOR(@buyer::orchard.retail.ack)"
+              },
+              "sendSignals": [
+                "part"
+              ],
+              "mint": "per-fact",
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "workshop-assemble-executor"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "errorContains": "mint subscriptions form an unbounded re-mint cycle"
+  }
+}

@@ -494,13 +494,16 @@ fn stage_is_subscription(stage: &ZhixuStage) -> bool {
 
 fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
-    // 编译期固定四件事（模-1/模-2 裁决）：
+    // 编译期固定五件事（模-1/模-2 裁决）：
     // 1) mint 取值合法（当前仅 per-fact）；
     // 2) mint 阶段必须编译期静态绑定非委托执行者（运行时 patch 对出生阶段
     //    一律拒绝）；
     // 3) 出生入口只能是 ANCHOR 订阅（跨类事实携带溯源进入；"附加单正普通
     //    hook"形态已废除——普通 hook 在铸单前没有可求值的订单上下文）；
-    // 4) 防无界代铸链：mint 阶段的订阅目标不得指向本阶段自己的 source 类。
+    // 4) 防无界代铸链：mint 阶段的订阅目标不得指向本阶段自己的 source 类；
+    // 5) 防跨源代铸环：全部 mint 阶段的订阅目标 source 类构成的有向图
+    //    （含委托 signalMap 对译后的最终远端类）不得存在可达环——见
+    //    validate_mint_subscription_cycles。
     // 其余阶段是否"有锚"由运行时按对接记录路由自然裁决：存在订单实例则
     // 按单投递（域内血缘/dock 边），不存在实例则按类扇入。执行器自发 str
     // 出的订单编译期不可见，因此不在此做静态锚定判断。
@@ -578,7 +581,123 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
             }
         }
     }
+    // 5) 防跨源代铸环（源类级统一环检测，直连自环已在上面按条上报）。
+    issues.extend(validate_mint_subscription_cycles(entries));
     issues
+}
+
+/// mint 跨源代铸环检测（源类级）：收集全部 mint 阶段的订阅目标 source 类，
+/// 构建有向边（本 stage.source → 订阅目标 source；订阅目标阶段若经 zhixu
+/// 委托 signalMap 对译，则追加最终远端 source 类边），检测可达环
+/// （A→B→A、A→B→C→A）。成环意味着代铸事实在源类之间互相触发、永不收敛
+/// ——per-fact mint 构成无界代铸环，编译期直接拒绝。
+fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
+    let delegation_remotes = delegation_remote_sources(entries);
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for entry in entries {
+        if entry.stage.mint.is_none() {
+            continue;
+        }
+        let source = entry.stage.source.clone();
+        for raw_expression in entry.stage.receive_signals.values() {
+            // 解析失败的条目不构边：语法错误由引用存在性校验统一上报。
+            let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
+                continue;
+            };
+            // 非订阅条目由 validate_mint_anchors 上报；直连自环（订阅自身
+            // source 类）也已按条上报，这里不重复构边。
+            let Some(target) = &parsed.subscription_target else {
+                continue;
+            };
+            if target.source != source {
+                edges
+                    .entry(source.clone())
+                    .or_default()
+                    .insert(target.source.clone());
+            }
+            // 委托对译：订阅目标阶段经 signalMap 把信号映射到远端 source 类
+            // 时，注入 mint 的事实的最终来源是远端类——按远端类补边（含
+            // 映射回本类形成的自环，统一由环检测上报）。
+            if let Some((stage_identifier, _)) = parse_signal_reference(&target.signal_name) {
+                for remote in delegation_remotes.get(&stage_identifier).into_iter().flatten() {
+                    edges
+                        .entry(source.clone())
+                        .or_default()
+                        .insert(remote.clone());
+                }
+            }
+        }
+    }
+    match find_first_cycle(&edges) {
+        Some(cycle) => vec![format!(
+            "mint subscriptions form an unbounded re-mint cycle (mint 订阅构成无界代铸环): {}",
+            cycle.join(" -> ")
+        )],
+        None => Vec::new(),
+    }
+}
+
+/// stage_identifier → 该阶段 zhixu 委托 signalMap 对译出的远端 source 类
+/// 集合。signalMap 是跨域委托接缝上的对译表：hook 的 source 即被委托域。
+/// 解析失败的条目不计（错误由 validate_signal_maps 统一上报）。
+fn delegation_remote_sources(entries: &[StageEntry]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut remotes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for entry in entries {
+        let signal_map = stage_signal_map(entry.stage.executor.as_ref());
+        let Some(signal_map) = signal_map else {
+            continue;
+        };
+        let mut sources = BTreeSet::new();
+        for raw in signal_map.values() {
+            let Some(raw_expression) = raw.as_str() else {
+                continue;
+            };
+            if let Ok(hook) = parse_hook_for_compiler("HOOK", raw_expression) {
+                sources.insert(hook.source);
+            }
+        }
+        if !sources.is_empty() {
+            remotes.insert(entry.stage_identifier.clone(), sources);
+        }
+    }
+    remotes
+}
+
+/// 在 source 类有向图中找第一个可达环并回溯出完整路径（BFS + 父指针，
+/// 节点遍历顺序确定保证诊断确定；迭代实现避免毒定义撑爆调用栈）。
+fn find_first_cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
+    for start in edges.keys() {
+        let mut parents: BTreeMap<String, String> = BTreeMap::new();
+        let mut queue: VecDeque<&String> = VecDeque::new();
+        for next in edges.get(start).into_iter().flatten() {
+            if next == start {
+                return Some(vec![start.clone(), start.clone()]);
+            }
+            if parents.insert(next.clone(), start.clone()).is_none() {
+                queue.push_back(next);
+            }
+        }
+        while let Some(current) = queue.pop_front() {
+            for next in edges.get(current).into_iter().flatten() {
+                if *next == *start {
+                    // 回到起点：start -> … -> current -> start
+                    let mut cycle = vec![current.clone()];
+                    let mut node = current.clone();
+                    while node != *start {
+                        node = parents[&node].clone();
+                        cycle.push(node.clone());
+                    }
+                    cycle.reverse();
+                    cycle.push(start.clone());
+                    return Some(cycle);
+                }
+                if parents.insert(next.clone(), current.clone()).is_none() {
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn validate_receive_signal_references(entries: &[StageEntry]) -> Vec<String> {
@@ -1298,6 +1417,198 @@ mod tests {
                 .contains("must not collide with executor.zhixuExecutorConfig.signalMap"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn rejects_mutual_mint_subscription_cycle() {
+        // A↔B 互订：A 铸出的事实触发 B 铸、B 铸出的事实又触发 A 铸——
+        // 无界代铸环，编译期拒绝（含 cloud/hook_plan 两个 target）。
+        let definition = mint_definitions(&[
+            (
+                "dispatch",
+                mint_stage_value(
+                    "dispatch",
+                    "main",
+                    "producer",
+                    json!({ "SPAWN": "::ANCHOR(@buyer::orchard.retail.ack)" }),
+                    &["smart_contract"],
+                ),
+            ),
+            (
+                "orchard",
+                mint_stage_value(
+                    "orchard",
+                    "retail",
+                    "buyer",
+                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
+                    &["ack"],
+                ),
+            ),
+        ]);
+        let error = compile_zhixu_hook_plan(&definition)
+            .expect_err("mutual mint subscription cycle must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("unbounded re-mint cycle") && message.contains("buyer -> producer -> buyer"),
+            "unexpected error: {message}"
+        );
+        let error =
+            compile_cloud_artifact(&definition).expect_err("cloud target must reject the cycle too");
+        assert!(
+            error.to_string().contains("unbounded re-mint cycle"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_three_stage_mint_cycle() {
+        // A→B→C→A 三节环：每个 mint 阶段都只订阅下一类，仍构成无界代铸环。
+        let definition = mint_definitions(&[
+            (
+                "dispatch",
+                mint_stage_value(
+                    "dispatch",
+                    "main",
+                    "producer",
+                    json!({ "SPAWN": "::ANCHOR(@maker::workshop.assemble.part)" }),
+                    &["smart_contract"],
+                ),
+            ),
+            (
+                "orchard",
+                mint_stage_value(
+                    "orchard",
+                    "retail",
+                    "buyer",
+                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
+                    &["ack"],
+                ),
+            ),
+            (
+                "workshop",
+                mint_stage_value(
+                    "workshop",
+                    "assemble",
+                    "maker",
+                    json!({ "SPAWN": "::ANCHOR(@buyer::orchard.retail.ack)" }),
+                    &["part"],
+                ),
+            ),
+        ]);
+        let error =
+            compile_zhixu_hook_plan(&definition).expect_err("three-stage mint cycle must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("unbounded re-mint cycle")
+                && message.contains("buyer -> producer -> maker -> buyer"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn allows_acyclic_mint_subscription_chain() {
+        // A→B 不回指：出生订阅链无环时必须照常放行。
+        let definition = mint_definitions(&[
+            (
+                "dispatch",
+                emitter_stage_value("dispatch", "main", "producer", &["smart_contract"]),
+            ),
+            (
+                "orchard",
+                mint_stage_value(
+                    "orchard",
+                    "retail",
+                    "buyer",
+                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
+                    &["ack"],
+                ),
+            ),
+        ]);
+        compile_zhixu_hook_plan(&definition)
+            .expect("acyclic mint subscription chain must compile for hook_plan");
+        compile_cloud_artifact(&definition)
+            .expect("acyclic mint subscription chain must compile for cloud");
+    }
+
+    #[test]
+    fn still_rejects_mint_stage_subscribing_its_own_source() {
+        // 直连自环（mint 阶段订阅自身 source 类）保持既有按条报错口径。
+        let definition = mint_definitions(&[
+            (
+                "dispatch",
+                emitter_stage_value("dispatch", "main", "producer", &["smart_contract"]),
+            ),
+            (
+                "orchard",
+                mint_stage_value(
+                    "orchard",
+                    "retail",
+                    "producer",
+                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
+                    &["ack"],
+                ),
+            ),
+        ]);
+        let error = compile_zhixu_hook_plan(&definition)
+            .expect_err("mint stage subscribing its own source class must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("must not subscribe its own source class"),
+            "unexpected error: {error}"
+        );
+    }
+
+    fn mint_stage_value(
+        task: &str,
+        name: &str,
+        source: &str,
+        receive_signals: Value,
+        send_signals: &[&str],
+    ) -> Value {
+        json!({
+            "name": name,
+            "source": source,
+            "receiveSignals": receive_signals,
+            "sendSignals": send_signals,
+            "mint": "per-fact",
+            "executor": {
+                "supplierType": "organization",
+                "supplierID": format!("{task}-{name}-executor")
+            }
+        })
+    }
+
+    fn emitter_stage_value(task: &str, name: &str, source: &str, send_signals: &[&str]) -> Value {
+        json!({
+            "name": name,
+            "source": source,
+            "sendSignals": send_signals,
+            "executor": {
+                "supplierType": "organization",
+                "supplierID": format!("{task}-{name}-executor")
+            }
+        })
+    }
+
+    fn mint_definitions(stages: &[(&str, Value)]) -> Value {
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "mint_cycle",
+                "uid": "zhixu-mint-cycle-001",
+                "annotations": { "version": "1" }
+            },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "core" },
+                "taskPatterns": stages
+                    .iter()
+                    .map(|(task, stage)| json!({ "name": task, "stages": [stage] }))
+                    .collect::<Vec<_>>()
+            }
+        })
     }
 
     fn demo_definition() -> Value {
