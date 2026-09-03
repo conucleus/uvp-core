@@ -96,6 +96,7 @@ pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
         &selected_stage_bindings,
     ));
     validation_issues.extend(validate_mint_anchors(&stage_entries));
+    validation_issues.extend(validate_receive_signal_keys(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(&stage_entries));
     validation_issues.extend(validate_signal_maps(&stage_entries));
     if !validation_issues.is_empty() {
@@ -167,6 +168,7 @@ pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
     // 与 hook_plan 目标共用同一组校验：同一份定义不允许"一个 target 收、
     // 另一个放"，否则 Go 主链路会拿到被 hook_plan 拒绝的定义的产物。
     validation_issues.extend(validate_signal_maps(&stage_entries));
+    validation_issues.extend(validate_receive_signal_keys(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(&stage_entries));
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(validation_issues.join("; ")));
@@ -599,6 +601,53 @@ fn validate_receive_signal_references(entries: &[StageEntry]) -> Vec<String> {
         }
     }
     issues
+}
+
+// receiveSignals key 即阶段内 hook_name，落 hook_name 列（VARCHAR(36)）。
+// 与 signalMap key 同构约束（语法手册 §7.4："key 不可为空且不能含 '.'"）：
+// '.' 是信号名分隔符（task.stage.signal）；'#' 是 hookId 分隔符
+// （stage#hook_name）——key 携带任一分隔符都会让 hookId 命名空间含混，
+// 且不含 '.' 已保证 receive key 不可能拼出 signalMap hook 的 hookId
+// （stage#signalMap.<key>）。key 与本阶段 signalMap key 同名时，cloud
+// 产物会对同一 (stageIdentifier, hookName) 产出两条 hook 记录，直接拒绝。
+fn validate_receive_signal_keys(entries: &[StageEntry]) -> Vec<String> {
+    let mut issues = Vec::new();
+    for entry in entries {
+        let signal_map_keys: BTreeSet<&str> = stage_signal_map(entry.stage.executor.as_ref())
+            .map(|signal_map| signal_map.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        for hook_name in entry.stage.receive_signals.keys() {
+            if hook_name.trim().is_empty() {
+                issues.push(format!(
+                    "{}.receiveSignals contains an empty hook name",
+                    entry.stage_identifier
+                ));
+                continue;
+            }
+            if hook_name.contains('.') || hook_name.contains('#') || hook_name.len() > 36 {
+                issues.push(format!(
+                    "{}.receiveSignals.{hook_name} is invalid: key must be 1-36 bytes and must not contain '.' or '#'",
+                    entry.stage_identifier
+                ));
+                continue;
+            }
+            if signal_map_keys.contains(hook_name.as_str()) {
+                issues.push(format!(
+                    "{}.receiveSignals.{hook_name} is invalid: key must not collide with executor.zhixuExecutorConfig.signalMap key of the same stage",
+                    entry.stage_identifier
+                ));
+            }
+        }
+    }
+    issues
+}
+
+fn stage_signal_map(executor: Option<&Value>) -> Option<&Map<String, Value>> {
+    executor
+        .filter(|executor| executor.get("supplierType").and_then(Value::as_str) == Some("zhixu"))
+        .and_then(|executor| executor.get("zhixuExecutorConfig"))
+        .and_then(|value| value.get("signalMap"))
+        .and_then(Value::as_object)
 }
 
 fn validate_signal_maps(entries: &[StageEntry]) -> Vec<String> {
@@ -1198,6 +1247,55 @@ mod tests {
             error
                 .to_string()
                 .contains("requires its own static executor"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_receive_signal_keys_with_separators_or_signal_map_collisions() {
+        // 含 '.' 的 key：'.' 是信号名分隔符（task.stage.signal），receiveSignals
+        // key 承载阶段内通道名（语法手册 §7.4）。
+        let mut definition = demo_definition();
+        definition["spec"]["taskPatterns"][1]["stages"][0]["receiveSignals"]["BAD.KEY"] =
+            json!("buyer::selector.assign.executor_selected");
+        let error = compile_zhixu_hook_plan(&definition)
+            .expect_err("receiveSignals key containing '.' must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("receiveSignals.BAD.KEY") && message.contains("must not contain '.' or '#'"),
+            "unexpected error: {message}"
+        );
+        // cloud 目标同口径（与 hook_plan 共用同一组校验）。
+        let error = compile_cloud_artifact(&definition)
+            .expect_err("receiveSignals key containing '.' must fail for cloud too");
+        assert!(
+            error.to_string().contains("must not contain '.' or '#'"),
+            "unexpected error: {error}"
+        );
+
+        // 含 '#' 的 key：'#' 是 hookId 分隔符（stage#hook_name）。
+        let mut definition = demo_definition();
+        definition["spec"]["taskPatterns"][1]["stages"][0]["receiveSignals"]["BAD#KEY"] =
+            json!("buyer::selector.assign.executor_selected");
+        let error = compile_zhixu_hook_plan(&definition)
+            .expect_err("receiveSignals key containing '#' must fail");
+        assert!(
+            error.to_string().contains("must not contain '.' or '#'"),
+            "unexpected error: {error}"
+        );
+
+        // 与本阶段 signalMap key 同名：cloud 产物会对同一
+        // (stageIdentifier, hookName) 产出两条 hook 记录——直接拒绝。
+        let mut definition = demo_definition();
+        definition["spec"]["taskPatterns"][1]["stages"][0]["receiveSignals"]["cmp"] =
+            json!("buyer::selector.assign.executor_selected");
+        let error = compile_zhixu_hook_plan(&definition).expect_err(
+            "receiveSignals key colliding with a signalMap key of the same stage must fail",
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("must not collide with executor.zhixuExecutorConfig.signalMap"),
             "unexpected error: {error}"
         );
     }
