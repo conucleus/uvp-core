@@ -1199,7 +1199,7 @@ mod tests {
             evaluate_hook(&mut order, &silent_trigger, "2026-04-27T00:00:00.000Z")
                 .expect("silent trigger should evaluate");
         assert!(trigger_observations.is_empty());
-        assert_eq!(order.materialized_stages["flow.start"], true);
+        assert!(order.materialized_stages["flow.start"]);
         assert_eq!(order.hook_statuses["flow.start#SILENT"].status, "reg");
         assert!(!order.hook_statuses["flow.start#SILENT"].ready_emitted);
 
