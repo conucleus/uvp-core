@@ -29,14 +29,22 @@
               "source": "seller",
               "sendSignals": [
                 "cmp"
-              ]
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "seller-org"
+              }
             },
             {
               "name": "intent",
               "source": "buyer",
               "sendSignals": [
                 "cmp"
-              ]
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "buyer-org"
+              }
             }
           ]
         },
@@ -52,7 +60,11 @@
               },
               "sendSignals": [
                 "paired"
-              ]
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "match-org"
+              }
             }
           ]
         }

@@ -229,6 +229,11 @@ pub fn compile_cloud_artifact(
         .iter()
         .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
         .collect::<Vec<_>>();
+    let stage_ids = stage_entries
+        .iter()
+        .map(|entry| entry.stage_identifier.clone())
+        .collect::<BTreeSet<_>>();
+    let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
     let dock_state = compile_dock_state(
         &definition,
         &stage_pairs,
@@ -238,6 +243,14 @@ pub fn compile_cloud_artifact(
     )?;
 
     let mut validation_issues = Vec::new();
+    // Cloud and hook_plan are two artifact profiles over the same definition;
+    // both must enforce the static-executor/selectedStages contract.  Without
+    // this call cloud could publish a subscription stage that hook_plan would
+    // reject (or, worse, a stage that runtime patching can never bind).
+    validation_issues.extend(validate_stage_executors(
+        &stage_entries,
+        &selected_stage_bindings,
+    ));
     validation_issues.extend(validate_mint_anchors(&stage_entries));
     // 与 hook_plan 目标共用同一组校验：同一份定义不允许"一个 target 收、
     // 另一个放"，否则 Go 主链路会拿到被 hook_plan 拒绝的定义的产物。
@@ -1818,6 +1831,15 @@ mod tests {
                 .to_string()
                 .contains("requires its own static executor"),
             "unexpected error: {error}"
+        );
+
+        let error = compile_cloud_artifact(&definition, None, true)
+            .expect_err("cloud target must enforce the same static executor contract");
+        assert!(
+            error
+                .to_string()
+                .contains("requires its own static executor"),
+            "unexpected cloud error: {error}"
         );
     }
 

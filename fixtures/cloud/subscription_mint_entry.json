@@ -29,7 +29,11 @@
               "source": "test_executor",
               "sendSignals": [
                 "smart_contract"
-              ]
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "dispatch-org"
+              }
             }
           ]
         },
