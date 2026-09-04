@@ -29,7 +29,11 @@
               "source": "farmer",
               "sendSignals": [
                 "settled"
-              ]
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "farmer-org"
+              }
             }
           ]
         },
@@ -44,7 +48,11 @@
               },
               "sendSignals": [
                 "collected"
-              ]
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "harvest-org"
+              }
             }
           ]
         }
