@@ -18,7 +18,9 @@
 //!   （字节序取小者为左）；叶子列表先按字节升序排序再建树。
 //! - 枚举 word：input kind 0=signal/1=entrance；access 0=open/1=permit/
 //!   2=linked；terminal 0=none/1=success/2=failure/3=cancelled；
-//!   idPolicy 0=derived-v1。
+//!   idPolicy 0=derived-v1。派生 linked order 的最高位是 dock 专用
+//!   namespace 标记；普通 MINT/trigger-order 路径必须拒绝该 namespace，
+//!   以免公开的确定性 linkedOrderId 被抢先注册。
 
 use serde_json::{json, Map, Value};
 use sha3::{Digest, Keccak256};
@@ -56,6 +58,11 @@ pub const DOMAIN_OUTPUT_BINDING: &str = "UVP_DOCK_OUTPUT_BINDING_V1";
 pub const DOMAIN_ROUTE: &str = "UVP_DOCK_ROUTE_V1";
 pub const DOMAIN_DOCK_INSTANCE: &str = "UVP_DOCK_INSTANCE_V1";
 pub const DOMAIN_DOCK_ORDER: &str = "UVP_DOCK_ORDER_V1";
+/// Highest bit reserved for deterministically-derived dock child orders.
+/// Keeping the namespace bit outside the hash preimage preserves the existing
+/// commitment inputs while making public MINT order creation disjoint from
+/// dock creation.
+pub const DOCK_ORDER_NAMESPACE_MASK: u8 = 0x80;
 pub const DOMAIN_RUNTIME_EIP155: &str = "UVP_RUNTIME_EIP155_V1";
 pub const DOMAIN_RUNTIME_CLOUD: &str = "UVP_RUNTIME_CLOUD_V1";
 pub const DOMAIN_INPUT_PAYLOAD: &str = "UVP_DOCK_INPUT_PAYLOAD_V1";
@@ -316,10 +323,12 @@ pub fn dock_instance_id(
 }
 
 pub fn linked_order_id(dock_instance_id: &Word, target_definition_ref: &Word) -> Word {
-    keccak_words(
+    let mut linked = keccak_words(
         DOMAIN_DOCK_ORDER,
         &[*dock_instance_id, *target_definition_ref],
-    )
+    );
+    linked[0] |= DOCK_ORDER_NAMESPACE_MASK;
+    linked
 }
 
 /// Dock input envelope payload hash（PRD95 §3.1）。全部字段 word 化；
