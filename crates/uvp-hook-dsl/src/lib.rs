@@ -1562,7 +1562,7 @@ impl<'a> Parser<'a> {
             )));
         }
         let target_raw = self.read_balanced_target()?;
-        let target = target_raw.strip_prefix('@').map(str::trim).ok_or_else(|| {
+        let target = target_raw.strip_prefix('@').ok_or_else(|| {
             HookError::Message(format!(
                 "subscription target must be @source::task.stage.signal: {target_raw:?}"
             ))
@@ -1572,10 +1572,10 @@ impl<'a> Parser<'a> {
                 "subscription target must be @source::task.stage.signal: {target_raw:?}"
             ))
         })?;
-        let source = source.trim();
-        let signal = signal.trim();
         // source 类命名空间复用普通标识符扫描规则：字符集 [A-Za-z0-9_-]，
-        // 拒绝空格、括号、额外 :: 分隔与非 ASCII 字符。
+        // 拒绝空格、括号、额外 :: 分隔与非 ASCII 字符。这里故意不 trim：
+        // `ANCHOR` 的目标是一个严格 token，内部空格不能被规范化后放行，
+        // 否则不同运行时可能对同一份原文产生不同的 signal key。
         if !is_plain_identifier(source) {
             return Err(HookError::Message(format!(
                 "subscription source must be a plain identifier: {source:?}"
@@ -1610,7 +1610,7 @@ impl<'a> Parser<'a> {
             } else if ch == ')' {
                 depth -= 1;
                 if depth == 0 {
-                    return Ok(self.input[start..self.index - 1].trim().to_string());
+                    return Ok(self.input[start..self.index - 1].to_string());
                 }
             }
         }
@@ -2261,6 +2261,11 @@ mod tests {
             "::ANCHOR(@seller::listing.cmp)",
             "::ANCHOR(@::trade.listing.cmp)",
             "::ANCHOR(@seller names::trade.listing.cmp)",
+            "::ANCHOR(@ seller::trade.listing.cmp)",
+            "::ANCHOR(@seller ::trade.listing.cmp)",
+            "::ANCHOR(@seller:: trade.listing.cmp)",
+            "::ANCHOR(@seller::trade.listing.cmp )",
+            "::ANCHOR( @seller::trade.listing.cmp)",
             "wholesaler::ANCHOR(@seller::trade.listing.cmp)",
             "::ANCHOR@(farmer.main.settle)",
         ] {

@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 use uvp_compiler::{compile_request, CompileRequest};
+use uvp_hook_dsl::SEMANTIC_VERSION;
+use uvp_ir::canonical_stringify;
 
 /// Profile-level compilation fixtures live in `fixtures/{zhixu,cloud,evm}` and
 /// follow the declaration shape promised by init_prd §8: name, semanticVersion,
@@ -10,7 +12,6 @@ use uvp_compiler::{compile_request, CompileRequest};
 #[serde(rename_all = "camelCase")]
 struct ProfileFixture {
     name: String,
-    #[allow(dead_code)]
     semantic_version: String,
     target: String,
     #[allow(dead_code)]
@@ -110,6 +111,13 @@ fn run_fixture(fixture: &ProfileFixture) {
 }
 
 fn assert_success_fields(fixture: &ProfileFixture, value: &Value) {
+    assert_eq!(
+        fixture.semantic_version, SEMANTIC_VERSION,
+        "{} fixture semanticVersion is not supported by this core",
+        fixture.name
+    );
+    assert_artifact_invariants(fixture, value);
+
     if let Some(platform) = &fixture.expect.platform {
         assert_eq!(
             value["platform"]["type"].as_str().unwrap_or_default(),
@@ -191,4 +199,74 @@ fn assert_success_fields(fixture: &ProfileFixture, value: &Value) {
             );
         }
     }
+}
+
+fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
+    let canonical = canonical_stringify(value)
+        .unwrap_or_else(|err| panic!("{} artifact is not canonical JSON: {err}", fixture.name));
+    let rerun = compile_request(&CompileRequest {
+        target: fixture.target.clone(),
+        definition: fixture.input.clone(),
+        resolution_manifest: fixture.resolution_manifest.clone(),
+    })
+    .unwrap_or_else(|err| {
+        panic!(
+            "{} changed from success on deterministic rerun: {err}",
+            fixture.name
+        )
+    });
+    assert_eq!(
+        canonical,
+        canonical_stringify(&rerun).expect("rerun artifact should be canonical JSON"),
+        "{} artifact canonical serialization is not deterministic",
+        fixture.name
+    );
+
+    match fixture.target.as_str() {
+        "hook_plan" | "evm" => {
+            assert_eq!(
+                value["schemaVersion"], "uvp.hookPlan.v2",
+                "{}",
+                fixture.name
+            );
+            assert_non_empty_string(value, "planId", fixture);
+            assert_non_empty_string(value, "zhixuId", fixture);
+            assert_non_empty_string(value, "version", fixture);
+            assert_word(value, "planId", fixture);
+            assert_word(value, "planHash", fixture);
+        }
+        "cloud" | "cloud_db" => {
+            assert_eq!(
+                value["schemaVersion"], "uvp.cloudArtifact.v2",
+                "{}",
+                fixture.name
+            );
+            assert_non_empty_string(value, "zhixuName", fixture);
+        }
+        other => panic!("{} has unsupported success target {other:?}", fixture.name),
+    }
+
+    assert_word(value, "dockRoutesRoot", fixture);
+    assert_word(value, "dockInterfaceRoot", fixture);
+}
+
+fn assert_non_empty_string(value: &Value, field: &str, fixture: &ProfileFixture) {
+    assert!(
+        value[field]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty()),
+        "{} artifact field {field} must be a non-empty string",
+        fixture.name
+    );
+}
+
+fn assert_word(value: &Value, field: &str, fixture: &ProfileFixture) {
+    let word = value[field].as_str().unwrap_or_default();
+    assert!(
+        word.starts_with("0x")
+            && word.len() == 66
+            && word[2..].chars().all(|ch| ch.is_ascii_hexdigit()),
+        "{} artifact field {field} must be a 32-byte 0x-prefixed word, got {word:?}",
+        fixture.name
+    );
 }

@@ -646,6 +646,7 @@
           "blockNumber": 3,
           "logIndex": 0,
           "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a01",
           "zhixuId": "corpus-replay",
           "orderId": "order-1",
           "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d01",
@@ -659,6 +660,7 @@
           "blockNumber": 4,
           "logIndex": 0,
           "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a01",
           "zhixuId": "corpus-replay",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b01",
@@ -670,6 +672,7 @@
           "blockNumber": 5,
           "logIndex": 0,
           "transactionHash": "0x05",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a01",
           "zhixuId": "corpus-replay",
           "orderId": "order-1",
           "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d01",
@@ -680,7 +683,7 @@
         }
       ],
       "expect": {
-        "orderKey": "corpus-replay::order-1",
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a01::order-1",
         "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f01",
         "senderId": "first-writer",
         "eventId": "3:0:0x03",
@@ -743,6 +746,7 @@
           "blockNumber": 3,
           "logIndex": 0,
           "transactionHash": "0x13",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
           "zhixuId": "corpus-replay-timer",
           "orderId": "order-1",
           "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d02",
@@ -756,6 +760,7 @@
           "blockNumber": 4,
           "logIndex": 0,
           "transactionHash": "0x14",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
           "zhixuId": "corpus-replay-timer",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
@@ -767,6 +772,7 @@
           "blockNumber": 5,
           "logIndex": 0,
           "transactionHash": "0x15",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
           "zhixuId": "corpus-replay-timer",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
@@ -777,6 +783,7 @@
           "blockNumber": 6,
           "logIndex": 0,
           "transactionHash": "0x16",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a02",
           "zhixuId": "corpus-replay-timer",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
@@ -785,7 +792,7 @@
         }
       ],
       "expect": {
-        "orderKey": "corpus-replay-timer::order-1",
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a02::order-1",
         "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f02",
         "senderId": "pay-executor",
         "eventId": "3:0:0x13",
@@ -797,7 +804,7 @@
         ],
         "waitDueAt": "2026-04-27T00:00:05.000Z",
         "finalHookStatuses": {
-          "corpus-replay-timer::order-1": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a02::order-1": {
             "0x0000000000000000000000000000000000000000000000000000000000000b02": "reg"
           }
         }
@@ -870,6 +877,7 @@
           "blockNumber": 3,
           "logIndex": 0,
           "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a03",
           "zhixuId": "corpus-replay-negative",
           "orderId": "order-1",
           "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d04",
@@ -883,6 +891,7 @@
           "blockNumber": 4,
           "logIndex": 0,
           "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a03",
           "zhixuId": "corpus-replay-negative",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b03",
@@ -893,6 +902,7 @@
           "blockNumber": 5,
           "logIndex": 0,
           "transactionHash": "0x25",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a03",
           "zhixuId": "corpus-replay-negative",
           "orderId": "order-1",
           "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d03",
@@ -903,7 +913,7 @@
         }
       ],
       "expect": {
-        "orderKey": "corpus-replay-negative::order-1",
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a03::order-1",
         "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f04",
         "senderId": "refund-sender",
         "eventId": "3:0:0x23",
@@ -913,7 +923,7 @@
           "HookStatusChanged"
         ],
         "finalHookStatuses": {
-          "corpus-replay-negative::order-1": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a03::order-1": {
             "0x0000000000000000000000000000000000000000000000000000000000000b03": "cxl"
           }
         }
@@ -990,6 +1000,7 @@
           "blockNumber": 3,
           "logIndex": 0,
           "transactionHash": "0x33",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
           "zhixuId": "corpus-replay-delay-cancel",
           "orderId": "order-1",
           "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d05",
@@ -1003,6 +1014,7 @@
           "blockNumber": 4,
           "logIndex": 0,
           "transactionHash": "0x34",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
           "zhixuId": "corpus-replay-delay-cancel",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
@@ -1014,6 +1026,7 @@
           "blockNumber": 5,
           "logIndex": 0,
           "transactionHash": "0x35",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
           "zhixuId": "corpus-replay-delay-cancel",
           "orderId": "order-1",
           "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
@@ -1027,6 +1040,7 @@
           "blockNumber": 6,
           "logIndex": 0,
           "transactionHash": "0x36",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a04",
           "zhixuId": "corpus-replay-delay-cancel",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
@@ -1034,7 +1048,7 @@
         }
       ],
       "expect": {
-        "orderKey": "corpus-replay-delay-cancel::order-1",
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a04::order-1",
         "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
         "senderId": "refund-sender",
         "eventId": "5:0:0x35",
@@ -1046,7 +1060,7 @@
         ],
         "waitDueAt": "2026-04-27T00:00:05.000Z",
         "finalHookStatuses": {
-          "corpus-replay-delay-cancel::order-1": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a04::order-1": {
             "0x0000000000000000000000000000000000000000000000000000000000000b04": "cxl"
           }
         }

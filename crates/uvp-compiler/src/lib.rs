@@ -479,8 +479,8 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     if definition.kind != "Zhixu" {
         issues.push("kind must be Zhixu".to_string());
     }
-    if definition.metadata.name.is_empty() {
-        issues.push("metadata.name is required".to_string());
+    if definition.metadata.name.trim().is_empty() {
+        issues.push("metadata.name must be non-empty".to_string());
     }
     if definition.spec.platform.platform_type.trim().is_empty() {
         issues.push("spec.platform must be an object with a non-empty type".to_string());
@@ -1713,6 +1713,7 @@ mod tests {
             compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
                 .expect_err("route cycle must fail");
         assert!(error.to_string().contains("D015"), "{}", error.to_string());
+
     }
 
     #[test]
@@ -1770,6 +1771,22 @@ mod tests {
             assert!(error
                 .to_string()
                 .contains("must start with an ASCII letter"));
+        }
+    }
+
+    #[test]
+    fn rejects_empty_or_whitespace_metadata_name() {
+        for name in ["", "   ", "\t"] {
+            let mut definition = target_payment_definition();
+            definition["metadata"]["name"] = json!(name);
+            let error = compile_zhixu_hook_plan(&definition, None, true)
+                .expect_err("metadata.name must not be empty or whitespace");
+            assert!(
+                error
+                    .to_string()
+                    .contains("metadata.name must be non-empty"),
+                "unexpected error for {name:?}: {error}"
+            );
         }
     }
 

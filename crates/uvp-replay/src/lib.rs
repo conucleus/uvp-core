@@ -76,12 +76,13 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                 state.plans.insert(plan_id, plan);
             }
             "OrderRegistered" => {
+                let plan_id = value_str(event, "planId")?.to_string();
                 let zhixu_id = value_str(event, "zhixuId")?.to_string();
                 let order_id = value_str(event, "orderId")?.to_string();
                 state.orders.insert(
-                    order_key(&zhixu_id, &order_id),
+                    order_key(&plan_id, &order_id),
                     OracleOrderState {
-                        plan_id: value_str(event, "planId")?.to_string(),
+                        plan_id,
                         zhixu_id,
                         order_id,
                         signals: BTreeMap::new(),
@@ -211,11 +212,14 @@ fn parse_replay_request(input: &str) -> Result<(Vec<Value>, ReplayOptions)> {
 }
 
 fn record_signal_and_evaluate(state: &mut OracleState, event: &Value) -> Result<Vec<Value>> {
+    let plan_id = value_str(event, "planId")?;
     let zhixu_id = value_str(event, "zhixuId")?;
     let order_id = value_str(event, "orderId")?;
-    let order_key = order_key(zhixu_id, order_id);
+    let order_key = order_key(plan_id, order_id);
     let order = state.orders.get_mut(&order_key).ok_or_else(|| {
-        ReplayError::Message(format!("chain oracle missing order {zhixu_id}:{order_id}"))
+        ReplayError::Message(format!(
+            "chain oracle missing order {plan_id}:{zhixu_id}:{order_id}"
+        ))
     })?;
     let signal_key = value_str(event, "signalKey")?.to_string();
     if order.signals.contains_key(&signal_key) {
@@ -265,11 +269,14 @@ fn record_signal_and_evaluate(state: &mut OracleState, event: &Value) -> Result<
 }
 
 fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Result<Vec<Value>> {
+    let plan_id = value_str(event, "planId")?;
     let zhixu_id = value_str(event, "zhixuId")?;
     let order_id = value_str(event, "orderId")?;
-    let order_key = order_key(zhixu_id, order_id);
+    let order_key = order_key(plan_id, order_id);
     let order = state.orders.get_mut(&order_key).ok_or_else(|| {
-        ReplayError::Message(format!("chain oracle missing order {zhixu_id}:{order_id}"))
+        ReplayError::Message(format!(
+            "chain oracle missing order {plan_id}:{zhixu_id}:{order_id}"
+        ))
     })?;
     let plan = state.plans.get(&order.plan_id).cloned().ok_or_else(|| {
         ReplayError::Message(format!("chain oracle missing plan {}", order.plan_id))
@@ -290,8 +297,23 @@ fn hook_is_order_trigger(hook: &Value) -> bool {
     }
 }
 
+/// `emitReady` controls the observable readiness event independently from
+/// order/stage materialization. Legacy v1 hooks had no field, so a legacy
+/// `isTrigger: true` keeps its historical readiness behavior.
+fn hook_emits_ready(hook: &Value) -> Result<bool> {
+    match hook.get("emitReady") {
+        None => Ok(hook_is_order_trigger(hook)),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(ReplayError::Message(format!(
+            "hook {} emitReady must be a boolean",
+            value_str(hook, "hookId").unwrap_or("<unknown>")
+        ))),
+    }
+}
+
 fn evaluate_hook(order: &mut OracleOrderState, hook: &Value, now: &str) -> Result<Vec<Value>> {
     let hook_id = value_str(hook, "hookId")?;
+    let emits_ready = hook_emits_ready(hook)?;
     let previous = order
         .hook_statuses
         .get(hook_id)
@@ -352,10 +374,15 @@ fn evaluate_hook(order: &mut OracleOrderState, hook: &Value, now: &str) -> Resul
         changed.insert("status".to_string(), Value::String("cxl".to_string()));
         observations.push(Value::Object(changed));
     }
-    if next.status == "reg" && is_trigger && !previous.ready_emitted {
+    // `orderTriggerKind` owns stage materialization. This must not depend on
+    // `emitReady`: a valid trigger may intentionally be silent while still
+    // making its stage available to ordinary hooks in the same order.
+    if next.status == "reg" && is_trigger {
+        order.materialized_stages.insert(stage_id.to_string(), true);
+    }
+    if next.status == "reg" && emits_ready && !previous.ready_emitted {
         next.ready_emitted = true;
         order.hook_statuses.insert(hook_id.to_string(), next);
-        order.materialized_stages.insert(stage_id.to_string(), true);
         let mut ready = base_hook_observation("HookReady", order, hook_id);
         ready.insert(
             "stageIdentifier".to_string(),
@@ -671,6 +698,7 @@ fn chain_event_to_expected_observation(event: &Value) -> Result<Value> {
     match value_str(event, "eventName")? {
         "HookReady" => Ok(json!({
             "eventName": "HookReady",
+            "planId": value_str(event, "planId")?,
             "zhixuId": value_str(event, "zhixuId")?,
             "orderId": value_str(event, "orderId")?,
             "hookId": value_str(event, "hookId")?,
@@ -681,7 +709,7 @@ fn chain_event_to_expected_observation(event: &Value) -> Result<Value> {
             let mut out = base_hook_observation(
                 "HookStatusChanged",
                 &OracleOrderState {
-                    plan_id: String::new(),
+                    plan_id: value_str(event, "planId")?.to_string(),
                     zhixu_id: value_str(event, "zhixuId")?.to_string(),
                     order_id: value_str(event, "orderId")?.to_string(),
                     signals: BTreeMap::new(),
@@ -744,14 +772,16 @@ fn same_hook_observation(expected: &Value, observed: &Value) -> bool {
     }
     match expected_name {
         Some("HookReady") => {
-            field_eq(expected, observed, "zhixuId")
+            field_eq(expected, observed, "planId")
+                && field_eq(expected, observed, "zhixuId")
                 && field_eq(expected, observed, "orderId")
                 && field_lower_eq(expected, observed, "hookId")
                 && field_eq(expected, observed, "stageIdentifier")
                 && field_eq(expected, observed, "hookName")
         }
         Some("HookStatusChanged") => {
-            field_eq(expected, observed, "zhixuId")
+            field_eq(expected, observed, "planId")
+                && field_eq(expected, observed, "zhixuId")
                 && field_eq(expected, observed, "orderId")
                 && field_lower_eq(expected, observed, "hookId")
                 && field_eq(expected, observed, "status")
@@ -789,14 +819,18 @@ fn base_hook_observation(
         "eventName".to_string(),
         Value::String(event_name.to_string()),
     );
+    out.insert("planId".to_string(), Value::String(order.plan_id.clone()));
     out.insert("zhixuId".to_string(), Value::String(order.zhixu_id.clone()));
     out.insert("orderId".to_string(), Value::String(order.order_id.clone()));
     out.insert("hookId".to_string(), Value::String(hook_id.to_string()));
     out
 }
 
-fn order_key(zhixu_id: &str, order_id: &str) -> String {
-    format!("{zhixu_id}::{order_id}")
+/// Plan identity is part of the chain order address. Keeping the canonical
+/// `(planId, orderId)` pair in the serialized key prevents two plans for the
+/// same Zhixu from overwriting or sharing signals when they reuse an order id.
+fn order_key(plan_id: &str, order_id: &str) -> String {
+    format!("{plan_id}::{order_id}")
 }
 
 fn chain_event_id(event: &Value) -> Result<String> {
@@ -1108,6 +1142,7 @@ mod tests {
                 "blockNumber": 3,
                 "logIndex": 0,
                 "transactionHash": "0x03",
+                "planId": "0x01",
                 "zhixuId": "demo",
                 "orderId": "order-1",
                 "sourceId": "0x30",
@@ -1129,6 +1164,7 @@ mod tests {
             result["observed"][0],
             json!({
                 "eventName": "HookReady",
+                "planId": "0x01",
                 "zhixuId": "demo",
                 "orderId": "order-1",
                 "hookId": "0x10",
@@ -1136,5 +1172,118 @@ mod tests {
                 "hookName": "START"
             })
         );
+    }
+
+    #[test]
+    fn emit_ready_is_independent_from_order_materialization() {
+        let mut order = OracleOrderState {
+            zhixu_id: "demo".to_string(),
+            order_id: "order-1".to_string(),
+            ..OracleOrderState::default()
+        };
+        order.signals.insert(
+            "0x50".to_string(),
+            json!({"submittedAt": "2026-04-27T00:00:00.000Z"}),
+        );
+
+        let silent_trigger = json!({
+            "hookId": "flow.start#SILENT",
+            "stageId": "flow.start",
+            "stageIdentifier": "flow.start",
+            "hookName": "SILENT",
+            "orderTriggerKind": "mint",
+            "emitReady": false,
+            "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+        });
+        let trigger_observations =
+            evaluate_hook(&mut order, &silent_trigger, "2026-04-27T00:00:00.000Z")
+                .expect("silent trigger should evaluate");
+        assert!(trigger_observations.is_empty());
+        assert_eq!(order.materialized_stages["flow.start"], true);
+        assert_eq!(order.hook_statuses["flow.start#SILENT"].status, "reg");
+        assert!(!order.hook_statuses["flow.start#SILENT"].ready_emitted);
+
+        let ordinary_hook = json!({
+            "hookId": "flow.start#OBSERVE",
+            "stageId": "flow.start",
+            "stageIdentifier": "flow.start",
+            "hookName": "OBSERVE",
+            "orderTriggerKind": "none",
+            "emitReady": true,
+            "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+        });
+        let observations = evaluate_hook(&mut order, &ordinary_hook, "2026-04-27T00:00:00.000Z")
+            .expect("materialized ordinary hook should evaluate");
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0]["eventName"], "HookReady");
+        assert_eq!(observations[0]["hookId"], "flow.start#OBSERVE");
+    }
+
+    #[test]
+    fn replay_scopes_same_order_id_by_plan() {
+        let mut events = Vec::new();
+        for (index, plan_id) in ["plan-a", "plan-b"].iter().enumerate() {
+            let block = (index * 3 + 1) as i64;
+            events.push(json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": block,
+                "logIndex": 0,
+                "transactionHash": format!("0xplan{index}"),
+                "plan": {
+                    "planId": plan_id,
+                    "zhixuId": "same-zhixu",
+                    "compiledHooks": [{
+                        "hookId": "flow.start#READY",
+                        "stageId": "flow.start",
+                        "stageIdentifier": "flow.start",
+                        "hookName": "READY",
+                        "orderTriggerKind": "mint",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }],
+                    "dependencyIndex": {"0x50": ["flow.start#READY"]}
+                }
+            }));
+            events.push(json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": block + 1,
+                "logIndex": 0,
+                "transactionHash": format!("0xorder{index}"),
+                "planId": plan_id,
+                "zhixuId": "same-zhixu",
+                "orderId": "reused-order",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }));
+            events.push(json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": block + 2,
+                "logIndex": 0,
+                "transactionHash": format!("0xsignal{index}"),
+                "planId": plan_id,
+                "zhixuId": "same-zhixu",
+                "orderId": "reused-order",
+                "sourceId": "0x30",
+                "signalId": "0x40",
+                "signalKey": "0x50",
+                "senderId": format!("sender-{index}"),
+                "submittedAt": "2026-04-27T00:00:00.000Z"
+            }));
+        }
+
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: Some(true),
+                strict: Some(false),
+            },
+        )
+        .expect("plan-scoped order addresses should replay");
+        let orders = result["state"]["orders"]
+            .as_object()
+            .expect("state orders should be an object");
+        assert_eq!(orders.len(), 2);
+        assert!(orders.contains_key("plan-a::reused-order"));
+        assert!(orders.contains_key("plan-b::reused-order"));
+        assert_eq!(result["observed"].as_array().unwrap().len(), 2);
     }
 }

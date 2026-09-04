@@ -6,7 +6,7 @@
 //! - 跨定义 linker（resolution manifest 输入，纯函数，无网络）；
 //! - 全部跨运行时 commitment 的 keccak/ABI-word 编码、Merkle root、
 //!   `dockInstanceId`/`linkedOrderId` 推导与 envelope 幂等键；
-//! - 编译期错误码 D001-D020（另加接口形状 D021-D026）。
+//! - 编译期错误码 D001-D016、接口形状错误码 D021-D024。
 //!
 //! 哈希规则（M0 冻结，Rust/TS/Solidity/Go 必须逐字节一致）：
 //! - 所有 commitment 哈希 = `keccak256(domainWord ‖ w1 ‖ … ‖ wn)`，其中
@@ -22,7 +22,7 @@
 
 use serde_json::{json, Map, Value};
 use sha3::{Digest, Keccak256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use uvp_hook_dsl::{parse_hook, DependencyKind, HookMode, ParseHookRequest, Profile};
 use uvp_model::{DockInterfaceSource, ZhixuStage};
 
@@ -40,6 +40,9 @@ pub const DOCK_COMPAT_SCHEMA_VERSION: &str = "uvp.dock.compat.v1";
 
 pub const MAX_DOCK_INPUTS: usize = 8;
 pub const MAX_DOCK_OUTPUTS: usize = 16;
+/// Maximum number of definitions in a statically linked startup path. Runtime
+/// adapters must enforce the same limit against the actual parent instance
+/// depth as well; this linker check cannot observe runtime-created orders.
 pub const MAX_DOCK_DEPTH: u8 = 8;
 /// `^[a-z][a-z0-9_]{0,31}$`（PRD94 §3.2）。
 pub const MAX_PORT_NAME_BYTES: usize = 32;
@@ -777,7 +780,7 @@ const INPUT_KIND_TABLE: [&str; 2] = ["signal", "entrance"];
 const ACCESS_TABLE: [&str; 3] = ["open", "permit", "linked"];
 const TERMINAL_TABLE: [&str; 4] = ["none", "success", "failure", "cancelled"];
 
-/// 编译目标定义的 `spec.dockInterface`（D013/D014/D019 + D021-D026）。
+/// 编译目标定义的 `spec.dockInterface`（D013/D014、D021-D024）。
 pub fn compile_dock_interface(
     dock: &DockInterfaceSource,
     uid: &str,
@@ -1655,7 +1658,7 @@ pub struct LocalLinkIdentity {
 }
 
 /// Link：本地未链接 routes + resolution manifest → 已解析 DockRouteV1
-/// 列表（D008-D018）。纯函数，无网络、无 I/O。
+/// 列表（D008-D012、D015-D016）。纯函数，无网络、无 I/O。
 pub fn link_dock_routes(
     local: &LocalLinkIdentity,
     stages: &[(String, ZhixuStage)],
@@ -2067,8 +2070,8 @@ pub fn link_dock_routes(
         return Err(issues);
     }
 
-    // D015：route 启动图无环。节点 (zhixu, version)，边为 resolved route
-    // 与 manifest 提供的目标自身 dockEdges。
+    // D015：route 启动图无环且深度受限。节点 (zhixu, version)，边为
+    // resolved route 与 manifest 提供的目标自身 dockEdges。
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let local_node = format!("{}@{}", local.uid, local.version);
     for target in &manifest.targets {
@@ -2095,6 +2098,17 @@ pub fn link_dock_routes(
                 cycle.join(" -> ")
             ),
         ));
+    } else {
+        let depth = max_reachable_route_depth(&edges, &local_node);
+        if depth > usize::from(MAX_DOCK_DEPTH) {
+            issues.push(DockIssue::new(
+                "D015",
+                "dockRoutes",
+                format!(
+                    "dock route startup graph depth {depth} exceeds MAX_DOCK_DEPTH {MAX_DOCK_DEPTH}"
+                ),
+            ));
+        }
     }
 
     if !issues.is_empty() {
@@ -2136,6 +2150,29 @@ fn find_route_cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<St
         }
     }
     None
+}
+
+/// Return the maximum number of nodes on a route-startup path rooted at the
+/// local definition. Cycles are rejected by `find_route_cycle` before this is
+/// called, so the longest-path calculation is finite and deterministic.
+fn max_reachable_route_depth(edges: &BTreeMap<String, BTreeSet<String>>, root: &str) -> usize {
+    let mut depths = BTreeMap::from([(root.to_string(), 1usize)]);
+    let mut queue = VecDeque::from([(root.to_string(), 1usize)]);
+    let mut maximum = 1usize;
+    while let Some((node, depth)) = queue.pop_front() {
+        maximum = maximum.max(depth);
+        for next in edges.get(&node).into_iter().flatten() {
+            let next_depth = depth + 1;
+            let should_visit = depths
+                .get(next)
+                .is_none_or(|known_depth| next_depth > *known_depth);
+            if should_visit {
+                depths.insert(next.clone(), next_depth);
+                queue.push_back((next.clone(), next_depth));
+            }
+        }
+    }
+    maximum
 }
 
 /// `dockRoutesRoot`：一个定义全部已解析 route 的 routeHash Merkle root。
@@ -2229,4 +2266,43 @@ pub fn eip712_permit_digest(
     buf.extend_from_slice(&domain_separator);
     buf.extend_from_slice(&struct_hash);
     Some(keccak_word(&buf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_depth_counts_local_definition_and_targets() {
+        let root = "local@1";
+        let mut edges = BTreeMap::new();
+        for index in 0..7 {
+            edges
+                .entry(if index == 0 {
+                    root.to_string()
+                } else {
+                    format!("target-{index}@1")
+                })
+                .or_insert_with(BTreeSet::new)
+                .insert(format!("target-{}@1", index + 1));
+        }
+        assert_eq!(max_reachable_route_depth(&edges, root), 8);
+
+        edges
+            .entry("target-7@1".to_string())
+            .or_insert_with(BTreeSet::new)
+            .insert("target-8@1".to_string());
+        assert_eq!(max_reachable_route_depth(&edges, root), 9);
+        assert!(9 > usize::from(MAX_DOCK_DEPTH));
+    }
+
+    #[test]
+    fn route_depth_ignores_disconnected_manifest_edges() {
+        let mut edges = BTreeMap::new();
+        edges.insert(
+            "unrelated@1".to_string(),
+            BTreeSet::from(["unrelated-child@1".to_string()]),
+        );
+        assert_eq!(max_reachable_route_depth(&edges, "local@1"), 1);
+    }
 }

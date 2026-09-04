@@ -211,11 +211,15 @@ This is the highest-priority module because it is the most likely source of drif
 
 ### 6.3 `uvp-ir`
 
-Owns portable canonical IR.
+Owns portable canonical JSON primitives. The current crate exposes
+`canonicalize`, `canonical_stringify`, and `hash_canonical`; a typed
+`PortablePlan` API is still a planned boundary and must not be presented as
+an exported type until it exists.
 
 Responsibilities:
 
-- Define `PortablePlan`.
+- Define the portable canonical JSON shape (a typed `PortablePlan` is not
+  exported yet).
 - Define canonical JSON encoding.
 - Define semantic hash inputs.
 - Preserve stable ordering rules.
@@ -226,7 +230,8 @@ The IR is the common input to cloud, EVM, and future adapters.
 
 ### 6.4 `uvp-compiler`
 
-Owns `NormalizedZhixu -> PortablePlan`.
+Owns normalized Zhixu validation and compilation into the currently exported
+hook-plan and cloud-artifact JSON shapes.
 
 Responsibilities:
 
@@ -324,14 +329,15 @@ The Rust side owns allocation. Callers must release returned strings through `uv
 
 Owns Node/TypeScript binding through `napi-rs`.
 
-Initial API:
+Initial JSON-binding API (the native exports use these names):
 
 ```ts
-compile(request: CompileRequest): CompileOutput
-parseHook(request: ParseHookRequest): ParseHookOutput
-evaluateCompiledHook(request: EvalCompiledHookRequest): EvalCompiledHookOutput
-replay(request: ReplayRequest): ReplayOutput
+compile(request: unknown): unknown
+parseHook(request: unknown): unknown
+evaluateHook(request: unknown): unknown
+replay(request: unknown): unknown
 version(): string
+semanticVersion(): string
 ```
 
 This is the preferred integration path for `uvp-eth` services and tools.
@@ -353,15 +359,14 @@ It is not required for the first production adapter, but the export boundary sho
 
 Owns command-line inspection and CI oracle.
 
-Target commands:
+The CLI accepts one JSON request per subcommand (or `@path/to/request.json`):
 
 ```bash
-uvp-core compile --target cloud input.yaml
-uvp-core compile --target evm input.yaml
-uvp-core parse-hook 'buyer::pay.cmp & ~refund.cmp'
+uvp-core compile '{"target":"cloud","definition":{...}}'
+uvp-core parse-hook '{"profile":"cloud_compat","hookName":"PAY","hook":"buyer::pay.main.cmp"}'
 uvp-core eval-compiled-hook '{"profile":"cloud_compat","ast":{...},"signals":[],"now":"2026-01-01T00:00:00Z"}'
-uvp-core replay --artifact plan.json --events events.json
-uvp-core hash artifact.json
+uvp-core replay '{"events":[...],"options":{"strict":true}}'
+uvp-core version
 ```
 
 The CLI is the first integration surface because it is easiest to use from Go, TypeScript, shell scripts, and CI.
