@@ -333,7 +333,6 @@ pub fn dock_input_payload_hash(
     target_port_key: &Word,
     target_signal_id: &Word,
     sequence: u64,
-    source_fact_set_hash: &Word,
 ) -> Word {
     keccak_words(
         DOMAIN_INPUT_PAYLOAD,
@@ -349,7 +348,7 @@ pub fn dock_input_payload_hash(
             *target_port_key,
             *target_signal_id,
             u64_word(sequence),
-            *source_fact_set_hash,
+            [0u8; 32],
         ],
     )
 }
@@ -1831,6 +1830,7 @@ pub fn link_dock_routes(
                 continue;
             };
             let hook_key_word = hook_key(&format!("{}#{local_hook}", route.stage_identifier));
+            let kind_word = enum_word(&port.kind, &INPUT_KIND_TABLE).unwrap_or(u8_word(0));
             let binding = keccak_words(
                 DOMAIN_INPUT_BINDING,
                 &[
@@ -1839,6 +1839,7 @@ pub fn link_dock_routes(
                     port_key(port_name),
                     port.source_id,
                     port.signal_id,
+                    kind_word,
                 ],
             );
             resolved_inputs.push(DockRouteInput {
@@ -1908,6 +1909,7 @@ pub fn link_dock_routes(
             let local_signal_id =
                 keccak_word(format!("{}.{}", route.stage_identifier, local_signal).as_bytes());
             let _ = local_mapped_signal;
+            let terminal_word = enum_word(&port.terminal, &TERMINAL_TABLE).unwrap_or(u8_word(0));
             let binding = keccak_words(
                 DOMAIN_OUTPUT_BINDING,
                 &[
@@ -1917,6 +1919,7 @@ pub fn link_dock_routes(
                     port_key(port_name),
                     port.source_id,
                     port.signal_id,
+                    terminal_word,
                 ],
             );
             resolved_outputs.push(DockRouteOutput {
@@ -2149,7 +2152,7 @@ pub fn dock_routes_root(routes: &[DockRoute]) -> Word {
 // EIP-712 entrance permit digest（golden vector 与 TS/Solidity 对齐用）
 // ---------------------------------------------------------------------------
 
-pub const PERMIT_TYPEHASH_SUFFIX: &str = "UVPDockEntrancePermitV1(bytes32 targetPlanId,bytes32 targetEntrancePortId,bytes32 localPlanId,bytes32 routeHash,bytes32 dockInstanceId,bytes32 linkedOrderId,address creator,uint256 feeLimit,uint256 nonce,uint256 deadline)";
+pub const PERMIT_TYPEHASH_SUFFIX: &str = "UVPDockEntrancePermitV1(bytes32 targetPlanId,bytes32 targetEntrancePortId,bytes32 localPlanId,bytes32 routeHash,bytes32 dockInstanceId,bytes32 linkedOrderId,uint256 feeLimit,uint256 nonce,uint256 deadline)";
 
 pub fn eip712_permit_domain_separator(chain_id: u64, verifying_contract: &str) -> Option<Word> {
     let address = address_word(verifying_contract)?;
@@ -2175,13 +2178,11 @@ pub fn eip712_permit_struct_hash(
     route_hash: &Word,
     dock_instance: &Word,
     linked_order: &Word,
-    creator: &str,
     nonce: u64,
     deadline: u64,
 ) -> Option<Word> {
-    let creator_word = address_word(creator)?;
     let fee_limit = 0u64; // PRD96 §15.5：无费用机制，feeLimit 固定 0（与合约一致）
-    let mut buf = Vec::with_capacity(32 * 11);
+    let mut buf = Vec::with_capacity(32 * 10);
     buf.extend_from_slice(&keccak_word(PERMIT_TYPEHASH_SUFFIX.as_bytes()));
     for word in [
         target_plan_id,
@@ -2193,7 +2194,6 @@ pub fn eip712_permit_struct_hash(
     ] {
         buf.extend_from_slice(word);
     }
-    buf.extend_from_slice(&creator_word);
     buf.extend_from_slice(&u64_word(fee_limit));
     buf.extend_from_slice(&u64_word(nonce));
     buf.extend_from_slice(&u64_word(deadline));
@@ -2210,7 +2210,6 @@ pub fn eip712_permit_digest(
     route_hash: &Word,
     dock_instance: &Word,
     linked_order: &Word,
-    creator: &str,
     nonce: u64,
     deadline: u64,
 ) -> Option<Word> {
@@ -2222,7 +2221,6 @@ pub fn eip712_permit_digest(
         route_hash,
         dock_instance,
         linked_order,
-        creator,
         nonce,
         deadline,
     )?;
