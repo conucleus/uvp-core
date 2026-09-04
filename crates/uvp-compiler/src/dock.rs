@@ -296,6 +296,7 @@ pub fn local_order_key(order_id: &str) -> Word {
 
 pub fn dock_instance_id(
     runtime_domain: &Word,
+    local_plan_id: &Word,
     local_definition_ref: &Word,
     local_order_key: &Word,
     route_id_word: &Word,
@@ -305,6 +306,7 @@ pub fn dock_instance_id(
         DOMAIN_DOCK_INSTANCE,
         &[
             *runtime_domain,
+            *local_plan_id,
             *local_definition_ref,
             *local_order_key,
             *route_id_word,

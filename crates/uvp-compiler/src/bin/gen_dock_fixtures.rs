@@ -199,9 +199,14 @@ fn main() {
     let route_id = word(&route["routeId"]);
     let route_hash = word(&route["routeHash"]);
     let parent_ref = dock::definition_ref_hash("zx-settlement", "2.0.0");
+    // The synthetic runtime vector must use the same local plan namespace
+    // emitted in `route.local.planId`; otherwise a consumer can pass the
+    // fixture while deriving a different dockInstanceId in production.
+    let parent_plan_id = word(&parent_plan["planId"]);
     let target_ref = word(&target_interface["definition"]["definitionRefHash"]);
     let dock_instance = dock::dock_instance_id(
         &evm_domain,
+        &parent_plan_id,
         &parent_ref,
         &local_order_key,
         &route_id,
@@ -231,7 +236,7 @@ fn main() {
     let input_payload = dock::dock_input_payload_hash(
         &dock_instance,
         &route_hash,
-        &dock::keccak_word(b"parent-plan-id-fixture"),
+        &parent_plan_id,
         &local_order_key,
         &local_stage_key,
         &local_hook_key,
@@ -265,7 +270,7 @@ fn main() {
         docking_module,
         &target_plan_id,
         &target_port_key,
-        &dock::keccak_word(b"parent-plan-id-fixture"),
+        &parent_plan_id,
         &route_hash,
         &dock_instance,
         &linked_order,
@@ -360,7 +365,7 @@ fn main() {
             "cloudDeploymentId": "uvp-cloud-deployment-fixture",
             "cloudSecurityDomain": "uvp-cloud-security-fixture",
             "localOrderId": "order-fixture-001",
-            "parentPlanIdWord": dock::word_hex(&dock::keccak_word(b"parent-plan-id-fixture"))
+            "parentPlanIdWord": dock::word_hex(&parent_plan_id)
         },
         "targetDefinition": target,
         "parentDefinition": parent,

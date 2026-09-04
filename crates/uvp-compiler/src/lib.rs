@@ -101,6 +101,40 @@ fn definition_version(definition: &ZhixuDefinition) -> Result<String> {
         })
 }
 
+/// Compute the stable plan identity shared by hook-plan and cloud artifacts.
+/// Dock routes carry this value as their local plan namespace so that two
+/// otherwise identical orders from different plan revisions cannot alias.
+fn plan_id(
+    definition: &ZhixuDefinition,
+    platform: &Value,
+    version: &str,
+    zhixu_id: &str,
+) -> Result<String> {
+    hash_canonical(
+        "uvp:hook-plan-id:v1",
+        &json!({
+            "compiler": { "name": COMPILER_NAME, "version": COMPILER_VERSION },
+            "platform": platform,
+            "version": version,
+            "zhixuId": zhixu_id,
+            "zhixuName": definition.metadata.name,
+        }),
+    )
+    .map_err(|err| CompilerError::Message(err.to_string()))
+}
+
+/// Add the local plan namespace to every resolved route.  This is metadata
+/// only: route hashes/roots intentionally remain unchanged, while runtime
+/// dockInstanceId derivation consumes the plan id explicitly.
+fn with_local_plan_id(mut routes: Vec<Value>, local_plan_id: &str) -> Vec<Value> {
+    for route in &mut routes {
+        if let Some(local) = route.get_mut("local").and_then(Value::as_object_mut) {
+            local.insert("planId".to_string(), Value::String(local_plan_id.to_string()));
+        }
+    }
+    routes
+}
+
 pub fn compile_zhixu_hook_plan(
     definition_value: &Value,
     resolution_manifest: Option<&Value>,
@@ -159,17 +193,8 @@ pub fn compile_zhixu_hook_plan(
     let dependency_index = build_dependency_index(&compiled_hooks);
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
     let executor_routes = build_executor_routes(&stage_entries);
-    let plan_id = hash_canonical(
-        "uvp:hook-plan-id:v1",
-        &json!({
-            "compiler": { "name": COMPILER_NAME, "version": COMPILER_VERSION },
-            "platform": platform,
-            "version": version,
-            "zhixuId": zhixu_id,
-            "zhixuName": definition.metadata.name,
-        }),
-    )
-    .map_err(|err| CompilerError::Message(err.to_string()))?;
+    let plan_id = plan_id(&definition, &platform, &version, &zhixu_id)?;
+    let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
 
     let payload = json!({
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
@@ -182,7 +207,7 @@ pub fn compile_zhixu_hook_plan(
         "dependencyIndex": dependency_index,
         "executorRoutes": executor_routes,
         "dockInterface": dock_state.interface_json,
-        "dockRoutes": dock_state.routes_json,
+        "dockRoutes": dock_routes,
         "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
         "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
         "selectedStageBindings": selected_stage_bindings,
@@ -249,6 +274,11 @@ pub fn compile_cloud_artifact(
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
+    let zhixu_id = definition_uid(&definition, dock_state.requires_uid)?;
+    let version = definition_version(&definition)?;
+    let platform = normalize_platform_value(&definition.spec.platform)?;
+    let plan_id = plan_id(&definition, &platform, &version, &zhixu_id)?;
+    let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
     let mut stages = Vec::new();
     let mut hooks = Vec::new();
 
@@ -267,12 +297,16 @@ pub fn compile_cloud_artifact(
 
     Ok(json!({
         "schemaVersion": CLOUD_ARTIFACT_SCHEMA_VERSION,
+        "planId": plan_id,
+        "zhixuId": zhixu_id,
+        "version": version,
         "zhixuName": definition.metadata.name,
+        "platform": platform,
         "stages": stages,
         "hooks": hooks,
         "orderStageDefaults": stages,
         "dockInterface": dock_state.interface_json,
-        "dockRoutes": dock_state.routes_json,
+        "dockRoutes": dock_routes,
         "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
         "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
     }))
