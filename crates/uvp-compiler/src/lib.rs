@@ -129,7 +129,10 @@ fn plan_id(
 fn with_local_plan_id(mut routes: Vec<Value>, local_plan_id: &str) -> Vec<Value> {
     for route in &mut routes {
         if let Some(local) = route.get_mut("local").and_then(Value::as_object_mut) {
-            local.insert("planId".to_string(), Value::String(local_plan_id.to_string()));
+            local.insert(
+                "planId".to_string(),
+                Value::String(local_plan_id.to_string()),
+            );
         }
     }
     routes
@@ -1760,7 +1763,6 @@ mod tests {
             compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
                 .expect_err("route cycle must fail");
         assert!(error.to_string().contains("D015"), "{}", error.to_string());
-
     }
 
     #[test]

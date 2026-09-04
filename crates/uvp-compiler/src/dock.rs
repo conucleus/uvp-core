@@ -6,7 +6,7 @@
 //! - 跨定义 linker（resolution manifest 输入，纯函数，无网络）；
 //! - 全部跨运行时 commitment 的 keccak/ABI-word 编码、Merkle root、
 //!   `dockInstanceId`/`linkedOrderId` 推导与 envelope 幂等键；
-//! - 编译期错误码 D001-D016、接口形状错误码 D021-D024。
+//! - 编译期错误码 D001-D016、D018、接口形状错误码 D021-D024。
 //!
 //! 哈希规则（M0 冻结，Rust/TS/Solidity/Go 必须逐字节一致）：
 //! - 所有 commitment 哈希 = `keccak256(domainWord ‖ w1 ‖ … ‖ wn)`，其中

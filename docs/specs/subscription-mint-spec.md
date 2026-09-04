@@ -183,7 +183,7 @@ Stage 字段总表（目标态）：
 
 ## 7. 兼容与退役
 
-- 版本 slate 重置（2026-08-31 裁决）：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格且全部置 v1——`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件同步更名 semantics.v1.json）、`uvp.cloudArtifact.v1`；部署清单 `uvp-eth.addresses.v5` → `uvp-eth.addresses.v1`。开发期累积的 0.7/v2/v5 编号无兼容义务，作废。
+- 版本 slate 重置（2026-08-31 裁决）：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格且语义/AST/语料/部署清单置 v1；云执行产物因已冻结为结构化复合身份信封，使用 `uvp.cloudArtifact.v2`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件同步更名 semantics.v1.json）、`uvp.cloudArtifact.v2`；部署清单 `uvp-eth.addresses.v5` → `uvp-eth.addresses.v1`。开发期累积的 0.7/v2/v5 编号无兼容义务，作废。
 - 兼容矩阵 `uvp-stack.v1.json` 等值断言同步重置（semanticVersion、hookCorpusSchema、cloudAstSchema、deploymentManifestSchema）。
 - 合约 ABI fixture 与 EIP-712 typed-data 不动；云侧信封键字段与链上既有 `idempotencyKey` 语义对齐。
 - 旧关键字（OUTSIDE/MERGE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
@@ -242,4 +242,3 @@ Stage 字段总表（目标态）：
 | 报关特例降级为演示配置 | 共享 demo 任务里的"报关单 PDF、报关单号、出口港口、完成时间"等特例内容从商店核心代码移除，降级为一份显式的演示配置数据（形态上等同"某凝结核自带配置"），只经通用渲染路径生效；商店核心代码 grep 不到这些业务字符串（演示配置文件与其测试除外）。MVP 不内置报关示例 | store `src/product/demo/customs-demo-config.ts`；protocol fixture `demoCustomsEvidenceSpec` 同形示例 |
 | 证据文件格式校验归属 | accept 约束来自凝结核配置（`spec.accept`）；前端按 accept 校验并在 accept=pdf 时读取文件首字节做 %PDF- 快速拦截（防伪造 MIME/扩展名），服务端魔数校验仍是权威 | store workbenchSupport `validateEvidenceFileForSlot` |
 | DTO 兼容口径 | `evidenceSpec` 为加性可选字段：不改变 `requiredEvidence` 开放字符串数组的既有语义，不破坏既有消费方；消费方在字段缺失时必须走降级路径而不是报错 | protocol freeze 校验（product signal map gate + verify-stack-compatibility）exit 0 |
-
