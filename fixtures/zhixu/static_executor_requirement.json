@@ -1,0 +1,85 @@
+{
+  "name": "merge pairing entry requires the static executor it delivers to",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "static_executor_ok",
+      "uid": "fx-statexec-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "trade",
+          "stages": [
+            {
+              "name": "listing",
+              "source": "seller",
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "seller-org"
+              }
+            },
+            {
+              "name": "intent",
+              "source": "buyer",
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "buyer-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "market",
+          "stages": [
+            {
+              "name": "pool",
+              "source": "buyer",
+              "receiveSignals": {
+                "MATCH_SELLER": "::ANCHOR(@seller::trade.listing.cmp)",
+                "MATCH_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
+              },
+              "sendSignals": [
+                "matched"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "market-org"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "cloud",
+    "hookIds": [
+      "market.pool#MATCH_BUYER",
+      "market.pool#MATCH_SELLER"
+    ],
+    "hookDependencyCounts": {
+      "market.pool#MATCH_BUYER": 1,
+      "market.pool#MATCH_SELLER": 1
+    }
+  }
+}

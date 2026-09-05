@@ -46,7 +46,7 @@ exports.parseHook = function parseHook(request) {
 };
 
 exports.evaluateHook = function evaluateHook(request) {
-  return unwrap(native.evalHookJson(JSON.stringify(request)));
+  return unwrap(native.evalCompiledHookJson(JSON.stringify(request)));
 };
 
 exports.replay = function replay(request) {
@@ -55,4 +55,8 @@ exports.replay = function replay(request) {
 
 exports.version = function version() {
   return native.version();
+};
+
+exports.semanticVersion = function semanticVersion() {
+  return native.semanticVersion();
 };

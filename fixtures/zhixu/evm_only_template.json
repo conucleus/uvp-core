@@ -1,0 +1,54 @@
+{
+  "name": "evm-only template pins chain platform and portable hooks",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "evm_only_template",
+      "uid": "fx-evmonly-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "evm",
+        "provider": "anvil",
+        "network": "local"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "escrow",
+          "stages": [
+            {
+              "name": "hold",
+              "source": "buyer",
+              "receiveSignals": {
+                "LOCK": "buyer::escrow.hold.locked"
+              },
+              "sendSignals": [
+                "locked"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "chain-org"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "evm",
+    "hookIds": [
+      "escrow.hold#LOCK"
+    ]
+  }
+}

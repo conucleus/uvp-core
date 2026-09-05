@@ -1,0 +1,65 @@
+{
+  "name": "receive hook with undeclared subscription source is rejected",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "undeclared_subscription_source",
+      "uid": "fx-undclsrc-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "orchard",
+          "stages": [
+            {
+              "name": "gate",
+              "source": "farmer",
+              "sendSignals": [
+                "picked"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "farmer-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "market",
+          "stages": [
+            {
+              "name": "watch",
+              "source": "buyer",
+              "receiveSignals": {
+                "PICK": "::ANCHOR(@ghost::orchard.gate.picked)"
+              },
+              "sendSignals": [
+                "seen"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "market-org"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "errorContains": "is not a declared source in this zhixu"
+  }
+}

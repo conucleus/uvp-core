@@ -1,0 +1,68 @@
+{
+  "name": "cloud-only template receives cross-source facts via subscription entry",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "cloud_only_template",
+      "uid": "fx-cloudonly-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "dispatch",
+          "stages": [
+            {
+              "name": "main",
+              "source": "test_executor",
+              "sendSignals": [
+                "smart_contract"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "runner-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "orchard",
+          "stages": [
+            {
+              "name": "retail",
+              "source": "buyer",
+              "receiveSignals": {
+                "SPAWN": "::ANCHOR(@test_executor::dispatch.main.smart_contract)"
+              },
+              "sendSignals": [
+                "ack"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "dispatch-org"
+              },
+              "mint": "per-fact"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "cloudHookModes": {
+      "SPAWN": "subscription"
+    }
+  }
+}
