@@ -13,7 +13,9 @@ pub mod dock;
 const COMPILER_NAME: &str = "uvp-eth-compiler";
 const COMPILER_VERSION: &str = "0.1.0";
 const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
-const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
+/// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
+/// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
+pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
 
 #[derive(Debug, Error)]
 pub enum CompilerError {
@@ -176,6 +178,7 @@ pub fn compile_zhixu_hook_plan(
         &selected_stage_bindings,
     ));
     validation_issues.extend(validate_mint_anchors(&stage_entries));
+    validation_issues.extend(validate_subscription_delegation(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(
         &stage_entries,
@@ -280,6 +283,7 @@ pub fn compile_cloud_artifact(
         &selected_stage_bindings,
     ));
     validation_issues.extend(validate_mint_anchors(&stage_entries));
+    validation_issues.extend(validate_subscription_delegation(&stage_entries));
     // 与 hook_plan 目标共用同一组校验：同一份定义不允许"一个 target 收、
     // 另一个放"，否则 Go 主链路会拿到被 hook_plan 拒绝的定义的产物。
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
@@ -521,6 +525,19 @@ struct StageEntry {
     stage_identifier: String,
 }
 
+/// 全局 stage.source 上限：source 既是路由键也是 sourceId=keccak(source)
+/// 的哈希输入，落库列（订阅路由维度）宽 36——与订阅 target source 同值
+/// （Go 镜像 zhixu_schema.go 的 ≤36 同款）。
+const MAX_STAGE_SOURCE_BYTES: usize = 36;
+/// DDL 维度镜像：global_zhixu.uid VARCHAR(64)。
+const MAX_UID_BYTES: usize = 64;
+/// DDL 维度镜像：global_zhixu.name / global_stage.stage_identifier
+/// VARCHAR(100)。
+const MAX_IDENTIFIER_BYTES: usize = 100;
+/// DDL 维度镜像：canonical 三段式 task.stage.signal 落
+/// individual_record.signal_name / hook_dependency.signal_name VARCHAR(100)。
+const MAX_SIGNAL_NAME_BYTES: usize = 100;
+
 fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     let mut issues = Vec::new();
     if definition.api_version != "uvp/v0" {
@@ -531,6 +548,21 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     }
     if definition.metadata.name.trim().is_empty() {
         issues.push("metadata.name must be non-empty".to_string());
+    }
+    if definition.metadata.name.len() > MAX_IDENTIFIER_BYTES {
+        issues.push(format!(
+            "metadata.name {:?} exceeds {MAX_IDENTIFIER_BYTES} bytes (global_zhixu.name)",
+            definition.metadata.name
+        ));
+    }
+    if let Some(uid) = &definition.metadata.uid {
+        let trimmed = uid.trim();
+        if !trimmed.is_empty() && trimmed.len() > MAX_UID_BYTES {
+            issues.push(format!(
+                "metadata.uid {:?} exceeds {MAX_UID_BYTES} bytes (global_zhixu.uid)",
+                trimmed
+            ));
+        }
     }
     if definition.spec.platform.platform_type.trim().is_empty() {
         issues.push("spec.platform must be an object with a non-empty type".to_string());
@@ -552,9 +584,56 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
                     stage.name
                 ));
             }
+            // stage.source：非空、plain identifier 字符集、≤36（与订阅
+            // target source 同值）。空串会以空键混进 mintedSources；含
+            // 空格/Unicode 的 source 是路由键与 keccak 输入，两侧必须逐字节
+            // 一致（Go 镜像 zhixu_schema.go 同款）。
+            if stage.source.trim().is_empty() {
+                issues.push(format!(
+                    "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be non-empty"
+                ));
+            } else {
+                if !is_plain_source_identifier(&stage.source) {
+                    issues.push(format!(
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be a plain identifier (ASCII letters, digits, '_' or '-'): {}",
+                        stage.source
+                    ));
+                }
+                if stage.source.len() > MAX_STAGE_SOURCE_BYTES {
+                    issues.push(format!(
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}].source {:?} exceeds {MAX_STAGE_SOURCE_BYTES} bytes",
+                        stage.source
+                    ));
+                }
+            }
+            let stage_identifier = format!("{}.{}", task.name, stage.name);
+            if stage_identifier.len() > MAX_IDENTIFIER_BYTES {
+                issues.push(format!(
+                    "spec.taskPatterns[{task_index}].stages[{stage_index}] identifier {stage_identifier:?} exceeds {MAX_IDENTIFIER_BYTES} bytes (global_stage.stage_identifier)"
+                ));
+            }
+            // sendSignals 组合维度（individual_record.signal_name）：stage
+            // 标识符本身合法不等于组合合法，超限在编译期报确定性错误而不是
+            // 落库时 value too long（Go 镜像 validateDDLDimensions 同款）。
+            for signal in &stage.send_signals {
+                if stage_identifier.len() + 1 + signal.len() > MAX_SIGNAL_NAME_BYTES {
+                    issues.push(format!(
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}] ({stage_identifier:?}) sendSignal {signal:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)"
+                    ));
+                }
+            }
         }
     }
     issues
+}
+
+/// source 类字符集：与 uvp-hook-dsl 的 is_plain_identifier 同规则
+/// （非空，仅 ASCII 字母/数字/下划线/中划线）。
+fn is_plain_source_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 fn valid_identifier_part(value: &str) -> bool {
@@ -740,6 +819,43 @@ fn stage_is_subscription(stage: &ZhixuStage) -> bool {
             .map(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
             .unwrap_or(false)
     })
+}
+
+/// UVP-01（模-1 同族裁决，对齐 Go 镜像 zhixu_schema.go 的同款检查）：zhixu
+/// 委托执行器的信封恒为 NewSource=false 的订单锚定子信号，无法携带通道
+/// 事实身份。本域 source 类无 mint 声明时订阅注入 route=fanin、投递落通道
+/// 维度（order_id=''），委托信封缺 order_id 会被状态机按永久错误拒绝——
+/// "编译放行、运行必死"的组合在编译期关闭；有锚阶段（本类存在 mint 声明，
+/// route=order 按单投递）不受此限。mint 出生阶段与委托的组合由
+/// validate_mint_anchors 单独拒绝。
+fn validate_subscription_delegation(entries: &[StageEntry]) -> Vec<String> {
+    let minted_sources: BTreeSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.stage.mint.is_some())
+        .map(|entry| entry.stage.source.as_str())
+        .collect();
+    let mut issues = Vec::new();
+    for entry in entries {
+        if entry.stage.mint.is_some() || !is_zhixu_executor_stage(entry) {
+            continue;
+        }
+        if minted_sources.contains(entry.stage.source.as_str()) {
+            continue;
+        }
+        for (hook_name, raw_expression) in &entry.stage.receive_signals {
+            let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
+                // 语法错误由引用存在性校验统一上报。
+                continue;
+            };
+            if parsed.mode == uvp_hook_dsl::HookMode::Subscription {
+                issues.push(format!(
+                    "{}.receiveSignals.{hook_name}: unanchored fan-in subscription stage cannot bind a zhixu delegation executor (fan-in delivery has no order context; the delegation envelope only carries same-order child signals)",
+                    entry.stage_identifier
+                ));
+            }
+        }
+    }
+    issues
 }
 
 fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
@@ -1669,6 +1785,238 @@ mod tests {
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("supplierID on zhixu executor must fail");
         assert!(error.to_string().contains("D001"), "{}", error.to_string());
+    }
+
+    #[test]
+    fn rejects_signal_map_keys_outside_hook_name_budget() {
+        // D006：key 超 26 字节（hook_name = "signalMap." + key 落 VARCHAR(36)）。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["signalMap"]["x".repeat(27)] = json!("started");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("oversized signalMap key must fail");
+        assert!(
+            error.to_string().contains("D006")
+                && error.to_string().contains("at most 26 bytes"),
+            "{}",
+            error.to_string()
+        );
+
+        // D006：key 携带信号名分隔符 '.'。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["signalMap"]
+            .as_object_mut()
+            .unwrap()
+            .insert("bad.key".to_string(), json!("cancelled"));
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("dotted signalMap key must fail");
+        assert!(
+            error.to_string().contains("D006")
+                && error.to_string().contains("must not contain '.'"),
+            "{}",
+            error.to_string()
+        );
+
+        // 组合维度：stage 标识符 + key 超 signal_name 列宽（100）。
+        let mut parent = parent_settlement_definition();
+        let long_stage = "s".repeat(90);
+        parent["spec"]["taskPatterns"][1]["stages"][0]["name"] = json!(long_stage);
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("combined signal name must fail");
+        assert!(
+            error.to_string().contains("individual_record.signal_name"),
+            "{}",
+            error.to_string()
+        );
+    }
+
+    #[test]
+    fn rejects_target_versions_outside_whitelist_charset() {
+        // D003：黑名单时代 `1/2` 之类链轨串可通过；白名单与 Go 镜像同集。
+        for version in ["1/2", "^1.0.0", "1.0.0 beta", "latest", ""] {
+            let mut parent = parent_settlement_definition();
+            parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+                .as_object_mut()
+                .unwrap()["target"]["version"] = json!(version);
+            let error = compile_zhixu_hook_plan(&parent, None, false)
+                .expect_err("non-whitelisted target version must be rejected");
+            assert!(
+                error.to_string().contains("D003"),
+                "version {version:?}: {error}"
+            );
+        }
+        // 合法精确版本（含 +build 元数据）仍放行到 link 阶段。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["target"]["version"] = json!("1.2.0+build.1");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("valid version reaches linking, which fails without a manifest");
+        assert!(
+            !error.to_string().contains("D003"),
+            "valid charset must not trip D003: {error}"
+        );
+    }
+
+    /// 无锚扇入订阅 + zhixu 委托执行器（UVP-01）：编译期拒绝；本类存在
+    /// mint 声明（有锚，route=order）时放行。对齐 Go 镜像
+    /// TestValidateStage_AnchoredSubscriptionAllowsZhixuExecutor 的边界。
+    fn delegation_subscription_definition(with_anchor: bool) -> Value {
+        let mut stages = vec![
+            json!({
+                "name": "fanin",
+                "source": "anchoredcls",
+                "receiveSignals": { "SUB": "::ANCHOR(@other::anchor_task.emit.cmp)" },
+                "sendSignals": ["str", "cmp"],
+                "executor": {
+                    "supplierType": "zhixu",
+                    "zhixuExecutorConfig": {
+                        "schemaVersion": "uvp.dock.v1",
+                        "target": { "zhixu": "zx-target", "version": "1.0.0" },
+                        "order": { "idPolicy": "derived-v1" },
+                        "inputMap": { "SUB": "execute" },
+                        "signalMap": { "str": "started", "cmp": "completed" }
+                    }
+                }
+            }),
+            // 订阅目标 source 类必须在本域声明（引用存在性校验）。
+            json!({
+                "name": "emit",
+                "source": "other",
+                "sendSignals": ["cmp"],
+                "executor": { "supplierType": "organization", "supplierID": "other-org" }
+            }),
+        ];
+        if with_anchor {
+            stages.push(json!({
+                "name": "anchor",
+                "source": "anchoredcls",
+                "mint": "per-fact",
+                "receiveSignals": { "SPAWN": "::ANCHOR(@other::anchor_task.emit.cmp)" },
+                "sendSignals": ["str"],
+                "executor": { "supplierType": "organization", "supplierID": "anchor-org" }
+            }));
+        }
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "delegation_subscription",
+                "uid": "zx-delegation-sub",
+                "annotations": { "version": "1.0.0" }
+            },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "delegation-core" },
+                "taskPatterns": [ { "name": "anchor_task", "stages": stages } ]
+            }
+        })
+    }
+
+    #[test]
+    fn rejects_unanchored_subscription_stage_with_zhixu_executor() {
+        let error = compile_zhixu_hook_plan(&delegation_subscription_definition(false), None, true)
+            .expect_err("unanchored fan-in subscription + zhixu executor must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unanchored fan-in subscription stage cannot bind a zhixu delegation"),
+            "{error}"
+        );
+        // cloud target 同口径。
+        let error = compile_cloud_artifact(&delegation_subscription_definition(false), None, true)
+            .expect_err("cloud target must reject the same combination");
+        assert!(
+            error
+                .to_string()
+                .contains("unanchored fan-in subscription stage cannot bind a zhixu delegation"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn anchored_subscription_stage_allows_zhixu_executor() {
+        // 本类（anchoredcls）存在 mint 声明：订阅按 route=order 沿对接记录
+        // 按单投递，委托信封可携带订单锚定。
+        compile_zhixu_hook_plan(&delegation_subscription_definition(true), None, true)
+            .expect("anchored subscription with zhixu executor compiles");
+        compile_cloud_artifact(&delegation_subscription_definition(true), None, true)
+            .expect("cloud target accepts the anchored combination");
+    }
+
+    #[test]
+    fn rejects_invalid_stage_sources() {
+        for (label, source) in [
+            ("empty", String::new()),
+            ("whitespace", "  ".to_string()),
+            ("space inside", "sell er".to_string()),
+            ("unicode", "卖家".to_string()),
+            ("oversized", "s".repeat(37)),
+        ] {
+            let mut parent = parent_settlement_definition();
+            parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!(source);
+            let error = compile_zhixu_hook_plan(&parent, None, false)
+                .expect_err("invalid stage source must be rejected");
+            assert!(
+                error.to_string().contains(".source"),
+                "source {label:?}: {error}"
+            );
+        }
+        // 36 字节边界恰好放行。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(36));
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("boundary source must pass shape checks and fail later on linking");
+        assert!(
+            !error.to_string().contains("exceeds 36 bytes"),
+            "36-byte source is legal: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_spec_and_executor_fields() {
+        // spec 顶层退役键（trigger/externalSignals）与未知字段不再被静默
+        // 忽略/透传（对齐 Go 入口 decodeObjectStrict）。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["trigger"] = json!([]);
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("retired spec-level trigger key must fail");
+        assert!(
+            error.to_string().contains("unknown field `trigger`"),
+            "{error}"
+        );
+
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["externalSignals"] = json!({});
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("retired spec-level externalSignals key must fail");
+        assert!(
+            error.to_string().contains("unknown field `externalSignals`"),
+            "{error}"
+        );
+
+        // executor 内未知字段（flatten 透传已移除）。
+        let mut parent = parent_settlement_definition();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["handlerType"] = json!("http");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("unknown executor field must fail");
+        assert!(
+            error.to_string().contains("unknown field `handlerType`"),
+            "{error}"
+        );
+
+        // metadata 层未知字段（如 description）同样拒绝。
+        let mut parent = parent_settlement_definition();
+        parent["metadata"]["description"] = json!("demo");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("metadata-level unknown field must fail");
+        assert!(
+            error.to_string().contains("unknown field `description`"),
+            "{error}"
+        );
     }
 
     #[test]

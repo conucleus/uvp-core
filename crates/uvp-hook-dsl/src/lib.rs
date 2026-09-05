@@ -484,7 +484,7 @@ fn parse_hook_expr_at_depth(raw: &str, _profile: Profile) -> Result<HookExpr> {
         // 标头 source 类是落库列（VARCHAR(36)）与路由键：解析期钉死长度与
         // 字符集（对齐 Go 镜像 zhixu_schema.go 的 ≤36 与 plain-identifier
         // 规则）。订阅形态（::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
-        // source 另有 is_plain_identifier 与 100 长度上限校验，保持不变。
+        // source 在解析 ANCHOR 目标时按同值（≤36 + plain identifier）校验。
         if source.len() > 36 {
             return Err(HookError::Message(format!(
                 "hook source class exceeds the maximum length of 36 characters: {source}"
@@ -1576,9 +1576,16 @@ impl<'a> Parser<'a> {
         // 拒绝空格、括号、额外 :: 分隔与非 ASCII 字符。这里故意不 trim：
         // `ANCHOR` 的目标是一个严格 token，内部空格不能被规范化后放行，
         // 否则不同运行时可能对同一份原文产生不同的 signal key。
+        // 长度与标头 source 同值：source 落 hook_dependency.source_zhixu_id
+        // VARCHAR(36)，超长在解析期拒绝而不是拖到落库报 value too long。
         if !is_plain_identifier(source) {
             return Err(HookError::Message(format!(
                 "subscription source must be a plain identifier: {source:?}"
+            )));
+        }
+        if source.len() > 36 {
+            return Err(HookError::Message(format!(
+                "subscription source exceeds the maximum length of 36 characters: {source:?}"
             )));
         }
         // signal 全名落 signal_name 列（VARCHAR(100)），与普通标识符扫描同限。
@@ -2619,12 +2626,33 @@ mod tests {
 
     #[test]
     fn subscription_header_form_is_unaffected_by_source_header_cap() {
-        // 订阅形态标头恒为空：不受 ≤36/plain-identifier 标头校验影响，
-        // 订阅目标 source 仍走 is_plain_identifier/100 既有校验。
+        // 订阅形态标头恒为空：不受标头 ≤36/plain-identifier 校验影响；
+        // 订阅目标 source 自身按同值规则（≤36 + plain identifier）校验。
         parse_hook(ParseHookRequest {
             profile: Profile::EvmStrict,
             hook_name: "HOOK".to_string(),
             hook: "::ANCHOR(@seller::task.main.cmp)".to_string(),
+        })
+        .unwrap();
+        // 订阅目标 source 超 36 字节：与标头同列宽（VARCHAR(36)），解析期拒绝。
+        let overlong = "s".repeat(37);
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "HOOK".to_string(),
+            hook: format!("::ANCHOR(@{overlong}::task.main.cmp)"),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("subscription source exceeds the maximum length of 36"),
+            "unexpected: {err}"
+        );
+        // 36 字节边界恰好放行。
+        let boundary = "s".repeat(36);
+        parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "HOOK".to_string(),
+            hook: format!("::ANCHOR(@{boundary}::task.main.cmp)"),
         })
         .unwrap();
         // 订阅条目带非空标头仍按既有口径拒绝（而非新的标头错误）。

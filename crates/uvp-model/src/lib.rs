@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ObjectMeta {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -15,7 +15,7 @@ pub struct ObjectMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ZhixuDefinition {
     pub api_version: String,
     pub kind: String,
@@ -23,8 +23,11 @@ pub struct ZhixuDefinition {
     pub spec: ZhixuSpec,
 }
 
+/// spec 顶层拒绝未知字段：退役键（`trigger`、`externalSignals` 等）与
+/// 拼错字段都是确定性非法输入，静默忽略会把"看似生效"的定义落成零值
+/// （与 Go 入口 decodeObjectStrict 的 DisallowUnknownFields 等值）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ZhixuSpec {
     pub platform: ZhixuPlatform,
     pub nucleation: Nucleation,
@@ -37,7 +40,7 @@ pub struct ZhixuSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ZhixuPlatform {
     #[serde(rename = "type")]
     pub platform_type: String,
@@ -52,7 +55,7 @@ pub struct ZhixuPlatform {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Nucleation {
     pub id: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -60,7 +63,7 @@ pub struct Nucleation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ZhixuTaskPattern {
     pub name: String,
     #[serde(default)]
@@ -89,10 +92,12 @@ pub struct ZhixuStage {
 }
 
 /// typed executor（PRD94 §2/§12.1：executor 不再是不透明 Value）。
-/// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）；
-/// 非安全扩展保留在 extension map 中透传。
+/// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）。
+/// 未知字段直接拒绝：flatten 透传会静默吞掉拼错字段与退役键
+/// （`triggerEntrance` 等由 dock 模块按 D002 另行给出迁移提示），
+/// 与 Go 入口的 DisallowUnknownFields 等值。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ZhixuExecutor {
     pub supplier_type: String,
     /// schema 字段名为全大写 `supplierID`（历史约定），非 camelCase。
@@ -108,13 +113,11 @@ pub struct ZhixuExecutor {
     pub zhixu_executor_config: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selectable_resource: Option<Value>,
-    #[serde(flatten)]
-    pub extensions: BTreeMap<String, Value>,
 }
 
 /// `spec.dockInterface` source 形状（`uvp.dock.v1`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockInterfaceSource {
     pub schema_version: String,
     #[serde(default)]
@@ -124,7 +127,7 @@ pub struct DockInterfaceSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockInputPortSource {
     pub kind: String,
     /// `<task>.<stage>#<receiveHookName>`
@@ -133,13 +136,13 @@ pub struct DockInputPortSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockPortAccessSource {
     pub policy: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockOutputPortSource {
     /// `<source>::<task>.<stage>.<signal>`
     pub signal: String,

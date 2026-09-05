@@ -49,6 +49,18 @@ pub const MAX_DOCK_DEPTH: u8 = 8;
 /// `^[a-z][a-z0-9_]{0,31}$`（PRD94 §3.2）。
 pub const MAX_PORT_NAME_BYTES: usize = 32;
 
+/// signalMap key 上限：hook_plan 目标的 hook_name = "signalMap." + key
+/// （10 字节前缀）而 hook_name 列宽 36 ⇒ key 上限 26。与 Go 镜像
+/// （validator/zhixu_schema.go 的 26 上限与 `.` 禁用）统一口径，避免
+/// 27-36 字节 key 在一侧收、另一侧放的分裂。
+pub const MAX_SIGNAL_MAP_KEY_LENGTH: usize = 26;
+
+/// canonical 三段式信号名（task.stage.signal）落
+/// individual_record.signal_name / hook_dependency.signal_name 的列宽。
+/// stage 标识符 + "." + signalMap key 的组合长度按同值钉死（对齐 Go 镜像
+/// validateDDLDimensions/validateExecutor 的维度族）。
+pub const MAX_SIGNAL_NAME_BYTES: usize = 100;
+
 pub const DOMAIN_DEFINITION_REF: &str = "UVP_DEFINITION_REF_V1";
 pub const DOMAIN_INTERFACE_INPUT: &str = "UVP_DOCK_INTERFACE_INPUT_V1";
 pub const DOMAIN_INTERFACE_OUTPUT: &str = "UVP_DOCK_INTERFACE_OUTPUT_V1";
@@ -622,8 +634,31 @@ pub fn parse_zhixu_executor_config(
     }
 
     // D006/D007：signalMap key 必须是本地 send signal；必须含 str/cmp。
+    // key 同时是运行期 hook 命名空间：'.' 是信号名分隔符、组合长度受
+    // signal_name 列宽约束（与 Go 镜像 zhixu_schema.go 同款校验）。
     let mut parsed_signal = BTreeMap::new();
     for (signal_name, port) in signal_map {
+        if signal_name.contains('.') || signal_name.len() > MAX_SIGNAL_MAP_KEY_LENGTH {
+            issues.push(DockIssue::new(
+                "D006",
+                format!("{path}.signalMap.{signal_name}"),
+                format!(
+                    "key must not contain '.' and must be at most {MAX_SIGNAL_MAP_KEY_LENGTH} bytes"
+                ),
+            ));
+            continue;
+        }
+        if stage_identifier.len() + 1 + signal_name.len() > MAX_SIGNAL_NAME_BYTES {
+            issues.push(DockIssue::new(
+                "D006",
+                format!("{path}.signalMap.{signal_name}"),
+                format!(
+                    "stage {stage_identifier:?} combined signal name is {} bytes, exceeds {MAX_SIGNAL_NAME_BYTES} (individual_record.signal_name)",
+                    stage_identifier.len() + 1 + signal_name.len()
+                ),
+            ));
+            continue;
+        }
         if !stage.send_signals.contains(signal_name) {
             issues.push(DockIssue::new(
                 "D006",
@@ -679,13 +714,15 @@ pub fn parse_zhixu_executor_config(
     })
 }
 
+/// D003：目标版本必须是精确的已发布不可变版本。白名单字符集
+/// `[0-9A-Za-z.+-]`（与 Go 镜像 isExactDockVersion 同集），拒绝 latest、
+/// 空白与任何范围/通配语法（`1/2` 这类链轨串在白名单下同样被拒）。
 fn is_exact_version(version: &str) -> bool {
     !version.is_empty()
-        && version == version.trim()
         && version != "latest"
-        && !version
-            .chars()
-            .any(|ch| matches!(ch, '^' | '~' | '>' | '<' | '=' | '*' | ' '))
+        && version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
 }
 
 pub fn valid_port_name(name: &str) -> bool {

@@ -121,6 +121,25 @@
           }
         ]
       }
+    },
+    {
+      "name": "36-byte subscription target source boundary",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::task.main.cmp)",
+      "expect": {
+        "source": "",
+        "mode": "subscription",
+        "runtimeCondition": "ANCHOR(@ssssssssssssssssssssssssssssssssssss::task.main.cmp)",
+        "normalizedExpression": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::task.main.cmp)",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "ssssssssssssssssssssssssssssssssssss",
+            "signalName": "task.main.cmp"
+          }
+        ]
+      }
     }
   ],
   "evalCases": [
@@ -592,6 +611,13 @@
       "hookName": "HOOK",
       "hook": "::ANCHOR(@seller::task.main.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)",
       "messageContains": "maximum length of 100"
+    },
+    {
+      "name": "oversized subscription target source is rejected",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "::ANCHOR(@sssssssssssssssssssssssssssssssssssss::task.main.cmp)",
+      "messageContains": "maximum length of 36"
     }
   ],
   "replayCases": [
