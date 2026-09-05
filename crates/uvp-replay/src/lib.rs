@@ -623,13 +623,13 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
 }
 
 fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
-    // Arrival-time causality (semantic 0.5): the earliest RECEIVED signal is
-    // the cause. Only READY branches compete for the anchor; a waiting
-    // branch's stale anchor must not win — the ready winner keeps its own
-    // timer. Matches the core evaluator (uvp-hook-dsl Expr::Or) and the
-    // contract's _orValue (P1-5: the replay oracle previously min-merged a
-    // waiting branch's anchor into a ready result, producing due dates
-    // earlier than the contract for `(a | (b +delay)) +outer` plans).
+    // OR 的延时锚点取"最早成熟时刻"（semantic 0.5 / 簇 B 裁定）：纯信号
+    // 分支在到达时刻成熟，复合分支在自身成熟时刻成熟（如 AND 取操作数
+    // 的 max）。只有 READY 的分支才有资格竞争锚点；等待分支的陈旧锚点
+    // 不得获胜——就绪胜者保留自己的计时。与核心求值器（uvp-hook-dsl
+    // Expr::Or）及合约 _orValue 对齐（P1-5：回放 oracle 此前把等待分支
+    // 的锚点 min-并进就绪结果，对 `(a | (b +delay)) +outer` 形态给出早于
+    // 合约的到期时刻）。
     if left.value || right.value {
         let anchor = if left.value && right.value {
             min_anchor(left.anchor_at, right.anchor_at)
