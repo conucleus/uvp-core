@@ -87,3 +87,13 @@ pub extern "C" fn uvp_core_version() -> *const c_char {
     static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
     VERSION.as_ptr() as *const c_char
 }
+
+#[no_mangle]
+/// 构建指纹（由 build.rs 烧入，形如 `git-<rev>`）：宿主语言据此识别陈旧
+/// FFI 产物——语义版本不变而行为已变的旧构建无法被版本+语义探针拦住，
+/// 指纹比对是最终防线。`no-git-` 前缀表示构建时找不到 git 仓库，宿主侧
+/// 应拒绝静默通过。
+pub extern "C" fn uvp_core_build_fingerprint() -> *const c_char {
+    static FINGERPRINT: &str = concat!(env!("UVP_BUILD_FINGERPRINT"), "\0");
+    FINGERPRINT.as_ptr() as *const c_char
+}
