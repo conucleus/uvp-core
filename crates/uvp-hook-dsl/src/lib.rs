@@ -1312,11 +1312,20 @@ fn eval_expr(
                 let evaluated = eval_expr(term, source, signals, now)?;
                 match evaluated.state {
                     EvalState::Ready => {
-                        // Arrival-time causality: when several branches have
-                        // already fired, the earliest RECEIVED signal is the
-                        // cause; the winning branch keeps its own timer.
+                        // Maturity causality（OR 复合分支延时锚点裁决）：OR 取
+                        // "最早成熟"的分支——分支成熟时刻 = 纯信号接收时刻、
+                        // AND 分支内部取 max（最新锚点）、嵌套 OR 取其获胜分支
+                        // 的成熟时刻。获胜分支原样上浮：其 anchors 的 max 就是
+                        // 成熟时刻，外层 Delay 用获胜分支的成熟时刻计时（与
+                        // 合约 _orValue / 回放 oracle 的 or_value 逐字节一致）。
+                        // 无锚点的 Ready 分支（如 Not 就绪）永不获胜——链上其
+                        // anchorAt=0，_minAnchor 同样让位于任何带锚分支。
                         let better = ready.as_ref().is_none_or(|current| {
-                            branch_anchor(&evaluated) < branch_anchor(current)
+                            match (branch_maturity(&evaluated), branch_maturity(current)) {
+                                (Some(candidate), Some(incumbent)) => candidate < incumbent,
+                                (Some(_), None) => true,
+                                (None, _) => false,
+                            }
                         });
                         if better {
                             ready = Some(evaluated);
@@ -1368,15 +1377,16 @@ fn eval_expr(
     }
 }
 
-/// Earliest received time of an evaluated branch; the arrival-time tiebreak
-/// for OR branches that have already fired.
-fn branch_anchor(evaluated: &InternalEval) -> DateTime<Utc> {
-    evaluated
-        .anchors
-        .iter()
-        .copied()
-        .min()
-        .unwrap_or_else(|| evaluated.ready_at.unwrap_or(DateTime::<Utc>::MAX_UTC))
+/// Maturity moment of an evaluated READY branch — the moment its causal
+/// anchor settled: a pure signal matures at its receive time, an AND branch
+/// at its latest anchor (max), a matured delay at its advanced due date.
+/// The winner selection for OR branches and the outer `Delay` anchor share
+/// this definition (both take `max(anchors)`), removing the previous
+/// min-anchor / max-anchor split that diverged from the chain's `_orValue`.
+/// `None` marks an anchor-less Ready branch (chain anchorAt == 0): it never
+/// competes for the OR anchor.
+fn branch_maturity(evaluated: &InternalEval) -> Option<DateTime<Utc>> {
+    evaluated.anchors.iter().copied().max()
 }
 
 fn eval_signal(
@@ -2573,6 +2583,79 @@ mod tests {
         .unwrap();
         assert_eq!(eval.state, EvalState::Ready);
         assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:30.000Z"));
+    }
+
+    #[test]
+    fn or_composite_delay_anchors_on_earliest_maturing_branch() {
+        // OR 复合分支延时锚点裁决：`(A & B) | C` 且 min(A,B) < C ≤ max(A,B)
+        // 时，AND 分支的"成熟时刻"= max(A,B)，早于 C 成熟的是 C 分支——外层
+        // Delay 必须锚定 C 的成熟时刻。旧实现按"最早接收"选支（min(A,B) 获
+        // 胜）却用获胜分支的 max 锚点计时，云轨会给出比链轨 _orValue 更晚的
+        // readyAt（云判 wait、链判 ready 的分歧形态）。
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "TRIGGER".to_string(),
+            hook: "buyer::((task.a.cmp & task.b.cmp) | task.c.cmp) +10s".to_string(),
+        })
+        .unwrap();
+        let cloud_ast = parsed.cloud_ast.clone();
+        let eval = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast: cloud_ast.clone(),
+            signals: vec![
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.a.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:10.000Z".to_string(),
+                },
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.b.cmp".to_string(),
+                    received_at: "2026-04-27T00:01:00.000Z".to_string(),
+                },
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.c.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:40.000Z".to_string(),
+                },
+            ],
+            now: "2026-04-27T00:00:55.000Z".to_string(),
+        })
+        .unwrap();
+        // AND 分支成熟于 00:01:00，C 分支成熟于 00:00:40 → C 胜出，
+        // +10s → readyAt = 00:00:50（now 已过 → Ready）。
+        assert_eq!(eval.state, EvalState::Ready);
+        assert_eq!(eval.ready_at.as_deref(), Some("2026-04-27T00:00:50.000Z"));
+
+        // 同一事实在 00:00:45 观察必须仍在等待（readyAt 00:00:50 未到）。
+        let waiting = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::EvmStrict,
+            ast: cloud_ast,
+            signals: vec![
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.a.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:10.000Z".to_string(),
+                },
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.b.cmp".to_string(),
+                    received_at: "2026-04-27T00:01:00.000Z".to_string(),
+                },
+                SignalFact {
+                    source: "buyer".to_string(),
+                    signal_name: "task.c.cmp".to_string(),
+                    received_at: "2026-04-27T00:00:40.000Z".to_string(),
+                },
+            ],
+            now: "2026-04-27T00:00:45.000Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(waiting.state, EvalState::Wait);
+        assert_eq!(
+            waiting.ready_at.as_deref(),
+            Some("2026-04-27T00:00:50.000Z")
+        );
     }
 
     #[test]

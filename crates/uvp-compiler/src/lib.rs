@@ -177,6 +177,13 @@ pub fn compile_zhixu_hook_plan(
         &stage_entries,
         &selected_stage_bindings,
     ));
+    // 阶段物化三线统一（簇 A）：onchain 目标上阶段只能由本阶段 hook Ready
+    // 物化（order-trigger 或 EMIT_READY）。无静态 executor、仅被
+    // selectedStages 覆盖的阶段其 receive hook 一律 emit_ready=false、
+    // flags=0——纯 watcher 不物化阶段，链上 `_evaluateHook` 对未物化阶段
+    // 直接 revert UnknownHook，且没有任何恢复路径（executor patch 不物化）。
+    // 该形态在编译期整体拒绝：这类阶段不得声明 receiveSignals。
+    validation_issues.extend(validate_onchain_stage_materialization(&stage_entries));
     validation_issues.extend(validate_mint_anchors(&stage_entries));
     validation_issues.extend(validate_subscription_delegation(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
@@ -819,6 +826,28 @@ fn stage_is_subscription(stage: &ZhixuStage) -> bool {
             .map(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
             .unwrap_or(false)
     })
+}
+
+/// 阶段物化三线统一（簇 A，onchain 目标）：无静态 executor（仅被
+/// selectedStages 覆盖）的阶段不得声明任何 receiveSignals。这类 hook 编译
+/// 为 flags=0 纯 watcher（emit_ready=false、非 order-trigger），而链上阶段
+/// 只能由本阶段 order-trigger / EMIT_READY hook Ready 物化——纯 watcher 不
+/// 物化，executor patch 也不物化（UVPStateMachine activateStageExecutor
+/// 不调用 _materializeStage），形态一旦上链即死锁且无恢复路径。
+fn validate_onchain_stage_materialization(entries: &[StageEntry]) -> Vec<String> {
+    let mut issues = Vec::new();
+    for entry in entries {
+        if has_static_executor(entry.stage.executor.as_ref()) {
+            continue;
+        }
+        for hook_name in entry.stage.receive_signals.keys() {
+            issues.push(format!(
+                "{}.receiveSignals.{}: stage has no static executor and is only reachable through selectedStages; its hooks compile to flags=0 watchers which can never materialize the stage on-chain (deadlock, no recovery path) — declare a static executor or drop receiveSignals from this stage",
+                entry.stage_identifier, hook_name
+            ));
+        }
+    }
+    issues
 }
 
 /// UVP-01（模-1 同族裁决，对齐 Go 镜像 zhixu_schema.go 的同款检查）：zhixu
@@ -1797,8 +1826,7 @@ mod tests {
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("oversized signalMap key must fail");
         assert!(
-            error.to_string().contains("D006")
-                && error.to_string().contains("at most 26 bytes"),
+            error.to_string().contains("D006") && error.to_string().contains("at most 26 bytes"),
             "{}",
             error.to_string()
         );
@@ -1994,7 +2022,9 @@ mod tests {
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("retired spec-level externalSignals key must fail");
         assert!(
-            error.to_string().contains("unknown field `externalSignals`"),
+            error
+                .to_string()
+                .contains("unknown field `externalSignals`"),
             "{error}"
         );
 
@@ -2242,6 +2272,60 @@ mod tests {
                 .contains("requires its own static executor"),
             "unexpected cloud error: {error}"
         );
+    }
+
+    #[test]
+    fn rejects_receive_hooks_on_stage_without_static_executor() {
+        // 簇 A 阶段物化裁决：无静态 executor、仅 selectedStages 覆盖的阶段
+        // 不得声明 receiveSignals——hook 编译为 flags=0 watcher，链上永远
+        // 无法物化（纯 watcher 不物化、executor patch 不物化）。
+        let definition = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "unmaterializable_watcher",
+                "uid": "zx-unmaterializable",
+                "annotations": { "version": "1" }
+            },
+            "spec": {
+                "platform": { "type": "evm" },
+                "nucleation": { "id": "core" },
+                "taskPatterns": [
+                    { "name": "selector", "stages": [
+                        {
+                            "name": "assign",
+                            "source": "buyer",
+                            "selectedStages": ["execution.main"],
+                            "sendSignals": ["executor_selected"],
+                            "executor": { "supplierType": "organization", "supplierID": "selector-org" }
+                        }
+                    ]},
+                    { "name": "execution", "stages": [
+                        {
+                            "name": "main",
+                            "source": "buyer",
+                            "receiveSignals": {
+                                "OBS": "buyer::selector.assign.executor_selected"
+                            }
+                        }
+                    ]}
+                ]
+            }
+        });
+
+        let error = compile_zhixu_hook_plan(&definition, None, true)
+            .expect_err("flags=0 watcher on a selectedStages-only stage must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("can never materialize the stage"),
+            "unexpected error: {error}"
+        );
+
+        // Cloud 目标不做 onchain 物化裁决：同一定义仍可编译（投递语义在云侧
+        // 运行时），物化死锁是链轨专属形态。
+        compile_cloud_artifact(&definition, None, true)
+            .expect("cloud target must not enforce on-chain materialization");
     }
 
     #[test]
