@@ -308,7 +308,7 @@ pub fn cloud_runtime_domain(deployment_id: &str, security_domain: &str) -> Word 
     )
 }
 
-/// 字符串 orderID 先哈希成 word（v1 入口 API 兼容路径）。
+/// 字符串 orderID 先哈希成 word（v1 入口 API 固定派生规则，order.idPolicy=derived-v1）。
 pub fn local_order_key(order_id: &str) -> Word {
     keccak_word(order_id.as_bytes())
 }
