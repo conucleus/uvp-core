@@ -1,5 +1,12 @@
 # UVP Core Init PRD
 
+> Status note (2026-09): this is the original scoping PRD for `uvp-core`,
+> retained as a historical document. Where a section drifts from the shipped
+> crates, the code and `docs/specs/` are authoritative. Known deltas are
+> flagged inline (`[2026-09 update]`); in particular the Hook DSL grammar no
+> longer has an `externalHook` primary, and the `uvp-node` export surface is
+> snake_case `_json` functions (see §6.2/§6.9).
+
 ## 1. Background
 
 UVP currently has two implementation tracks:
@@ -159,9 +166,12 @@ orExpr       := andExpr ("|" andExpr)*
 andExpr      := unaryExpr ("&" unaryExpr)*
 unaryExpr    := "~" unaryExpr | postfixExpr
 postfixExpr  := primary ("+" duration)?
-primary      := signal | "(" condition ")" | externalHook
+primary      := signal | "(" condition ")"
 duration     := positiveInteger ("s" | "m" | "h" | "d")
 ```
+
+[2026-09 update] The retired `externalHook` primary no longer exists in the
+parser: a primary is a signal reference or a parenthesized condition only.
 
 The parser accepts whitespace around the operator, but only lowercase `s`, `m`,
 `h`, and `d`. Durations must be positive integers without a leading zero; zero,
@@ -329,16 +339,19 @@ The Rust side owns allocation. Callers must release returned strings through `uv
 
 Owns Node/TypeScript binding through `napi-rs`.
 
-Initial JSON-binding API (the native exports use these names):
+Native JSON-binding exports (`crates/uvp-node/src/lib.rs`; every function takes
+one JSON request string and returns a JSON string):
 
 ```ts
-compile(request: unknown): unknown
-parseHook(request: unknown): unknown
-evaluateHook(request: unknown): unknown
-replay(request: unknown): unknown
+compileJson(requestJson: string): string
+parseHookJson(requestJson: string): string
+evalCompiledHookJson(requestJson: string): string
+replayJson(requestJson: string): string
 version(): string
-semanticVersion(): string
 ```
+
+(An earlier revision of this PRD listed camelCase names and a
+`semanticVersion()` export; those never shipped — `[2026-09 update]`.)
 
 This is the preferred integration path for `uvp-eth` services and tools.
 
