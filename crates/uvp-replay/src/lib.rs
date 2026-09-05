@@ -418,7 +418,9 @@ fn evaluate_hook(order: &mut OracleOrderState, hook: &Value, now: &str) -> Resul
     // 阶段物化三线统一（簇 A）：`orderTriggerKind` 与 `emitReady` hook 都
     // 物化自身阶段——前者是出生边，后者是 executor dispatch 边（合约
     // `_evaluateHook` 的 EMIT_READY 分支同样调用 _materializeStage）。仅
-    // emitReady=false 的沉默 trigger 物化但不发 HookReady。
+    // emitReady=false 的沉默 trigger 物化但不发 HookReady；该形态已被
+    // UVPStateMachine commitPlan 注册守卫（SilentOrderTriggerHook）拒绝，
+    // 编译器产物恒为 trigger|EMIT_READY，此分支只是防御性死代码。
     if next.status == "reg" && is_trigger && !stage_materialized {
         order.materialized_stages.insert(stage_id.to_string(), true);
     }
