@@ -749,7 +749,7 @@ fn build_executor_routes(entries: &[StageEntry]) -> Value {
     let mut routes = Map::new();
     for entry in entries {
         if is_zhixu_executor_stage(entry) {
-            // zhixu 委托 route 不再是静态 executor route：其权威形态是
+            // zhixu 委托 route 不进静态 executor route：权威形态是
             // dockRoutes 中的 resolved DockRouteV1（PRD94 §7.1）。
             continue;
         }
@@ -796,7 +796,7 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
         if has_static_executor(entry.stage.executor.as_ref()) {
             continue;
         }
-        // 模-1 同族裁决（audit3 DEPLOY-01）：订阅阶段的投递目标编译期定死、
+        // 模-1 同族裁决：订阅阶段的投递目标编译期定死、
         // 运行时禁止 executor patch。selectedStages 可达只对可 patch 的普通
         // 阶段构成绑定——订阅阶段被 selector 指到也不豁免，否则定义可编译
         // 却没有 executor route、又禁补绑，永远无法形成可执行静态绑定。
@@ -893,12 +893,12 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     // 1) mint 取值合法（当前仅 per-fact）；
     // 2) mint 阶段必须编译期静态绑定非委托执行者（运行时 patch 对出生阶段
     //    一律拒绝）；
-    // 3) 出生入口只能是 ANCHOR 订阅（跨类事实携带溯源进入；"附加单正普通
-    //    hook"形态已废除——普通 hook 在铸单前没有可求值的订单上下文）；
+    // 3) 出生入口只能是 ANCHOR 订阅（跨类事实携带溯源进入；普通 hook
+    //    在铸单前没有可求值的订单上下文）；
     // 4) 防无界代铸链：mint 阶段的订阅目标不得指向本阶段自己的 source 类；
     // 5) 防跨源代铸环：全部 mint 阶段的订阅目标 source 类构成的有向图
-    //    不得存在可达环。委托对译边在 dock v1 中改由 route 启动图环检测
-    //    （D015）覆盖：本地编译不再持有目标接口，无法可靠对译远端类。
+    //    不得存在可达环。委托对译边由 dock v1 的 route 启动图环检测
+    //    （D015）覆盖：本地编译不持有目标接口，无法可靠对译远端类。
     for entry in entries {
         if let Some(mint) = &entry.stage.mint {
             // 与 Go 侧口径一致：精确比较，不接受带空白的变体。
@@ -960,9 +960,8 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
                         }
                     }
                     Ok(_) => {
-                        // 模-2 裁决：出生入口只能是 ANCHOR 订阅。"订阅之外附加
-                        // 单正普通 hook"的形态废除——出生事实一律走订阅通道
-                        // 携带溯源进入。
+                        // 模-2 裁决：出生入口只能是 ANCHOR 订阅——出生事实
+                        // 一律走订阅通道携带溯源进入。
                         issues.push(format!(
                             "{}.receiveSignals.{hook_name}: mint stage accepts ANCHOR(@…) subscription entries only; plain birth-entry hooks are retired",
                             entry.stage_identifier
@@ -1084,7 +1083,6 @@ fn validate_receive_signal_references(
 // receiveSignals key 即阶段内 hook_name，落 hook_name 列（VARCHAR(36)）。
 // 语法手册 §7.4："key 不可为空且不能含 '.'"；'#' 是 hookId 分隔符
 // （stage#hook_name）——key 携带任一分隔符都会让 hookId 命名空间含混。
-// v1 起 signalMap 伪 hook namespace 已删除，同名碰撞检查随之移除。
 fn validate_receive_signal_keys(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
@@ -1724,7 +1722,7 @@ mod tests {
             route["routeHash"],
             "0x0000000000000000000000000000000000000000000000000000000000000000"
         );
-        // 静态 executorRoutes 不再包含 zhixu stage。
+        // zhixu stage 不在静态 executorRoutes 中（权威形态是 dockRoutes）。
         assert!(plan["executorRoutes"]
             .as_object()
             .unwrap()
@@ -1782,8 +1780,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_legacy_executor_shapes_with_migration_hint() {
-        // triggerEntrance：旧调用方形状。
+    fn rejects_unsupported_executor_config_shapes() {
+        // triggerEntrance：不受支持的调用方字段，D002 未知字段硬错误。
         let mut parent = parent_settlement_definition();
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
@@ -1796,7 +1794,7 @@ mod tests {
             message.contains("D002") && message.contains("triggerEntrance"),
             "{message}"
         );
-        assert!(message.contains("clean break"), "{message}");
+        assert!(message.contains("unknown field"), "{message}");
 
         // signalMap value 是 Hook DSL：v1 只接受端口名。
         let mut parent = parent_settlement_definition();
@@ -2006,12 +2004,12 @@ mod tests {
 
     #[test]
     fn rejects_unknown_spec_and_executor_fields() {
-        // spec 顶层退役键（trigger/externalSignals）与未知字段不再被静默
+        // spec 顶层未知字段（含不受支持的 trigger/externalSignals）不被静默
         // 忽略/透传（对齐 Go 入口 decodeObjectStrict）。
         let mut parent = parent_settlement_definition();
         parent["spec"]["trigger"] = json!([]);
         let error = compile_zhixu_hook_plan(&parent, None, false)
-            .expect_err("retired spec-level trigger key must fail");
+            .expect_err("unsupported spec-level trigger key must fail");
         assert!(
             error.to_string().contains("unknown field `trigger`"),
             "{error}"
@@ -2020,7 +2018,7 @@ mod tests {
         let mut parent = parent_settlement_definition();
         parent["spec"]["externalSignals"] = json!({});
         let error = compile_zhixu_hook_plan(&parent, None, false)
-            .expect_err("retired spec-level externalSignals key must fail");
+            .expect_err("unsupported spec-level externalSignals key must fail");
         assert!(
             error
                 .to_string()
@@ -2028,7 +2026,7 @@ mod tests {
             "{error}"
         );
 
-        // executor 内未知字段（flatten 透传已移除）。
+        // executor 内未知字段。
         let mut parent = parent_settlement_definition();
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["handlerType"] = json!("http");
         let error = compile_zhixu_hook_plan(&parent, None, false)
@@ -2219,7 +2217,7 @@ mod tests {
 
     #[test]
     fn rejects_subscription_stage_bound_only_through_selected_stages() {
-        // audit3 DEPLOY-01：订阅阶段的投递目标编译期定死、运行时禁止
+        // 订阅阶段的投递目标编译期定死、运行时禁止
         // executor patch。被 selector 指到的订阅阶段仍必须有自身静态 executor。
         let definition = json!({
             "apiVersion": "uvp/v0",

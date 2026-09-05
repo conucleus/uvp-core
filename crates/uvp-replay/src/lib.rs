@@ -314,15 +314,15 @@ fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Result<Vec<Val
 }
 
 /// hook-plan v2 把单一 `isTrigger` 拆成 `orderTriggerKind`(mint|dock|none)
-/// 加 `emitReady`（PRD94 §3.4）。legacy v1 `isTrigger` 布尔回退已随语义冻结
-/// 批次删除：oracle 只认 v2 字段，缺失即结构性错误（fail-closed）。
+/// 加 `emitReady`（PRD94 §3.4）。oracle 只认 v2 字段，缺失即结构性错误
+/// （fail-closed，不做隐式回退）。
 fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
     let kind = hook
         .get("orderTriggerKind")
         .and_then(Value::as_str)
         .ok_or_else(|| {
             ReplayError::Message(format!(
-            "hook {} must carry an orderTriggerKind field (legacy isTrigger artifacts are retired)",
+            "hook {} must carry an orderTriggerKind field",
             value_str(hook, "hookId").unwrap_or("<unknown>")
         ))
         })?;
@@ -337,13 +337,13 @@ fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
 }
 
 /// `emitReady` controls the observable readiness event independently from
-/// order/stage materialization. The legacy "absent field falls back to
-/// isTrigger" reading is retired: v2 artifacts must carry the boolean.
+/// order/stage materialization. v2 artifacts must carry the boolean; absence
+/// is a structural error, not an implied default.
 fn hook_emits_ready(hook: &Value) -> Result<bool> {
     match hook.get("emitReady") {
         Some(Value::Bool(value)) => Ok(*value),
         _ => Err(ReplayError::Message(format!(
-            "hook {} emitReady must be a boolean (legacy isTrigger artifacts are retired)",
+            "hook {} emitReady must be a boolean",
             value_str(hook, "hookId").unwrap_or("<unknown>")
         ))),
     }
@@ -505,8 +505,8 @@ fn evaluate_instructions(
                     )
                 })?);
             }
-            // MERGE（撮合扇入，semantic 0.6）已作废：语料与编译器不再产出该
-            // 指令，求值器一并移除——编码层保留的合约侧校验不再有合法生产者。
+            // 求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY）；其他指令一律
+            // unsupported（合约侧编码校验同样不为其发放合法生产者）。
             other => {
                 return Err(ReplayError::Message(format!(
                     "unsupported chain-mode instruction {other}"
@@ -629,9 +629,7 @@ fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
     // 分支在到达时刻成熟，复合分支在自身成熟时刻成熟（如 AND 取操作数
     // 的 max）。只有 READY 的分支才有资格竞争锚点；等待分支的陈旧锚点
     // 不得获胜——就绪胜者保留自己的计时。与核心求值器（uvp-hook-dsl
-    // Expr::Or）及合约 _orValue 对齐（P1-5：回放 oracle 此前把等待分支
-    // 的锚点 min-并进就绪结果，对 `(a | (b +delay)) +outer` 形态给出早于
-    // 合约的到期时刻）。
+    // Expr::Or）及合约 _orValue 对齐。
     if left.value || right.value {
         let anchor = if left.value && right.value {
             min_anchor(left.anchor_at, right.anchor_at)
@@ -971,8 +969,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_merge_instruction_as_retired() {
-        // MERGE（semantic 0.6 撮合扇入）已作废：求值器不再认识该指令。
+    fn rejects_unknown_instruction() {
+        // 未知指令一律 unsupported：求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY）。
         let instructions = vec![
             json!({"op": "SIGNAL", "signalKey": "0xaa"}),
             json!({"op": "SIGNAL", "signalKey": "0xbb"}),
@@ -1343,8 +1341,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_is_trigger_hooks_are_rejected() {
-        // legacy 清零：v1 isTrigger 产物不再兼容读取，缺失 v2 字段即错误。
+    fn hooks_missing_required_v2_fields_are_rejected() {
+        // fail-closed：缺失 v2 必需字段（orderTriggerKind / emitReady）即
+        // 结构性错误，不做隐式回退。
         let mut order = OracleOrderState {
             zhixu_id: "demo".to_string(),
             order_id: "order-1".to_string(),
@@ -1354,18 +1353,35 @@ mod tests {
             "0x50".to_string(),
             json!({"submittedAt": "2026-04-27T00:00:00.000Z"}),
         );
-        let legacy_hook = json!({
-            "hookId": "flow.start#LEGACY",
+        let hook_missing_kind = json!({
+            "hookId": "flow.start#BARE",
             "stageId": "flow.start",
             "stageIdentifier": "flow.start",
-            "hookName": "LEGACY",
+            "hookName": "BARE",
+            "emitReady": true,
             "isTrigger": true,
             "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
         });
-        let error = evaluate_hook(&mut order, &legacy_hook, "2026-04-27T00:00:00.000Z")
-            .expect_err("legacy isTrigger hook must be rejected");
+        let error = evaluate_hook(&mut order, &hook_missing_kind, "2026-04-27T00:00:00.000Z")
+            .expect_err("hook missing orderTriggerKind must be rejected");
         assert!(
-            error.to_string().contains("retired"),
+            error.to_string().contains("orderTriggerKind"),
+            "unexpected error: {error}"
+        );
+
+        let hook_missing_emit_ready = json!({
+            "hookId": "flow.start#BARE",
+            "stageId": "flow.start",
+            "stageIdentifier": "flow.start",
+            "hookName": "BARE",
+            "orderTriggerKind": "mint",
+            "isTrigger": true,
+            "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+        });
+        let error = evaluate_hook(&mut order, &hook_missing_emit_ready, "2026-04-27T00:00:00.000Z")
+            .expect_err("hook missing emitReady must be rejected");
+        assert!(
+            error.to_string().contains("emitReady must be a boolean"),
             "unexpected error: {error}"
         );
     }

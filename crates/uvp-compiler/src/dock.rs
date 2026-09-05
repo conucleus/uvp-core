@@ -443,7 +443,7 @@ impl std::fmt::Display for DockIssue {
 
 pub type DockResult<T> = std::result::Result<T, Vec<DockIssue>>;
 
-const MIGRATION_HINT: &str = "legacy Zhixu delegation was removed (clean break, PRD94 §13): \
+const UNSUPPORTED_HINT: &str = "Zhixu delegation is not supported (PRD94 §13): \
     publish target spec.dockInterface ports and bind executor.zhixuExecutorConfig \
     {schemaVersion:uvp.dock.v1, target, order.idPolicy:derived-v1, inputMap, signalMap-to-port-names}; \
     re-link and republish, do not expect runtime compatibility";
@@ -500,7 +500,7 @@ pub fn parse_zhixu_executor_config(
         return Err(issues);
     };
 
-    // D002：schemaVersion + 未知/旧字段（迁移硬错误）。
+    // D002：schemaVersion + 未知字段（硬错误）。
     let schema = config_object
         .get("schemaVersion")
         .and_then(Value::as_str)
@@ -515,12 +515,11 @@ pub fn parse_zhixu_executor_config(
     const ALLOWED_KEYS: [&str; 5] = ["schemaVersion", "target", "order", "inputMap", "signalMap"];
     for key in config_object.keys() {
         if !ALLOWED_KEYS.contains(&key.as_str()) {
-            let message = if key == "triggerEntrance" {
-                format!("unknown field {key:?}: {MIGRATION_HINT}")
-            } else {
-                format!("unknown field {key:?}; allowed: {ALLOWED_KEYS:?}")
-            };
-            issues.push(DockIssue::new("D002", format!("{path}.{key}"), message));
+            issues.push(DockIssue::new(
+                "D002",
+                format!("{path}.{key}"),
+                format!("unknown field {key:?}; allowed: {ALLOWED_KEYS:?}"),
+            ));
         }
     }
 
@@ -615,7 +614,7 @@ pub fn parse_zhixu_executor_config(
             issues.push(DockIssue::new(
                 "D005",
                 format!("{path}.inputMap.{hook_name}"),
-                format!("value must be a port name matching ^[a-z][a-z0-9_]{{0,31}}$, found {port_name:?}; {MIGRATION_HINT}"),
+                format!("value must be a port name matching ^[a-z][a-z0-9_]{{0,31}}$, found {port_name:?}; {UNSUPPORTED_HINT}"),
             ));
             continue;
         }
@@ -679,7 +678,7 @@ pub fn parse_zhixu_executor_config(
             issues.push(DockIssue::new(
                 "D006",
                 format!("{path}.signalMap.{signal_name}"),
-                format!("value must be a port name matching ^[a-z][a-z0-9_]{{0,31}}$, found {port_name:?}; {MIGRATION_HINT}"),
+                format!("value must be a port name matching ^[a-z][a-z0-9_]{{0,31}}$, found {port_name:?}; {UNSUPPORTED_HINT}"),
             ));
             continue;
         }

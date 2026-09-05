@@ -5,7 +5,7 @@ use uvp_hook_dsl::SEMANTIC_VERSION;
 use uvp_ir::canonical_stringify;
 
 /// Profile-level compilation fixtures live in `fixtures/{zhixu,cloud,evm}` and
-/// follow the declaration shape promised by init_prd §8: name, semanticVersion,
+/// share one declaration shape: name, semanticVersion,
 /// input, expected, portable. This harness discovers every `*.json` file in
 /// those directories, so adding a fixture never requires touching this test.
 #[derive(Debug, Deserialize)]

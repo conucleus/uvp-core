@@ -8,9 +8,10 @@ pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
 
-/// uvp-semantic/0.6 的跨秩序四典型（::OUTSIDE@ / ::MERGE@ / 旧 ::ANCHOR@ /
-/// OUTSOURCE）已在 uvp.semantic.v1 统一退役为「订阅 + 铸单」模型；解析器保留关键字识别，
-/// 以给出精确的迁移报错而不是笼统的语法错误。
+/// 以下跨秩序关键字不受支持：`::OUTSIDE@`、`::MERGE@`、`ANCHOR@`（裸标头）、
+/// `OUTSOURCE`。解析器仍识别这些关键字，以便给出精确的 unsupported 报错
+/// （统一入口为 `::ANCHOR(@source::task.stage.signal)` 订阅，见
+/// subscription-mint-spec.md），而不是笼统的语法错误。
 pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,7 +222,7 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     let profile = req.profile;
     let hook_name = req.hook_name;
     // 长度上限对齐 DDL 列宽（hook_name VARCHAR(36)、signal_name VARCHAR(100)）：
-    // 超长定义在解析期即拒绝，不再拖到落库才以 value too long 失败。
+    // 超长定义在解析期即拒绝，而不是落库时才以 value too long 失败。
     if hook_name.trim().is_empty() || hook_name.len() > 36 {
         return Err(HookError::Message(
             "hook_name must be 1-36 characters".to_string(),
@@ -309,7 +310,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         .ok_or_else(|| HookError::Message("compiled hook AST is missing mode".to_string()))?;
     if !matches!(mode, "normal" | "subscription") {
         return Err(HookError::Message(format!(
-            "unsupported compiled hook AST mode: {mode}; outside_spawn/merge/anchor were retired in uvp.semantic.v1"
+            "unsupported compiled hook AST mode: {mode}"
         )));
     }
     // mint/route 是云侧编译器注入订阅 AST 的铸单/路由标注；对齐 Go
@@ -725,7 +726,8 @@ fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
 }
 
 fn starts_cross_source(value: &str) -> bool {
-    // 旧关键字仍放行进解析器，以便命中精确的退役提示而非笼统的空标头报错。
+    // 不受支持的关键字仍放行进解析器，以便命中精确的 unsupported 报错
+    // 而非笼统的空标头报错。
     value.starts_with("ANCHOR")
         || value.starts_with("OUTSIDE")
         || value.starts_with("MERGE")
@@ -1556,8 +1558,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 订阅通道：`ANCHOR(@source::task.stage.signal)`。旧 `ANCHOR@(裸三段)`
-    /// 标头形态已退役；目标必须携带 @ 前缀的 source 类名空间。
+    /// 订阅通道：`ANCHOR(@source::task.stage.signal)`。`ANCHOR@`（无括号
+    /// 裸标头）写法不受支持；目标必须携带 @ 前缀的 source 类名空间。
     fn parse_subscription(&mut self) -> Result<Expr> {
         self.skip_ws();
         if self.peek() == '@' {
@@ -1850,8 +1852,9 @@ mod tests {
     }
 
     #[test]
-    fn retired_cross_source_keywords_fail_fast() {
-        // 嵌套构造在最外层即命中退役报错：uvp.semantic.v1 不再解析四典型形态。
+    fn unsupported_cross_source_keywords_fail_fast() {
+        // 嵌套构造在最外层即命中 unsupported 报错：不受支持的跨秩序形态
+        // 不做深度解析。
         let mut expression = "peer::task.main.cmp".to_string();
         for _ in 0..2_000 {
             expression = format!("::OUTSIDE@({expression})");
@@ -2001,7 +2004,7 @@ mod tests {
 
     #[test]
     fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
-        // 直接构造绕过编译期的毒 AST（历史持久化产物的形态：超大秒数与
+        // 直接构造绕过编译期的毒 AST（不受信任输入的形态：超大秒数与
         // 原始字面量自洽）。求值必须在解码期确定性拒绝并走有界失败路径，
         // 而不是 panic 跨 FFI 边界 abort 进程。
         let poisoned = json!({
@@ -2056,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    fn compiled_hook_evaluation_rejects_legacy_ast_shape() {
+    fn compiled_hook_evaluation_requires_schema_version() {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
             ast: json!({
@@ -2070,12 +2073,12 @@ mod tests {
             signals: Vec::new(),
             now: "2026-04-15T00:00:00Z".to_string(),
         })
-        .expect_err("legacy AST must not be evaluated");
+        .expect_err("AST missing schemaVersion must not be evaluated");
         assert!(err.to_string().contains("schemaVersion"));
     }
 
     #[test]
-    fn compiled_hook_evaluation_rejects_legacy_node_fields() {
+    fn compiled_hook_evaluation_rejects_unknown_node_fields() {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
             ast: json!({
@@ -2091,7 +2094,7 @@ mod tests {
             signals: Vec::new(),
             now: "2026-04-15T00:00:00Z".to_string(),
         })
-        .expect_err("legacy node fields must not be evaluated");
+        .expect_err("unknown node fields must not be evaluated");
         assert!(err.to_string().contains("unsupported field: delay"));
     }
 
@@ -2205,7 +2208,7 @@ mod tests {
     }
 
     #[test]
-    fn outsource_is_retired_with_migration_hint() {
+    fn outsource_forms_are_rejected_with_hint() {
         for hook in [
             "::OUTSOURCE@(seller::task.main.cmp)",
             "buyer::OUTSOURCE@(seller::task.main.cmp)",
@@ -2297,9 +2300,9 @@ mod tests {
     }
 
     #[test]
-    fn retired_hook_modes_are_rejected_at_decode() {
-        // 旧语义线的编译产物（outside_spawn/merge/anchor）在 uvp.semantic.v1 解码期确定性拒绝，
-        // 不做兼容解释。
+    fn unsupported_hook_modes_are_rejected_at_decode() {
+        // 编译产物 mode 白名单（normal/subscription）之外的取值在解码期
+        // 确定性拒绝，不做兼容解释。
         for mode in ["outside_spawn", "merge", "anchor"] {
             let err = eval_compiled_hook(EvalCompiledHookRequest {
                 profile: Profile::CloudCompat,
@@ -2312,9 +2315,9 @@ mod tests {
                 signals: vec![],
                 now: "2026-04-27T00:00:00Z".to_string(),
             })
-            .expect_err("retired mode must not decode");
+            .expect_err("unsupported mode must not decode");
             assert!(
-                err.to_string().contains("retired in uvp.semantic.v1"),
+                err.to_string().contains("unsupported compiled hook AST mode"),
                 "unexpected error for {mode}: {err}"
             );
         }
@@ -2589,9 +2592,8 @@ mod tests {
     fn or_composite_delay_anchors_on_earliest_maturing_branch() {
         // OR 复合分支延时锚点裁决：`(A & B) | C` 且 min(A,B) < C ≤ max(A,B)
         // 时，AND 分支的"成熟时刻"= max(A,B)，早于 C 成熟的是 C 分支——外层
-        // Delay 必须锚定 C 的成熟时刻。旧实现按"最早接收"选支（min(A,B) 获
-        // 胜）却用获胜分支的 max 锚点计时，云轨会给出比链轨 _orValue 更晚的
-        // readyAt（云判 wait、链判 ready 的分歧形态）。
+        // Delay 必须锚定 C 的成熟时刻（与合约 _orValue、回放 oracle 的
+        // or_value 同口径）。
         let parsed = parse_hook(ParseHookRequest {
             profile: Profile::EvmStrict,
             hook_name: "TRIGGER".to_string(),
@@ -2660,8 +2662,8 @@ mod tests {
 
     #[test]
     fn duration_with_multibyte_tail_fails_bounded_instead_of_panicking() {
-        // 毒输入回归：多字节 UTF-8 结尾曾按字节 split_at 在非字符边界 panic
-        // （有界失败纪律：毒 AST/毒输入必须返回确定性错误，绝不 panic）。
+        // 毒输入纪律：多字节 UTF-8 结尾必须在非字符边界确定性报错而不是
+        // panic（毒 AST/毒输入必须有界失败，绝不 panic）。
         for raw in ["ü", "1ü", "10ü"] {
             let err = duration_to_seconds(raw).unwrap_err();
             assert!(
