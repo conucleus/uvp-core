@@ -1511,6 +1511,40 @@ fn parse_interface_artifact(value: &Value) -> DockResult<DockInterfaceArtifact> 
             ));
             continue;
         };
+        // output 端口与 input 同口径（D008）：sourceId/signalId 缺失或非法
+        // 不得静默落成零 word——零 word 会参与 leafHash/幂等键的重算比对，
+        // 悬空值只能以确定性错误暴露。
+        let port_path = || format!("outputs.{}", port.get("port").and_then(Value::as_str).unwrap_or("?"));
+        let source_id = match port
+            .get("sourceId")
+            .and_then(Value::as_str)
+            .and_then(word_from_hex)
+        {
+            Some(word) => word,
+            None => {
+                issues.push(DockIssue::new(
+                    "D008",
+                    port_path(),
+                    "sourceId must be a 0x-prefixed bytes32 word",
+                ));
+                continue;
+            }
+        };
+        let signal_id = match port
+            .get("signalId")
+            .and_then(Value::as_str)
+            .and_then(word_from_hex)
+        {
+            Some(word) => word,
+            None => {
+                issues.push(DockIssue::new(
+                    "D008",
+                    port_path(),
+                    "signalId must be a 0x-prefixed bytes32 word",
+                ));
+                continue;
+            }
+        };
         leaves.push(leaf_hash);
         outputs.push(DockInterfaceArtifactPortOutput {
             port: port
@@ -1529,16 +1563,8 @@ fn parse_interface_artifact(value: &Value) -> DockResult<DockInterfaceArtifact> 
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            source_id: port
-                .get("sourceId")
-                .and_then(Value::as_str)
-                .and_then(word_from_hex)
-                .unwrap_or([0u8; 32]),
-            signal_id: port
-                .get("signalId")
-                .and_then(Value::as_str)
-                .and_then(word_from_hex)
-                .unwrap_or([0u8; 32]),
+            source_id,
+            signal_id,
             terminal: port
                 .get("terminal")
                 .and_then(Value::as_str)
@@ -2318,6 +2344,64 @@ pub fn eip712_permit_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_output_ports_with_missing_identity_words_are_rejected() {
+        // F-14/F15：output 端口 sourceId/signalId 缺失/非法不得静默落成
+        // 零 word——与 input 端口同口径的 D008 确定性错误。
+        let definition_ref = definition_ref_hash("zx-target", "1.0.0");
+        let interface = json!({
+            "schemaVersion": DOCK_INTERFACE_ARTIFACT_SCHEMA_VERSION,
+            "definition": {
+                "uid": "zx-target",
+                "version": "1.0.0",
+                "definitionRefHash": word_hex(&definition_ref),
+            },
+            "inputs": [],
+            "outputs": [{
+                "port": "done",
+                "canonicalOutputSignal": "seller::task.stage.cmp",
+                "canonicalOutputSignalHash": word_hex(&[0xaa; 32]),
+                "source": "seller",
+                "sourceId": word_hex(&[0xab; 32]),
+                "signalId": word_hex(&[0xbb; 32]),
+                "terminal": "success",
+                "leafHash": word_hex(&[0xcc; 32])
+            }],
+            "interfaceRoot": word_hex(&[0xdd; 32])
+        });
+        let manifest = |interface: Value| {
+            json!({
+                "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+                "definitions": [{
+                    "zhixu": "zx-target",
+                    "version": "1.0.0",
+                    "definitionRefHash": word_hex(&definition_ref),
+                    "artifactHash": word_hex(&[0xee; 32]),
+                    "published": true,
+                    "interface": interface
+                }]
+            })
+        };
+        for (field, removal) in [("sourceId", true), ("signalId", false)] {
+            let mut poisoned = interface.clone();
+            if removal {
+                poisoned["outputs"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+            } else {
+                poisoned["outputs"][0][field] = json!("not-a-word");
+            }
+            let issues = parse_resolution_manifest(&manifest(poisoned)).unwrap_err();
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.message.contains(&format!("{field} must be"))),
+                "{field}: {issues:?}"
+            );
+        }
+    }
 
     #[test]
     fn route_depth_counts_local_definition_and_targets() {

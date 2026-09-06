@@ -298,6 +298,11 @@ pub fn compile_cloud_artifact(
         &stage_entries,
         &dock_state.input_port_hook_ids,
     ));
+    // sendSignals capability 同口径（空串/重复在两个 target 一致拒绝）：
+    // cloud 产物供 Go 主链路消费，不得放行 hook_plan 已拒绝的声明。
+    if let Err(err) = build_signal_capabilities(&stage_entries) {
+        return Err(err);
+    }
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
@@ -584,6 +589,14 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
                 task.name
             ));
         }
+        // 与文法一致（taskPattern 至少含一个 stage）：空/缺失 stages 的
+        // taskPattern 是确定性的非法形状，不得靠 serde default 编译成
+        // "无阶段任务"。
+        if task.stages.is_empty() {
+            issues.push(format!(
+                "spec.taskPatterns[{task_index}].stages must contain at least one stage",
+            ));
+        }
         for (stage_index, stage) in task.stages.iter().enumerate() {
             if !valid_identifier_part(&stage.name) {
                 issues.push(format!(
@@ -770,6 +783,28 @@ fn is_zhixu_executor_stage(entry: &StageEntry) -> bool {
 
 fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<String> {
     let mut issues = Vec::new();
+    // 非委托 executor 必须携带非空 supplierID（对齐 TS 侧同款拒绝）：
+    // 缺 supplierID 的执行器即使被 selectedStages 锚定也是"看似绑定"——
+    // 产物里会出现没有投递目标的 executor route。zhixu 委托的身份在
+    // zhixuExecutorConfig.target（D001 禁 supplierID），不在此列。
+    for entry in entries {
+        let Some(executor) = entry.stage.executor.as_ref() else {
+            continue;
+        };
+        if executor.supplier_type.trim() == "zhixu" {
+            continue;
+        }
+        if !executor
+            .supplier_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            issues.push(format!(
+                "{}.executor.supplierID is required when supplierType is {:?}",
+                entry.stage_identifier, executor.supplier_type
+            ));
+        }
+    }
     let mut targets_by_selector: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for binding in bindings {
         targets_by_selector
@@ -2197,6 +2232,130 @@ mod tests {
                 .to_string()
                 .contains("must start with an ASCII letter"));
         }
+    }
+
+    #[test]
+    fn rejects_task_pattern_with_empty_or_missing_stages() {
+        // taskPatterns[].stages minItems 1（与文法一致）：空数组与缺失
+        //（serde default 吞成空）都在编译期确定性拒绝，hook_plan/cloud
+        // 两 target 同口径。
+        for mutate in ["empty", "missing"] {
+            let mut definition = target_payment_definition();
+            match mutate {
+                "empty" => definition["spec"]["taskPatterns"][0]["stages"] = json!([]),
+                _ => {
+                    definition["spec"]["taskPatterns"][0]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("stages");
+                }
+            }
+            let error = compile_zhixu_hook_plan(&definition, None, true)
+                .expect_err("stages-less task pattern must fail");
+            assert!(
+                error.to_string().contains("must contain at least one stage"),
+                "{mutate}: {error}"
+            );
+            let error = compile_cloud_artifact(&definition, None, true)
+                .expect_err("cloud target must reject the same shape");
+            assert!(
+                error.to_string().contains("must contain at least one stage"),
+                "{mutate} cloud: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
+        // F-05：sendSignals 空串/重复 capability 校验两 target 同口径，
+        // cloud 产物不得放行 hook_plan 已拒绝的声明。
+        let mut empty = target_payment_definition();
+        empty["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(""));
+        for target in ["hook_plan", "cloud"] {
+            let error = (if target == "hook_plan" {
+                compile_zhixu_hook_plan(&empty, None, true)
+            } else {
+                compile_cloud_artifact(&empty, None, true)
+            })
+            .expect_err("empty sendSignal must fail");
+            assert!(
+                error.to_string().contains("cannot contain an empty signal"),
+                "{target}: {error}"
+            );
+        }
+
+        let mut duplicate = target_payment_definition();
+        duplicate["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("str"));
+        for target in ["hook_plan", "cloud"] {
+            let error = (if target == "hook_plan" {
+                compile_zhixu_hook_plan(&duplicate, None, true)
+            } else {
+                compile_cloud_artifact(&duplicate, None, true)
+            })
+            .expect_err("duplicate sendSignal must fail");
+            assert!(
+                error.to_string().contains("duplicate capability"),
+                "{target}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_executor_without_supplier_id_even_when_selected_stages_anchored() {
+        // 0404#4：非委托 executor 缺 supplierID 时即使被 selectedStages 锚定
+        // 也拒绝——产物里不得出现没有投递目标的 executor route（对齐 TS 侧）。
+        let definition = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "supplier_id_required",
+                "uid": "zx-supplier-id",
+                "annotations": { "version": "1" }
+            },
+            "spec": {
+                "platform": { "type": "evm" },
+                "nucleation": { "id": "core" },
+                "taskPatterns": [
+                    { "name": "selector", "stages": [
+                        {
+                            "name": "assign",
+                            "source": "buyer",
+                            "selectedStages": ["execution.main"],
+                            "sendSignals": ["executor_selected"],
+                            "executor": { "supplierType": "organization", "supplierID": "selector-org" }
+                        }
+                    ]},
+                    { "name": "execution", "stages": [
+                        {
+                            "name": "main",
+                            "source": "buyer",
+                            "receiveSignals": {
+                                "GO": "buyer::selector.assign.executor_selected"
+                            },
+                            "executor": { "supplierType": "organization" }
+                        }
+                    ]}
+                ]
+            }
+        });
+        let error = compile_zhixu_hook_plan(&definition, None, true)
+            .expect_err("executor without supplierID must fail");
+        assert!(
+            error.to_string().contains("supplierID is required"),
+            "unexpected error: {error}"
+        );
+        let error = compile_cloud_artifact(&definition, None, true)
+            .expect_err("cloud target must enforce the same requirement");
+        assert!(
+            error.to_string().contains("supplierID is required"),
+            "unexpected cloud error: {error}"
+        );
     }
 
     #[test]

@@ -233,7 +233,7 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     // 解析行为与 profile 无关（profile 只影响归一化/兼容性输出），
     // 因此 parse_hook_expr 不接收 profile。
     let hook = parse_hook_expr(&req.hook)?;
-    validate_hook(&hook.condition, profile)?;
+    validate_hook(&hook.condition)?;
 
     let raw_condition = req
         .hook
@@ -436,7 +436,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
     // Defense in depth: a hand-crafted compiled AST must satisfy the same
     // positive-anchor invariant as a parsed expression before it may drive
     // hook status transitions.
-    validate_hook(&expr, req.profile)?;
+    validate_hook(&expr)?;
     let signals = signal_map(req.signals, req.profile)?;
     let result = eval_expr(&expr, &source, &signals, now)?;
 
@@ -798,7 +798,7 @@ fn reject_unsupported_operators(condition: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_hook(expr: &Expr, profile: Profile) -> Result<()> {
+fn validate_hook(expr: &Expr) -> Result<()> {
     let anchored = validate_anchors(expr)?;
     if !anchored {
         return Err(HookError::Message(
