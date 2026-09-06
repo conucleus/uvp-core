@@ -1516,7 +1516,12 @@ fn parse_interface_artifact(value: &Value) -> DockResult<DockInterfaceArtifact> 
         // output 端口与 input 同口径（D008）：sourceId/signalId 缺失或非法
         // 不得静默落成零 word——零 word 会参与 leafHash/幂等键的重算比对，
         // 悬空值只能以确定性错误暴露。
-        let port_path = || format!("outputs.{}", port.get("port").and_then(Value::as_str).unwrap_or("?"));
+        let port_path = || {
+            format!(
+                "outputs.{}",
+                port.get("port").and_then(Value::as_str).unwrap_or("?")
+            )
+        };
         let source_id = match port
             .get("sourceId")
             .and_then(Value::as_str)

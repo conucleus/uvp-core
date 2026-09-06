@@ -196,9 +196,12 @@ fn absorb_chain_observation(
                 order_key(value_str(event, "planId")?, value_str(event, "orderId")?),
                 value_str(event, "hookId")?
             );
-            if last_status.get(&key).is_some_and(|(previous_status, previous_due)| {
-                *previous_status == status && *previous_due == due_at
-            }) {
+            if last_status
+                .get(&key)
+                .is_some_and(|(previous_status, previous_due)| {
+                    *previous_status == status && *previous_due == due_at
+                })
+            {
                 return Ok(());
             }
             last_status.insert(key, (status, due_at));
@@ -218,8 +221,7 @@ fn derive_order_link_birth(state: &mut OracleState, observed: &mut Vec<Value>, e
         value_str(event, "planId"),
         value_str(event, "orderId"),
         value_str(event, "hookId"),
-    )
-    else {
+    ) else {
         return;
     };
     if !state.orders.contains_key(&order_key(plan_id, order_id)) {
@@ -472,9 +474,9 @@ fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
         .and_then(Value::as_str)
         .ok_or_else(|| {
             ReplayError::Message(format!(
-            "hook {} must carry an orderTriggerKind field",
-            value_str(hook, "hookId").unwrap_or("<unknown>")
-        ))
+                "hook {} must carry an orderTriggerKind field",
+                value_str(hook, "hookId").unwrap_or("<unknown>")
+            ))
         })?;
     match kind {
         "mint" | "dock" => Ok(true),
@@ -1188,11 +1190,11 @@ mod tests {
         // 合约 op=Merge 求值对齐：任一在场分支即就绪，锚点取在场分支最早
         // 到达；全部缺席则未就绪。k=1（arity<2）按合约编码门拒绝。
         let mut order = OracleOrderState::default();
-         order.signals.insert(
+        order.signals.insert(
             "0x50".to_string(),
             json!({"submittedAt": "2026-04-27T00:00:30.000Z"}),
         );
-         order.signals.insert(
+        order.signals.insert(
             "0x51".to_string(),
             json!({"submittedAt": "2026-04-27T00:00:10.000Z"}),
         );
@@ -1209,7 +1211,7 @@ mod tests {
         );
 
         let mut partial = OracleOrderState::default();
-         partial.signals.insert(
+        partial.signals.insert(
             "0x50".to_string(),
             json!({"submittedAt": "2026-04-27T00:00:30.000Z"}),
         );
@@ -1514,15 +1516,24 @@ mod tests {
                 "hookName": "BIRTH"
             }),
         ];
-        let result =
-            replay_chain_events(events, &ReplayOptions { sort: None, strict: Some(true) }).unwrap();
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap();
         assert_eq!(
             result["mismatches"].as_array().map(Vec::len),
             Some(0),
             "order-link birth must replay without mismatch"
         );
         let order = &result["state"]["orders"]["0x01::order-7"];
-        assert_eq!(order["hookStatuses"]["linked.entry#BIRTH"]["status"], "ready");
+        assert_eq!(
+            order["hookStatuses"]["linked.entry#BIRTH"]["status"],
+            "ready"
+        );
         assert_eq!(
             order["hookStatuses"]["linked.entry#BIRTH"]["readyEmitted"],
             true
@@ -2059,8 +2070,12 @@ mod tests {
             "isTrigger": true,
             "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
         });
-        let error = evaluate_hook(&mut order, &hook_missing_emit_ready, "2026-04-27T00:00:00.000Z")
-            .expect_err("hook missing emitReady must be rejected");
+        let error = evaluate_hook(
+            &mut order,
+            &hook_missing_emit_ready,
+            "2026-04-27T00:00:00.000Z",
+        )
+        .expect_err("hook missing emitReady must be rejected");
         assert!(
             error.to_string().contains("emitReady must be a boolean"),
             "unexpected error: {error}"

@@ -472,10 +472,7 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
         }
         if !is_strict_signal_ref(&signal.signal_name)
             || signal.signal_name.len() > 100
-            || !signal
-                .signal_name
-                .split('.')
-                .all(is_plain_identifier)
+            || !signal.signal_name.split('.').all(is_plain_identifier)
         {
             return Err(HookError::Message(format!(
                 "signal fact name must use task.stage.signal and be at most 100 characters: {:?}",
@@ -776,12 +773,16 @@ fn starts_cross_source(value: &str) -> bool {
     // 而非笼统的空标头报错。匹配必须落到完整 token 边界：关键字后随
     // 标识符字符（如 ::MERGEX / ::ANCHORX 伪前缀）不是关键字形态，
     // 不得绕过空标头门禁。
-    ["ANCHOR", "OUTSIDE", "MERGE", "OUTSOURCE"].iter().any(|keyword| {
-        let Some(rest) = value.strip_prefix(keyword) else {
-            return false;
-        };
-        rest.chars().next().is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
-    })
+    ["ANCHOR", "OUTSIDE", "MERGE", "OUTSOURCE"]
+        .iter()
+        .any(|keyword| {
+            let Some(rest) = value.strip_prefix(keyword) else {
+                return false;
+            };
+            rest.chars()
+                .next()
+                .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
+        })
 }
 
 fn reject_unsupported_operators(condition: &str) -> Result<()> {
@@ -2585,7 +2586,8 @@ mod tests {
             })
             .expect_err("unsupported mode must not decode");
             assert!(
-                err.to_string().contains("unsupported compiled hook AST mode"),
+                err.to_string()
+                    .contains("unsupported compiled hook AST mode"),
                 "unexpected error for {mode}: {err}"
             );
         }

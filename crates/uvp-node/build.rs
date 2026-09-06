@@ -19,9 +19,8 @@ fn main() {
         println!("cargo:rustc-link-arg=dynamic_lookup");
     }
 
-    let manifest_dir = PathBuf::from(
-        std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
-    );
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
         .and_then(Path::parent)
@@ -87,5 +86,9 @@ fn git_head_rev(workspace_root: &Path) -> Option<String> {
         return None;
     }
     let rev = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    if rev.is_empty() { None } else { Some(rev) }
+    if rev.is_empty() {
+        None
+    } else {
+        Some(rev)
+    }
 }

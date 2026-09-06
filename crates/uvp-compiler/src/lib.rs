@@ -2317,13 +2317,17 @@ mod tests {
             let error = compile_zhixu_hook_plan(&definition, None, true)
                 .expect_err("stages-less task pattern must fail");
             assert!(
-                error.to_string().contains("must contain at least one stage"),
+                error
+                    .to_string()
+                    .contains("must contain at least one stage"),
                 "{mutate}: {error}"
             );
             let error = compile_cloud_artifact(&definition, None, true)
                 .expect_err("cloud target must reject the same shape");
             assert!(
-                error.to_string().contains("must contain at least one stage"),
+                error
+                    .to_string()
+                    .contains("must contain at least one stage"),
                 "{mutate} cloud: {error}"
             );
         }

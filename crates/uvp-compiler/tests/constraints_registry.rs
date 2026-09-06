@@ -53,7 +53,8 @@ fn load_constraints_table() -> (String, Value) {
 
 /// compile_json / parse_hook_json 共用的错误 envelope 形状。
 fn envelope_message(output: &str) -> (bool, String) {
-    let envelope: Value = serde_json::from_str(output).expect("uvp compiler returns a JSON envelope");
+    let envelope: Value =
+        serde_json::from_str(output).expect("uvp compiler returns a JSON envelope");
     let ok = envelope
         .get("ok")
         .and_then(Value::as_bool)
@@ -162,9 +163,7 @@ fn dock_definition() -> Value {
 
 fn signal_map_mut(definition: &mut Value) -> &mut Value {
     definition
-        .pointer_mut(
-            "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap",
-        )
+        .pointer_mut("/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap")
         .expect("dock definition has a signalMap")
 }
 
@@ -186,11 +185,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "zhixu-api-version-closed-enum".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                d["apiVersion"] = json!("uvp/v1");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["apiVersion"] = json!("uvp/v1");
+                    d
+                })
+            },
             "apiVersion must be uvp/v0",
         ),
     ));
@@ -198,11 +199,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "zhixu-kind-closed-enum".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                d["kind"] = json!("NotZhixu");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["kind"] = json!("NotZhixu");
+                    d
+                })
+            },
             "kind must be Zhixu",
         ),
     ));
@@ -210,11 +213,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "metadata-name-required".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                d["metadata"]["name"] = json!("   ");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["metadata"]["name"] = json!("   ");
+                    d
+                })
+            },
             "metadata.name must be non-empty",
         ),
     ));
@@ -222,11 +227,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "metadata-name-max-length".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                d["metadata"]["name"] = json!(oversize_ascii(101, b'n'));
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["metadata"]["name"] = json!(oversize_ascii(101, b'n'));
+                    d
+                })
+            },
             "exceeds 100 bytes (global_zhixu.name)",
         ),
     ));
@@ -234,11 +241,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "metadata-uid-max-length".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                d["metadata"]["uid"] = json!(oversize_ascii(65, b'u'));
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["metadata"]["uid"] = json!(oversize_ascii(65, b'u'));
+                    d
+                })
+            },
             "exceeds 64 bytes (global_zhixu.uid)",
         ),
     ));
@@ -246,11 +255,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "stage-identifier-max-length".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                stage_mut(&mut d)["name"] = json!(oversize_ascii(100, b's'));
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["name"] = json!(oversize_ascii(100, b's'));
+                    d
+                })
+            },
             "exceeds 100 bytes (global_stage.stage_identifier)",
         ),
     ));
@@ -258,11 +269,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "stage-source-max-length".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                stage_mut(&mut d)["source"] = json!(oversize_ascii(37, b'b'));
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["source"] = json!(oversize_ascii(37, b'b'));
+                    d
+                })
+            },
             "exceeds 36 bytes",
         ),
     ));
@@ -270,11 +283,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "stage-source-required".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                stage_mut(&mut d)["source"] = json!("  ");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["source"] = json!("  ");
+                    d
+                })
+            },
             "source must be non-empty",
         ),
     ));
@@ -282,11 +297,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "stage-source-charset".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                stage_mut(&mut d)["source"] = json!("buy er");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["source"] = json!("buy er");
+                    d
+                })
+            },
             "must be a plain identifier (ASCII letters, digits, '_' or '-')",
         ),
     ));
@@ -294,13 +311,15 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "send-signal-combined-max-length".into(),
         (
             || probe_compile(base_definition()),
-            || probe_compile({
-                let mut d = base_definition();
-                let stage = stage_mut(&mut d);
-                stage["name"] = json!(oversize_ascii(98, b's'));
-                stage["sendSignals"] = json!(["s12345"]);
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    let stage = stage_mut(&mut d);
+                    stage["name"] = json!(oversize_ascii(98, b's'));
+                    stage["sendSignals"] = json!(["s12345"]);
+                    d
+                })
+            },
             "exceeds 100 bytes combined (individual_record.signal_name)",
         ),
     ));
@@ -310,7 +329,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "receive-signals-key-max-length".into(),
         (
             || probe_hook("evm_strict", "S", "buyer::task.main.cmp"),
-            || probe_hook("evm_strict", &oversize_ascii(37, b'H'), "buyer::task.main.cmp"),
+            || {
+                probe_hook(
+                    "evm_strict",
+                    &oversize_ascii(37, b'H'),
+                    "buyer::task.main.cmp",
+                )
+            },
             "hook_name must be 1-36 characters",
         ),
     ));
@@ -339,7 +364,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "subscription-target-source-max-length".into(),
         (
-            || probe_hook("cloud_compat", "SUB", "::ANCHOR(@seller::trade.listing.cmp)"),
+            || {
+                probe_hook(
+                    "cloud_compat",
+                    "SUB",
+                    "::ANCHOR(@seller::trade.listing.cmp)",
+                )
+            },
             || {
                 probe_hook(
                     "cloud_compat",
@@ -353,7 +384,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "subscription-target-signal-max-length".into(),
         (
-            || probe_hook("cloud_compat", "SUB", "::ANCHOR(@seller::trade.listing.cmp)"),
+            || {
+                probe_hook(
+                    "cloud_compat",
+                    "SUB",
+                    "::ANCHOR(@seller::trade.listing.cmp)",
+                )
+            },
             || {
                 probe_hook(
                     "cloud_compat",
@@ -378,15 +415,16 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "dock-schema-version-closed-enum".into(),
         (
             || probe_compile(dock_definition()),
-            || probe_compile({
-                let mut d = dock_definition();
-                *d
-                    .pointer_mut(
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    *d.pointer_mut(
                         "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/schemaVersion",
                     )
                     .expect("schemaVersion path") = json!("uvp.dock.v2");
-                d
-            }),
+                    d
+                })
+            },
             "D002",
         ),
     ));
@@ -394,15 +432,16 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "dock-order-id-policy-closed-enum".into(),
         (
             || probe_compile(dock_definition()),
-            || probe_compile({
-                let mut d = dock_definition();
-                *d
-                    .pointer_mut(
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    *d.pointer_mut(
                         "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/order/idPolicy",
                     )
                     .expect("idPolicy path") = json!("sequential-v1");
-                d
-            }),
+                    d
+                })
+            },
             "D004",
         ),
     ));
@@ -410,15 +449,16 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "dock-target-version-exact".into(),
         (
             || probe_compile(dock_definition()),
-            || probe_compile({
-                let mut d = dock_definition();
-                *d
-                    .pointer_mut(
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    *d.pointer_mut(
                         "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/target/version",
                     )
                     .expect("version path") = json!("latest");
-                d
-            }),
+                    d
+                })
+            },
             "D003",
         ),
     ));
@@ -426,11 +466,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "dock-port-name-pattern".into(),
         (
             || probe_compile(dock_definition()),
-            || probe_compile({
-                let mut d = dock_definition();
-                signal_map_mut(&mut d)["str"] = json!("Out-Port");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    signal_map_mut(&mut d)["str"] = json!("Out-Port");
+                    d
+                })
+            },
             "value must be a port name matching ^[a-z][a-z0-9_]{0,31}$",
         ),
     ));
@@ -438,11 +480,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "dock-signalmap-key-max-length".into(),
         (
             || probe_compile(dock_definition()),
-            || probe_compile({
-                let mut d = dock_definition();
-                signal_map_mut(&mut d)[oversize_ascii(27, b'a')] = json!("out_x");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    signal_map_mut(&mut d)[oversize_ascii(27, b'a')] = json!("out_x");
+                    d
+                })
+            },
             "D006",
         ),
     ));
@@ -450,11 +494,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "dock-signalmap-key-forbidden-separator".into(),
         (
             || probe_compile(dock_definition()),
-            || probe_compile({
-                let mut d = dock_definition();
-                signal_map_mut(&mut d)["bad.key"] = json!("out_x");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    signal_map_mut(&mut d)["bad.key"] = json!("out_x");
+                    d
+                })
+            },
             "D006",
         ),
     ));
@@ -462,23 +508,25 @@ fn rust_probes() -> Vec<(String, Probe)> {
         "dock-signalmap-key-combined-max-length".into(),
         (
             || probe_compile(dock_definition()),
-            || probe_compile({
-                let mut d = dock_definition();
-                let long_stage = oversize_ascii(95, b's');
-                let stage = stage_mut(&mut d);
-                // identifier = "main." + 95 = 100（恰好合规），组合列宽由
-                // signalMap 键突破；sendSignals 置空避免 shape 层组合错误
-                // 抢先中断，让 D006 组合检查成为首个 dock 错误。
-                stage["name"] = json!(long_stage);
-                stage["sendSignals"] = json!([]);
-                stage["receiveSignals"] =
-                    json!({ "START": format!("buyer::main.{long_stage}.cmp") });
-                d.pointer_mut(
-                    "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap",
-                )
-                .expect("signalMap path")["s12345"] = json!("out_x");
-                d
-            }),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    let long_stage = oversize_ascii(95, b's');
+                    let stage = stage_mut(&mut d);
+                    // identifier = "main." + 95 = 100（恰好合规），组合列宽由
+                    // signalMap 键突破；sendSignals 置空避免 shape 层组合错误
+                    // 抢先中断，让 D006 组合检查成为首个 dock 错误。
+                    stage["name"] = json!(long_stage);
+                    stage["sendSignals"] = json!([]);
+                    stage["receiveSignals"] =
+                        json!({ "START": format!("buyer::main.{long_stage}.cmp") });
+                    d.pointer_mut(
+                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap",
+                    )
+                    .expect("signalMap path")["s12345"] = json!("out_x");
+                    d
+                })
+            },
             "exceeds 100 (individual_record.signal_name)",
         ),
     ));
