@@ -22,5 +22,5 @@ The current delay contract is part of the shared semantic surface:
 
 See [`docs/specs/subscription-mint-spec.md`](docs/specs/subscription-mint-spec.md)
 for the cross-order semantic contract and
-[`/Users/uyhendu/project/miniprogram/uvp/zhixu-dsl-grammar.md`](/Users/uyhendu/project/miniprogram/uvp/zhixu-dsl-grammar.md)
+[`../zhixu-dsl-grammar.md`](../zhixu-dsl-grammar.md)
 for the Cloud-facing Zhixu DSL reference.
