@@ -185,13 +185,17 @@ pub fn compile_zhixu_hook_plan(
         &stage_entries,
         &selected_stage_bindings,
     ));
-    // 阶段物化三线统一（簇 A）：onchain 目标上阶段只能由本阶段 hook Ready
-    // 物化（order-trigger 或 EMIT_READY）。无静态 executor、仅被
-    // selectedStages 覆盖的阶段其 receive hook 一律 emit_ready=false、
-    // flags=0——纯 watcher 不物化阶段，链上 `_evaluateHook` 对未物化阶段
-    // 直接 revert UnknownHook，且没有任何恢复路径（executor patch 不物化）。
-    // 该形态在编译期整体拒绝：这类阶段不得声明 receiveSignals。
-    validation_issues.extend(validate_onchain_stage_materialization(&stage_entries));
+    // 阶段物化门（簇 A，onchain 目标）：每个阶段声明都必须编译出至少一个
+    // 带物化位（order-trigger mint/dock 或 EMIT_READY）的 hook——纯
+    // flags=0 watcher 不物化阶段，零 hook 阶段同样不物化，且其 sendSignals
+    // 在链上没有钩子可挂（submitSignal 要求源阶段已物化，恒 revert
+    // UnknownHook），形态一旦上链即死锁且无恢复路径（executor patch 也不
+    // 物化）。dockInterface entrance 端口钩子编译为 dock|emitReady（=6），
+    // 是合法物化路径，不得按 watcher 误拒。
+    validation_issues.extend(validate_onchain_stage_materialization(
+        &stage_entries,
+        &dock_entrance_hook_ids(&dock_state),
+    ));
     validation_issues.extend(validate_mint_anchors(&stage_entries));
     validation_issues.extend(validate_subscription_delegation(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
@@ -869,21 +873,41 @@ fn stage_is_subscription(stage: &ZhixuStage) -> bool {
     })
 }
 
-/// 阶段物化三线统一（簇 A，onchain 目标）：无静态 executor（仅被
-/// selectedStages 覆盖）的阶段不得声明任何 receiveSignals。这类 hook 编译
-/// 为 flags=0 纯 watcher（emit_ready=false、非 order-trigger），而链上阶段
-/// 只能由本阶段 order-trigger / EMIT_READY hook Ready 物化——纯 watcher 不
-/// 物化，executor patch 也不物化（UVPStateMachine activateStageExecutor
-/// 不调用 _materializeStage），形态一旦上链即死锁且无恢复路径。
-fn validate_onchain_stage_materialization(entries: &[StageEntry]) -> Vec<String> {
+/// 阶段物化门（簇 A，onchain 目标）：链上阶段只能由本阶段 order-trigger
+/// （mint/dock）或 EMIT_READY hook Ready 物化；executor patch 也不物化
+/// （UVPStateMachine activateStageExecutor 不调用 _materializeStage）。
+/// 因此每个阶段声明都必须编译出至少一个带物化位的 hook（P0-4）：
+/// - 仅 sendSignals、无 receiveSignals 的阶段编译为零 hook——阶段永不可
+///   物化，其信号在链上没有钩子可挂（_recordSignal 要求源阶段已物化，
+///   submitSignal 恒 revert UnknownHook），下游 hook 永 Init；
+/// - 有 receiveSignals 但全部编译为 flags=0 纯 watcher 的阶段同样不物化。
+///
+/// dockInterface entrance 端口钩子编译为 dock|emitReady（=6），是合法
+/// 物化路径，不按 watcher 拒绝（CORE-8）。
+fn validate_onchain_stage_materialization(
+    entries: &[StageEntry],
+    entrance_hook_ids: &BTreeSet<String>,
+) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
-        if has_static_executor(entry.stage.executor.as_ref()) {
+        if entry.stage.receive_signals.is_empty() {
+            issues.push(format!(
+                "{} declares no receiveSignals and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare receiveSignals carrying a mint/dock entrance or a static executor",
+                entry.stage_identifier
+            ));
+            continue;
+        }
+        let has_materializing_hook = entry.stage.executor.is_some()
+            || entry.stage.mint.is_some()
+            || entry.stage.receive_signals.keys().any(|hook_name| {
+                entrance_hook_ids.contains(&format!("{}#{hook_name}", entry.stage_identifier))
+            });
+        if has_materializing_hook {
             continue;
         }
         for hook_name in entry.stage.receive_signals.keys() {
             issues.push(format!(
-                "{}.receiveSignals.{}: stage has no static executor and is only reachable through selectedStages; its hooks compile to flags=0 watchers which can never materialize the stage on-chain (deadlock, no recovery path) — declare a static executor or drop receiveSignals from this stage",
+                "{}.receiveSignals.{}: stage has no order-trigger or EMIT_READY hook; its hooks compile to flags=0 watchers which can never materialize the stage on-chain (deadlock, no recovery path) — declare a static executor or drop receiveSignals from this stage",
                 entry.stage_identifier, hook_name
             ));
         }
@@ -1223,11 +1247,12 @@ fn parse_signal_reference(signal_name: &str) -> Option<(String, String)> {
     Some((format!("{}.{}", parts[0], parts[1]), parts[2].to_string()))
 }
 
-fn compile_stage_hooks(entry: &StageEntry, dock_state: &DockState) -> Result<Vec<Value>> {
-    let mut hooks = Vec::new();
-    let is_mint_stage = entry.stage.mint.is_some();
-    // entrance 端口引用的目标侧 hook 是 dock 出生入口（PRD94 §3.4）。
-    let entrance_hook_ids = dock_state
+// dockInterface entrance 输入端口引用的本地 hook（`<task>.<stage>#<hook>`）。
+// 这些钩子编译为 orderTriggerKind=dock（flags=dock|emitReady=6），既是
+// 阶段物化门里的合法物化路径（CORE-8），也是 compile_stage_hooks 打
+// order-trigger 标记的依据——两处共用同一来源，避免判定口径漂移。
+fn dock_entrance_hook_ids(dock_state: &DockState) -> BTreeSet<String> {
+    dock_state
         .interface_json
         .as_ref()
         .map(|interface| {
@@ -1237,9 +1262,16 @@ fn compile_stage_hooks(entry: &StageEntry, dock_state: &DockState) -> Result<Vec
                 .iter()
                 .filter(|port| port["kind"] == json!("entrance"))
                 .filter_map(|port| port["hookId"].as_str().map(str::to_string))
-                .collect::<BTreeSet<_>>()
+                .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn compile_stage_hooks(entry: &StageEntry, dock_state: &DockState) -> Result<Vec<Value>> {
+    let mut hooks = Vec::new();
+    let is_mint_stage = entry.stage.mint.is_some();
+    // entrance 端口引用的目标侧 hook 是 dock 出生入口（PRD94 §3.4）。
+    let entrance_hook_ids = dock_entrance_hook_ids(dock_state);
     let is_zhixu_stage = is_zhixu_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
         let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
@@ -1670,13 +1702,17 @@ mod tests {
                         {
                             "name": "confirm",
                             "source": "buyer",
-                            "sendSignals": ["cmp"],
+                            // P0-4 物化门：零 hook 阶段在链上永不可物化、信号
+                            // 没有钩子可挂；seed 是执行者自发入口信号。
+                            "receiveSignals": { "PLACE": "buyer::checkout.confirm.seed" },
+                            "sendSignals": ["cmp", "seed"],
                             "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                         },
                         {
                             "name": "cancel",
                             "source": "buyer",
-                            "sendSignals": ["cmp"],
+                            "receiveSignals": { "ABORT": "buyer::checkout.cancel.seed" },
+                            "sendSignals": ["cmp", "seed"],
                             "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                         }
                     ]},
@@ -1752,6 +1788,9 @@ mod tests {
                             {
                                 "name": "work",
                                 "source": "buyer",
+                                // P0-4：零 hook 阶段不过物化门，给一条自发
+                                // 种子入口钩子（能力计数不受影响）。
+                                "receiveSignals": { "START": "buyer::main.work.sig000" },
                                 "sendSignals": signals,
                                 "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                             }
@@ -2011,7 +2050,9 @@ mod tests {
             json!({
                 "name": "emit",
                 "source": "other",
-                "sendSignals": ["cmp"],
+                // P0-4：自发种子入口钩子，避免零 hook 阶段被物化门拒绝。
+                "receiveSignals": { "PUBLISH": "other::anchor_task.emit.seed" },
+                "sendSignals": ["cmp", "seed"],
                 "executor": { "supplierType": "organization", "supplierID": "other-org" }
             }),
         ];
@@ -2694,10 +2735,14 @@ mod tests {
     }
 
     fn emitter_stage_value(task: &str, name: &str, source: &str, send_signals: &[&str]) -> Value {
+        let mut signals = send_signals.to_vec();
+        // P0-4：零 hook 阶段不过物化门；seed 是执行者自发入口信号。
+        signals.push("seed");
         json!({
             "name": name,
             "source": source,
-            "sendSignals": send_signals,
+            "receiveSignals": { "PUBLISH": format!("{source}::{task}.{name}.seed") },
+            "sendSignals": signals,
             "executor": {
                 "supplierType": "organization",
                 "supplierID": format!("{task}-{name}-executor")

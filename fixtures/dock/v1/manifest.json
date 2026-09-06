@@ -283,8 +283,12 @@
                 "supplierType": "organization"
               },
               "name": "confirm",
+              "receiveSignals": {
+                "PLACE": "buyer::checkout.confirm.seed"
+              },
               "sendSignals": [
-                "cmp"
+                "cmp",
+                "seed"
               ],
               "source": "buyer"
             },
@@ -294,8 +298,12 @@
                 "supplierType": "organization"
               },
               "name": "cancel",
+              "receiveSignals": {
+                "ABORT": "buyer::checkout.cancel.seed"
+              },
               "sendSignals": [
-                "cmp"
+                "cmp",
+                "seed"
               ],
               "source": "buyer"
             }

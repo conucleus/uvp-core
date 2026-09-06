@@ -27,8 +27,12 @@
             {
               "name": "listing",
               "source": "seller",
+              "receiveSignals": {
+                "PUBLISH": "seller::supply.listing.seed"
+              },
               "sendSignals": [
-                "listing_ready"
+                "listing_ready",
+                "seed"
               ],
               "executor": {
                 "supplierType": "organization",
@@ -62,10 +66,12 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "demand.watch#WATCH"
+      "demand.watch#WATCH",
+      "supply.listing#PUBLISH"
     ],
     "hookDependencyCounts": {
-      "demand.watch#WATCH": 1
+      "demand.watch#WATCH": 1,
+      "supply.listing#PUBLISH": 1
     }
   }
 }

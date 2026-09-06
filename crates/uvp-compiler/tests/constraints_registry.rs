@@ -110,6 +110,9 @@ fn assert_violate(outcome: (bool, String), anchor: &str, rule: &str) {
 // ---------------------------------------------------------------------------
 
 /// 无 zhixu 委托的最小合法定义（定义级探针基底）。
+///
+/// 阶段必须声明 receiveSignals：零 hook 阶段在链上永不可物化、其信号没有
+/// 钩子可挂（P0-4 物化门），基底自身就得是合法形态。
 fn base_definition() -> Value {
     json!({
         "apiVersion": "uvp/v0",
@@ -127,7 +130,8 @@ fn base_definition() -> Value {
                     {
                         "name": "work",
                         "source": "buyer",
-                        "sendSignals": ["str"],
+                        "receiveSignals": { "START": "buyer::main.work.cmp" },
+                        "sendSignals": ["str", "cmp"],
                         "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                     }
                 ]}

@@ -27,8 +27,12 @@
             {
               "name": "listing",
               "source": "seller",
+              "receiveSignals": {
+                "PUBLISH": "seller::trade.listing.seed"
+              },
               "sendSignals": [
-                "cmp"
+                "cmp",
+                "seed"
               ],
               "executor": {
                 "supplierType": "organization",
@@ -38,8 +42,12 @@
             {
               "name": "intent",
               "source": "buyer",
+              "receiveSignals": {
+                "PUBLISH": "buyer::trade.intent.seed"
+              },
               "sendSignals": [
-                "cmp"
+                "cmp",
+                "seed"
               ],
               "executor": {
                 "supplierType": "organization",
@@ -75,11 +83,15 @@
     "platform": "cloud",
     "hookIds": [
       "market.pool#MATCH_BUYER",
-      "market.pool#MATCH_SELLER"
+      "market.pool#MATCH_SELLER",
+      "trade.intent#PUBLISH",
+      "trade.listing#PUBLISH"
     ],
     "hookDependencyCounts": {
       "market.pool#MATCH_BUYER": 1,
-      "market.pool#MATCH_SELLER": 1
+      "market.pool#MATCH_SELLER": 1,
+      "trade.intent#PUBLISH": 1,
+      "trade.listing#PUBLISH": 1
     }
   }
 }

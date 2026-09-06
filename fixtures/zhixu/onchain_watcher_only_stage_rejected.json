@@ -1,5 +1,5 @@
 {
-  "name": "linear flow across two stages",
+  "name": "on-chain watcher-only stage is rejected (all hooks compile to flags=0)",
   "semanticVersion": "uvp.semantic.v1",
   "target": "hook_plan",
   "portable": true,
@@ -7,15 +7,15 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "linear_flow",
-      "uid": "fx-linear-001",
+      "name": "watcher_only_stage",
+      "uid": "fx-watcher-001",
       "annotations": {
         "version": "1"
       }
     },
     "spec": {
       "platform": {
-        "type": "cloud"
+        "type": "evm"
       },
       "nucleation": {
         "id": "core"
@@ -25,14 +25,17 @@
           "name": "flow",
           "stages": [
             {
-              "name": "start",
+              "name": "anchor",
               "source": "buyer",
               "receiveSignals": {
-                "BEGIN": "buyer::flow.start.seed"
+                "BEGIN": "buyer::flow.anchor.seed"
               },
               "sendSignals": [
-                "seed",
-                "step_done"
+                "go",
+                "seed"
+              ],
+              "selectedStages": [
+                "flow.watcher"
               ],
               "executor": {
                 "supplierType": "organization",
@@ -40,18 +43,14 @@
               }
             },
             {
-              "name": "finish",
+              "name": "watcher",
               "source": "buyer",
               "receiveSignals": {
-                "FINISH": "buyer::flow.start.step_done"
+                "WATCH": "buyer::flow.anchor.go"
               },
               "sendSignals": [
                 "cmp"
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-b"
-              }
+              ]
             }
           ]
         }
@@ -59,14 +58,6 @@
     }
   },
   "expect": {
-    "platform": "cloud",
-    "hookIds": [
-      "flow.finish#FINISH",
-      "flow.start#BEGIN"
-    ],
-    "hookDependencyCounts": {
-      "flow.finish#FINISH": 1,
-      "flow.start#BEGIN": 1
-    }
+    "errorContains": "flags=0 watchers"
   }
 }

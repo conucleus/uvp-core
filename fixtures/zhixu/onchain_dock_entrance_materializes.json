@@ -1,0 +1,80 @@
+{
+  "name": "dock entrance hook materializes a stage without a static executor",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "dock_entrance_gate",
+      "uid": "fx-dock-entrance-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "evm"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "dockInterface": {
+        "schemaVersion": "uvp.dock.v1",
+        "inputs": {
+          "enter": {
+            "kind": "entrance",
+            "hook": "guest.arrival#DOCK_ENTER",
+            "access": {
+              "policy": "permit"
+            }
+          }
+        },
+        "outputs": {}
+      },
+      "taskPatterns": [
+        {
+          "name": "guest",
+          "stages": [
+            {
+              "name": "host",
+              "source": "buyer",
+              "receiveSignals": {
+                "BEGIN": "buyer::guest.host.seed"
+              },
+              "sendSignals": [
+                "go",
+                "seed"
+              ],
+              "selectedStages": [
+                "guest.arrival"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-host"
+              }
+            },
+            {
+              "name": "arrival",
+              "source": "buyer",
+              "receiveSignals": {
+                "DOCK_ENTER": "buyer::guest.arrival.enter"
+              },
+              "sendSignals": [
+                "cmp"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "evm",
+    "hookIds": [
+      "guest.arrival#DOCK_ENTER",
+      "guest.host#BEGIN"
+    ]
+  }
+}

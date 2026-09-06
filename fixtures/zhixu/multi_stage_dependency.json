@@ -27,8 +27,12 @@
             {
               "name": "one",
               "source": "buyer",
+              "receiveSignals": {
+                "RUN": "buyer::pipeline.one.seed"
+              },
               "sendSignals": [
-                "done"
+                "done",
+                "seed"
               ],
               "executor": {
                 "supplierType": "organization",
@@ -38,8 +42,12 @@
             {
               "name": "two",
               "source": "buyer",
+              "receiveSignals": {
+                "RUN": "buyer::pipeline.two.seed"
+              },
               "sendSignals": [
-                "done"
+                "done",
+                "seed"
               ],
               "executor": {
                 "supplierType": "organization",
@@ -68,10 +76,14 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "pipeline.three#FINISH"
+      "pipeline.one#RUN",
+      "pipeline.three#FINISH",
+      "pipeline.two#RUN"
     ],
     "hookDependencyCounts": {
-      "pipeline.three#FINISH": 2
+      "pipeline.one#RUN": 1,
+      "pipeline.three#FINISH": 2,
+      "pipeline.two#RUN": 1
     }
   }
 }

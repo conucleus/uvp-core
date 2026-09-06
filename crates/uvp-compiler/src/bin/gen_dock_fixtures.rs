@@ -102,13 +102,22 @@ fn parent_settlement_definition() -> Value {
                     {
                         "name": "confirm",
                         "source": "buyer",
-                        "sendSignals": ["cmp"],
+                        // P0-4 物化门：零 hook 阶段在链上永不可物化、信号没有
+                        // 钩子可挂；seed 是执行者自发入口信号，让 confirm 拥有
+                        // EMIT_READY 物化位。
+                        "receiveSignals": {
+                            "PLACE": "buyer::checkout.confirm.seed"
+                        },
+                        "sendSignals": ["cmp", "seed"],
                         "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                     },
                     {
                         "name": "cancel",
                         "source": "buyer",
-                        "sendSignals": ["cmp"],
+                        "receiveSignals": {
+                            "ABORT": "buyer::checkout.cancel.seed"
+                        },
+                        "sendSignals": ["cmp", "seed"],
                         "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                     }
                 ]},
