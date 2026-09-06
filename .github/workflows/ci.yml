@@ -7,8 +7,16 @@ on:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    env:
+      # 约束注册表单源在 uvp-protocol 仓，独立 checkout 的 CI 按环境变量取文件
+      UVP_CONSTRAINTS_PATH: ${{ github.workspace }}/uvp-protocol/protocol/uvp-constraints.v1.json
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout uvp-protocol
+        uses: actions/checkout@v4
+        with:
+          repository: conucleus/uvp-protocol
+          path: uvp-protocol
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
