@@ -1,0 +1,67 @@
+{
+  "name": "Subscription entry refluxes child-order settlement into collector executor",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "anchor_entry",
+      "uid": "fx-anchor-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "farmer",
+          "stages": [
+            {
+              "name": "packing",
+              "source": "farmer",
+              "sendSignals": [
+                "settled"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "farmer-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "harvest",
+          "stages": [
+            {
+              "name": "collect",
+              "source": "farmer",
+              "receiveSignals": {
+                "REFLUX": "::ANCHOR(@farmer::farmer.packing.settled)"
+              },
+              "sendSignals": [
+                "collected"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "harvest-org"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "cloudHookModes": {
+      "REFLUX": "subscription"
+    }
+  }
+}

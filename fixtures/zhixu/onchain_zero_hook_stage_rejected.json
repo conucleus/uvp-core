@@ -1,0 +1,46 @@
+{
+  "name": "on-chain zero-hook stage is rejected even with a static executor",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "zero_hook_stage",
+      "uid": "fx-zerohook-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "evm"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "flow",
+          "stages": [
+            {
+              "name": "start",
+              "source": "buyer",
+              "sendSignals": [
+                "step_done"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-a"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "errorContains": "compiles to zero hooks"
+  }
+}

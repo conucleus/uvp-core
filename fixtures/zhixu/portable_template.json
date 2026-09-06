@@ -1,0 +1,52 @@
+{
+  "name": "portable template compiles under every profile target",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "portable_template",
+      "uid": "fx-portable-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "settle",
+          "stages": [
+            {
+              "name": "pay",
+              "source": "buyer",
+              "receiveSignals": {
+                "SETTLE": "buyer::settle.pay.done"
+              },
+              "sendSignals": [
+                "done"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "org-a"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "cloud",
+    "hookIds": [
+      "settle.pay#SETTLE"
+    ]
+  }
+}

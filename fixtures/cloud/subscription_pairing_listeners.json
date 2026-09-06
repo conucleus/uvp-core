@@ -1,0 +1,80 @@
+{
+  "name": "Subscription listeners fan cross-source class events into match executor",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "merge_entry",
+      "uid": "fx-merge-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "trade",
+          "stages": [
+            {
+              "name": "listing",
+              "source": "seller",
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "seller-org"
+              }
+            },
+            {
+              "name": "intent",
+              "source": "buyer",
+              "sendSignals": [
+                "cmp"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "buyer-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "juice",
+          "stages": [
+            {
+              "name": "match",
+              "source": "buyer",
+              "receiveSignals": {
+                "PAIR_SELLER": "::ANCHOR(@seller::trade.listing.cmp)",
+                "PAIR_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
+              },
+              "sendSignals": [
+                "paired"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "match-org"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "cloudHookModes": {
+      "PAIR_SELLER": "subscription",
+      "PAIR_BUYER": "subscription"
+    }
+  }
+}

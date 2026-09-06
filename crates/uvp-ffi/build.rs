@@ -1,31 +1,26 @@
-//! macOS 动态查找符号 + 把 uvp-core 的 git rev 在编译期烧进 NAPI 产物
-//! （构建指纹，与 uvp-ffi/build.rs 同一套取值规则）。
+//! 把 uvp-core 的 git rev 在编译期烧进 uvp-ffi 二进制（构建指纹）。
 //!
-//! TS 宿主据此识别陈旧 dylib：语义版本不变而行为已变的旧构建无法被
-//! 版本+语义探针双检拦住，指纹比对是最终防线。
+//! 构建指纹是产物身份的最终依据：语义版本常量不变而行为已变的陈旧
+//! 构建，能同时骗过宿主侧的"二进制版本 + 语义探针"双检；宿主侧必须
+//! 比对指纹与当前 uvp-core 检出 HEAD，不一致即判定陈旧产物并响亮报错。
 //!
 //! 取值优先级：
-//! 1. 环境变量 `UVP_FFI_GIT_REV`（hermetic 构建显式指定，与 uvp-ffi 共用
-//!    同一变量名——两份产物钉同一个 rev）；
+//! 1. 环境变量 `UVP_FFI_GIT_REV`（hermetic 构建显式指定）；
 //! 2. 运行 `git rev-parse HEAD` 读取 workspace 根的提交；
 //! 3. 都不可用则退化为 `no-git-<CARGO_PKG_VERSION>`，宿主侧据此拒绝静默通过。
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    {
-        println!("cargo:rustc-link-arg=-undefined");
-        println!("cargo:rustc-link-arg=dynamic_lookup");
-    }
-
+    println!("cargo:rerun-if-env-changed=UVP_FFI_GIT_REV");
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
         .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .expect("uvp-node crate lives two levels below the workspace root");
+        .expect("uvp-ffi crate lives two levels below the workspace root");
 
     emit_git_rerun_triggers(&workspace_root);
 
@@ -43,7 +38,7 @@ fn main() {
 }
 
 // git ref 变化（新提交、切分支）必须触发 build script 重跑，否则指纹会停在
-// 上次编译时的 rev，TS 侧只能看到过期的"当前"HEAD。
+// 上次编译时的 rev，钉测试只能看到过期的"当前"HEAD。
 fn emit_git_rerun_triggers(workspace_root: &Path) {
     let Some(git_dir) = resolve_git_dir(workspace_root) else {
         return;
@@ -76,7 +71,7 @@ fn resolve_git_dir(workspace_root: &Path) -> Option<PathBuf> {
 }
 
 fn git_head_rev(workspace_root: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
+    let output = Command::new("git")
         .arg("-C")
         .arg(workspace_root)
         .args(["rev-parse", "HEAD"])

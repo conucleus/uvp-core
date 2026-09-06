@@ -7,8 +7,13 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
+sha3.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uvp-hook-dsl.workspace = true
 uvp-ir.workspace = true
 uvp-model.workspace = true
+
+[dev-dependencies]
+# uvp-constraints.v1 一致性 harness 的 sha256 摘要钉。
+sha2 = "0.10"

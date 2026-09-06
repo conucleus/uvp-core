@@ -1,0 +1,68 @@
+{
+  "name": "Subscription entry with mint per-fact births orders from channel facts",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "subscription_entry",
+      "uid": "fx-subscription-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "dispatch",
+          "stages": [
+            {
+              "name": "main",
+              "source": "test_executor",
+              "sendSignals": [
+                "smart_contract"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "dispatch-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "orchard",
+          "stages": [
+            {
+              "name": "retail",
+              "source": "buyer",
+              "receiveSignals": {
+                "SPAWN": "::ANCHOR(@test_executor::dispatch.main.smart_contract)"
+              },
+              "sendSignals": [
+                "ack"
+              ],
+              "mint": "per-fact",
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "orchard-retail-executor"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "cloudHookModes": {
+      "SPAWN": "subscription"
+    }
+  }
+}

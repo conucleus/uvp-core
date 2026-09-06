@@ -1,0 +1,62 @@
+{
+  "name": "mint stage subscribing its own source class is rejected",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "cloud",
+  "portable": false,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "mint_self_source",
+      "uid": "fx-mintself-001",
+      "annotations": {
+        "version": "1"
+      }
+    },
+    "spec": {
+      "platform": {
+        "type": "cloud"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "taskPatterns": [
+        {
+          "name": "orchard",
+          "stages": [
+            {
+              "name": "gate",
+              "source": "farmer",
+              "sendSignals": [
+                "picked"
+              ],
+              "executor": {
+                "supplierType": "organization",
+                "supplierID": "farmer-org"
+              }
+            }
+          ]
+        },
+        {
+          "name": "market",
+          "stages": [
+            {
+              "name": "mint",
+              "source": "farmer",
+              "receiveSignals": {
+                "PICK": "::ANCHOR(@farmer::orchard.gate.picked)"
+              },
+              "sendSignals": [
+                "born"
+              ],
+              "mint": "per-fact"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "errorContains": "must not subscribe its own source class"
+  }
+}
