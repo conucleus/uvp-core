@@ -308,9 +308,7 @@ pub fn compile_cloud_artifact(
     ));
     // sendSignals capability 同口径（空串/重复在两个 target 一致拒绝）：
     // cloud 产物供 Go 主链路消费，不得放行 hook_plan 已拒绝的声明。
-    if let Err(err) = build_signal_capabilities(&stage_entries) {
-        return Err(err);
-    }
+    build_signal_capabilities(&stage_entries)?;
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
@@ -802,10 +800,10 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
         if executor.supplier_type.trim() == "zhixu" {
             continue;
         }
-        if !executor
+        if executor
             .supplier_id
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_none_or(|value| value.trim().is_empty())
         {
             issues.push(format!(
                 "{}.executor.supplierID is required when supplierType is {:?}",
