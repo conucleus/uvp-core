@@ -31,11 +31,19 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 
 ### 推导（derive，从链上事件补齐 oracle 状态）
 
-- order-link 出生（合约 `triggerOrderFromSignalFromModule`）：出生事实留在
-  origin 订单上，本订单不 `_recordSignal` 但 emit `HookReady`。oracle 据链上
-  `HookReady` 反推：order-trigger（mint）hook 补 runtime ready/readyEmitted
-  并物化其阶段，同时把该观察记入 observed（接受链上断言）。非 trigger hook
-  的无信号 `HookReady` 不推导，保持 mismatch 暴露真实异常。
+合约出生路径共三种，全部以 `HookReady` 承载就绪断言，但只有一种需要推导：
+
+- outside mint 出生（`triggerOrderFromOutsideFor`）与 dock 出生
+  （`createDockedOrderFromModule`）：出生/entrance 事实 `_recordSignal`
+  落在本订单，出生 hook 被编译器约束为单一正向 atom（ANCHOR 订阅 / D013），
+  事实到达即由正常求值自然产生 `HookReady`，无需推导。
+- order-link mint 出生（`triggerOrderFromSignalFromModule`）：出生事实留在
+  origin 订单上，本订单不 `_recordSignal` 但 emit `HookReady`，求值路径无事实
+  可依。oracle 据链上 `HookReady` 反推：order-trigger hook 补 runtime
+  ready/readyEmitted 并物化其阶段，同时把该观察记入 observed（接受链上
+  断言；重复的出生 `HookReady` 在合约 `!readyEmitted` 门下不可达，第二次
+  以 missing-observed 暴露流异常）。非 trigger hook 的无信号 `HookReady`
+  不推导，保持 mismatch 暴露真实异常。
 
 ### 消费（consume，回填状态不进 expected）
 

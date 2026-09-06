@@ -161,12 +161,14 @@ struct OracleState {
 ///   重放/重排可能逐字重复，重复被吸收，不产生 missing-observed 假阳性。
 ///
 /// 推导（derive）：
-/// - order-link 出生（合约 `triggerOrderFromSignalFromModule`）：出生事实
-///   留在 origin 订单上，本订单不 `_recordSignal` 但 emit HookReady。oracle
-///   据链上 HookReady 反推：order-trigger（mint）hook 补 runtime
-///   ready/readyEmitted 并物化其阶段，同时把该观察记入 observed（接受链上
-///   断言）。非 trigger hook 的无信号 HookReady 不推导，保持 mismatch
-///   暴露真实异常。
+/// - 合约出生路径三种：outside mint（`triggerOrderFromOutsideFor`）与 dock
+///   （`createDockedOrderFromModule`）出生把事实 `_recordSignal` 落在本订单，
+///   裸 atom 出生 hook 由正常求值自然产生 HookReady，无需推导；order-link
+///   mint 出生（`triggerOrderFromSignalFromModule`）不 `_recordSignal` 但
+///   emit HookReady。oracle 据链上 HookReady 反推：order-trigger hook 补
+///   runtime ready/readyEmitted 并物化其阶段，同时把该观察记入 observed
+///   （接受链上断言）。非 trigger hook 的无信号 HookReady 不推导，保持
+///   mismatch 暴露真实异常。
 fn absorb_chain_observation(
     state: &mut OracleState,
     expected: &mut Vec<Value>,
@@ -209,7 +211,8 @@ fn absorb_chain_observation(
     }
 }
 
-/// order-link 出生推导：详见 `absorb_chain_observation` 的推导规则。
+/// order-link 出生推导：三种出生形态中仅 order-link mint 无法由求值推导
+/// （详见 `absorb_chain_observation` 的推导规则）。
 fn derive_order_link_birth(state: &mut OracleState, observed: &mut Vec<Value>, event: &Value) {
     let (Ok(plan_id), Ok(order_id), Ok(hook_id)) = (
         value_str(event, "planId"),

@@ -1325,6 +1325,399 @@
         "observedCount": 0,
         "mismatchCount": 0
       }
+    },
+    {
+      "name": "order-link birth derives child trigger readiness without child signal",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x01",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a07",
+            "zhixuId": "corpus-replay",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b07",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c07",
+                "stageIdentifier": "link.stage",
+                "hookName": "BIRTH",
+                "orderTriggerKind": "mint",
+                "emitReady": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d0b0",
+                    "signalId": "0x000000000000000000000000000000000000000000000000000000000000e0b0",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f07"
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f07": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b07"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x02",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a17",
+            "zhixuId": "corpus-replay",
+            "version": "1",
+            "compiledHooks": [],
+            "dependencyIndex": {}
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a17",
+          "zhixuId": "corpus-replay",
+          "orderId": "origin-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a17",
+          "zhixuId": "corpus-replay",
+          "orderId": "origin-1",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d007",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e007",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f07",
+          "senderId": "origin-sender",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x05",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a07",
+          "zhixuId": "corpus-replay",
+          "orderId": "link-child-1",
+          "registeredAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "OrderTriggered",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x06",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a07",
+          "orderId": "link-child-1",
+          "triggerStageId": "0x0000000000000000000000000000000000000000000000000000000000000c07",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d007",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e007",
+          "submitter": "origin-sender"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 6,
+          "logIndex": 1,
+          "transactionHash": "0x06",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a07",
+          "zhixuId": "corpus-replay",
+          "orderId": "link-child-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b07",
+          "status": "ready"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 6,
+          "logIndex": 2,
+          "transactionHash": "0x06",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a07",
+          "zhixuId": "corpus-replay",
+          "orderId": "link-child-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b07",
+          "stageIdentifier": "link.stage",
+          "hookName": "BIRTH"
+        },
+        {
+          "eventName": "StageMaterialized",
+          "blockNumber": 6,
+          "logIndex": 3,
+          "transactionHash": "0x06",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a07",
+          "orderId": "link-child-1",
+          "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c07",
+          "triggerHookId": "0x0000000000000000000000000000000000000000000000000000000000000b07",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d007",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e007"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a17::origin-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f07",
+        "senderId": "origin-sender",
+        "eventId": "4:0:0x04",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a07::link-child-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b07": "ready"
+          }
+        },
+        "stateOrderKeys": [
+          "0x0000000000000000000000000000000000000000000000000000000000000a17::origin-1",
+          "0x0000000000000000000000000000000000000000000000000000000000000a07::link-child-1"
+        ]
+      }
+    },
+    {
+      "name": "outside trigger birth records the birth fact on the child order",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x01",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a08",
+            "zhixuId": "corpus-replay",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b08",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c08",
+                "stageIdentifier": "born.stage",
+                "hookName": "BIRTH",
+                "orderTriggerKind": "mint",
+                "emitReady": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d0b0",
+                    "signalId": "0x000000000000000000000000000000000000000000000000000000000000e0b0",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f08"
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f08": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b08"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x02",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a08",
+          "zhixuId": "corpus-replay",
+          "orderId": "born-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "OrderTriggered",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a08",
+          "orderId": "born-1",
+          "triggerStageId": "0x0000000000000000000000000000000000000000000000000000000000000c08",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d008",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e008",
+          "submitter": "birth-submitter"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a08",
+          "zhixuId": "corpus-replay",
+          "orderId": "born-1",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d008",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e008",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f08",
+          "senderId": "birth-submitter",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 1,
+          "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a08",
+          "zhixuId": "corpus-replay",
+          "orderId": "born-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b08",
+          "status": "ready"
+        },
+        {
+          "eventName": "StageMaterialized",
+          "blockNumber": 4,
+          "logIndex": 2,
+          "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a08",
+          "orderId": "born-1",
+          "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c08",
+          "triggerHookId": "0x0000000000000000000000000000000000000000000000000000000000000b08",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d008",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e008"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 4,
+          "logIndex": 3,
+          "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a08",
+          "zhixuId": "corpus-replay",
+          "orderId": "born-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b08",
+          "stageIdentifier": "born.stage",
+          "hookName": "BIRTH"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a08::born-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f08",
+        "senderId": "birth-submitter",
+        "eventId": "4:0:0x04",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a08::born-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b08": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "dock birth records the entrance fact on the docked child order",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x01",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a09",
+            "zhixuId": "corpus-replay",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b09",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c09",
+                "stageIdentifier": "docked.stage",
+                "hookName": "ENTER",
+                "orderTriggerKind": "dock",
+                "emitReady": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d0b0",
+                    "signalId": "0x000000000000000000000000000000000000000000000000000000000000e0b0",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f09"
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f09": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b09"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x02",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a09",
+          "zhixuId": "corpus-replay",
+          "orderId": "dock-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a09",
+          "zhixuId": "corpus-replay",
+          "orderId": "dock-1",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d009",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e009",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f09",
+          "senderId": "docking-module",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 3,
+          "logIndex": 1,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a09",
+          "zhixuId": "corpus-replay",
+          "orderId": "dock-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b09",
+          "status": "ready"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 3,
+          "logIndex": 2,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a09",
+          "zhixuId": "corpus-replay",
+          "orderId": "dock-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b09",
+          "stageIdentifier": "docked.stage",
+          "hookName": "ENTER"
+        },
+        {
+          "eventName": "StageMaterialized",
+          "blockNumber": 3,
+          "logIndex": 3,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a09",
+          "orderId": "dock-1",
+          "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c09",
+          "triggerHookId": "0x0000000000000000000000000000000000000000000000000000000000000b09",
+          "sourceId": "0x000000000000000000000000000000000000000000000000000000000000d009",
+          "signalId": "0x000000000000000000000000000000000000000000000000000000000000e009"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a09::dock-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f09",
+        "senderId": "docking-module",
+        "eventId": "3:0:0x03",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a09::dock-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b09": "ready"
+          }
+        }
+      }
     }
   ]
 }
