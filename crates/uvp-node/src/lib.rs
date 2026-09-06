@@ -46,3 +46,11 @@ pub fn version() -> String {
 pub fn semantic_version() -> String {
     uvp_hook_dsl::SEMANTIC_VERSION.to_string()
 }
+
+#[napi]
+/// 构建指纹（git-<rev>，build.rs 编译期烧入）：TS 侧据此比对当前 uvp-core
+/// 检出 HEAD，识别"版本+语义探针双检都放行但行为已变"的陈旧 dylib。
+/// `no-git-` 前缀表示构建时找不到 git 仓库，宿主侧应拒绝静默通过。
+pub fn build_fingerprint() -> String {
+    env!("UVP_BUILD_FINGERPRINT").to_string()
+}

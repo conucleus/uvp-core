@@ -28,7 +28,9 @@ pub enum CompilerError {
 type Result<T> = std::result::Result<T, CompilerError>;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// FFI/NAPI 最外层请求信封：未知字段确定性拒绝（拼错的调用方输入不得
+// 被静默忽略成零值语义）。
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompileRequest {
     #[serde(default = "default_target")]
     pub target: String,

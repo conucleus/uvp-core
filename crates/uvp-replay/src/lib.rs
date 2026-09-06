@@ -13,7 +13,9 @@ pub enum ReplayError {
 type Result<T> = std::result::Result<T, ReplayError>;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// FFI/NAPI 最外层请求信封（对象形态）：未知字段确定性拒绝（拼错的调用方
+// 输入不得被静默忽略成零值语义）。裸事件数组形态不经此结构。
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ReplayRequest {
     #[serde(default)]
     events: Option<Vec<Value>>,

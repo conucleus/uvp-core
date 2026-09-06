@@ -89,6 +89,21 @@ pub extern "C" fn uvp_core_version() -> *const c_char {
 }
 
 #[no_mangle]
+/// 语义版本（uvp.semantic.v1 线）：宿主侧版本协商应直接读取本导出，而
+/// 不是在二进制版本不匹配时打印占位符（如 "<unknown>"）——语义版本是
+/// 编译产物口径的权威标识。concat! 不接受 const，用 OnceLock 钉一份
+/// 带 NUL 的静态缓冲。
+pub extern "C" fn uvp_core_semantic_version() -> *const c_char {
+    static BUFFER: std::sync::OnceLock<Box<[u8]>> = std::sync::OnceLock::new();
+    let buffer = BUFFER.get_or_init(|| {
+        let mut bytes = uvp_hook_dsl::SEMANTIC_VERSION.as_bytes().to_vec();
+        bytes.push(0);
+        bytes.into_boxed_slice()
+    });
+    buffer.as_ptr() as *const c_char
+}
+
+#[no_mangle]
 /// 构建指纹（由 build.rs 烧入，形如 `git-<rev>`）：宿主语言据此识别陈旧
 /// FFI 产物——语义版本不变而行为已变的旧构建无法被版本+语义探针拦住，
 /// 指纹比对是最终防线。`no-git-` 前缀表示构建时找不到 git 仓库，宿主侧
