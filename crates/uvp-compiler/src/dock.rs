@@ -1036,8 +1036,10 @@ pub fn compile_dock_interface(
             issues.push(DockIssue::new(
                 "D024",
                 format!("{path}.terminal"),
+                // 显式 "none" 与缺省同义（非终态输出端口），是 TERMINAL_TABLE
+                // 合法值——文案必须列出全部四个合法值，不得声称拒绝 none。
                 format!(
-                    "terminal must be one of success|failure|cancelled (or omitted), found {terminal:?}"
+                    "terminal must be one of none|success|failure|cancelled, found {terminal:?}"
                 ),
             ));
             continue;
@@ -2344,6 +2346,7 @@ pub fn eip712_permit_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uvp_model::DockOutputPortSource;
 
     #[test]
     fn manifest_output_ports_with_missing_identity_words_are_rejected() {
@@ -2435,5 +2438,48 @@ mod tests {
             BTreeSet::from(["unrelated-child@1".to_string()]),
         );
         assert_eq!(max_reachable_route_depth(&edges, "local@1"), 1);
+    }
+
+    #[test]
+    fn explicit_terminal_none_passes_and_d024_lists_all_four_values() {
+        // P3-9：显式 "none" 与缺省同义，是 TERMINAL_TABLE 合法值——
+        // 报错文案若漏列 none，等于向调用方声称会拒绝实际放行的输入。
+        let stage = ZhixuStage {
+            name: "settle".to_string(),
+            source: "payment".to_string(),
+            mint: None,
+            executor: None,
+            selected_stages: Vec::new(),
+            send_signals: vec!["cmp".to_string()],
+            receive_signals: BTreeMap::new(),
+            file_resources: BTreeMap::new(),
+        };
+        let entries = vec![("payment_flow.settle".to_string(), stage)];
+        let dock = |terminal: Option<&str>| DockInterfaceSource {
+            schema_version: DOCK_SCHEMA_VERSION.to_string(),
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::from([(
+                "done".to_string(),
+                DockOutputPortSource {
+                    signal: "payment::payment_flow.settle.cmp".to_string(),
+                    terminal: terminal.map(str::to_string),
+                },
+            )]),
+        };
+        for terminal in [None, Some("none")] {
+            let artifact = compile_dock_interface(&dock(terminal), "zx", "1.0.0", &entries)
+                .expect("explicit terminal none is legal");
+            assert_eq!(artifact.outputs[0].terminal, "none");
+        }
+        let issues =
+            compile_dock_interface(&dock(Some("bogus")), "zx", "1.0.0", &entries).unwrap_err();
+        let issue = issues
+            .iter()
+            .find(|issue| issue.code == "D024")
+            .expect("D024");
+        assert_eq!(
+            issue.message,
+            "terminal must be one of none|success|failure|cancelled, found \"bogus\""
+        );
     }
 }

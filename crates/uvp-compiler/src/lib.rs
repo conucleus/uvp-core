@@ -16,6 +16,12 @@ const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
 /// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
 /// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
 pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
+/// G-18：UVPStateMachine._signalStageId 在每次信号提交时线性扫描
+/// signalCapabilities，无上限则单次提交 gas 随 plan 规模无界增长。
+/// 256 使扫描 gas 低于 ~5k。TS 侧 onchain-hook-plan.ts 的
+/// MAX_SIGNAL_CAPABILITIES 在编译+反序列化两边界同值同文案；Rust 是语义
+/// 权威，此值即上限的唯一出处，TS 必须镜像。
+const MAX_SIGNAL_CAPABILITIES: usize = 256;
 
 #[derive(Debug, Error)]
 pub enum CompilerError {
@@ -1465,6 +1471,15 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
             capabilities.push(capability);
         }
     }
+    // 上限在去重之后检查：重复声明已被前面拒绝，此处计数即编译产物的
+    // signalCapabilities 长度，与 TS signalCapabilityCountIssues 同口径。
+    if capabilities.len() > MAX_SIGNAL_CAPABILITIES {
+        return Err(CompilerError::Issues(format!(
+            "signal capabilities {} exceed the documented limit {} (UVPStateMachine._signalStageId linearly scans capabilities per signal submission; unbounded plan-controlled gas)",
+            capabilities.len(),
+            MAX_SIGNAL_CAPABILITIES
+        )));
+    }
     capabilities.sort_by(|left, right| {
         value_str(left, "stageIdentifier")
             .cmp(value_str(right, "stageIdentifier"))
@@ -1715,6 +1730,55 @@ mod tests {
             "schemaVersion": "uvp.dock.resolution.v1",
             "definitions": [entry]
         })
+    }
+
+    #[test]
+    fn send_signals_total_is_capped_at_256() {
+        // G-18 镜像：hook_plan 与 cloud 共用 build_signal_capabilities，
+        // 两侧同值同文案；256 条放行、257 条拒绝。
+        let definition_with = |count: usize| {
+            let signals: Vec<String> = (0..count).map(|index| format!("sig{index:03}")).collect();
+            json!({
+                "apiVersion": "uvp/v0",
+                "kind": "Zhixu",
+                "metadata": {
+                    "name": "capability_cap",
+                    "uid": "zx-capability-cap",
+                    "annotations": { "version": "1.0.0" }
+                },
+                "spec": {
+                    "platform": { "type": "cloud" },
+                    "nucleation": { "id": "cap-core" },
+                    "taskPatterns": [
+                        { "name": "main", "stages": [
+                            {
+                                "name": "work",
+                                "source": "buyer",
+                                "sendSignals": signals,
+                                "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                            }
+                        ]}
+                    ]
+                }
+            })
+        };
+        let at_limit =
+            compile_zhixu_hook_plan(&definition_with(MAX_SIGNAL_CAPABILITIES), None, true)
+                .expect("256 capabilities compile");
+        assert_eq!(
+            at_limit["signalCapabilities"].as_array().map(Vec::len),
+            Some(MAX_SIGNAL_CAPABILITIES)
+        );
+        let over_limit =
+            compile_zhixu_hook_plan(&definition_with(MAX_SIGNAL_CAPABILITIES + 1), None, true)
+                .unwrap_err();
+        let CompilerError::Issues(message) = &over_limit else {
+            panic!("expected issues error, got {over_limit:?}");
+        };
+        assert!(
+            message.contains("signal capabilities 257 exceed the documented limit 256"),
+            "message: {message}"
+        );
     }
 
     #[test]
