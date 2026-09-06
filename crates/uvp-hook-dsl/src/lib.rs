@@ -141,7 +141,9 @@ pub enum EvalState {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// FFI/NAPI 最外层请求信封：未知字段确定性拒绝（拼错的调用方输入不得
+// 被静默忽略成零值语义）。
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ParseHookRequest {
     #[serde(default)]
     pub profile: Profile,
@@ -228,7 +230,9 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
             "hook_name must be 1-36 characters".to_string(),
         ));
     }
-    let hook = parse_hook_expr(&req.hook, profile)?;
+    // 解析行为与 profile 无关（profile 只影响归一化/兼容性输出），
+    // 因此 parse_hook_expr 不接收 profile。
+    let hook = parse_hook_expr(&req.hook)?;
     validate_hook(&hook.condition, profile)?;
 
     let raw_condition = req
@@ -341,14 +345,24 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
     }
     let (target_source, target_signal) =
         if mode == "subscription" {
-            let target = req.ast.get("subscriptionTarget");
+            // normal 模式不得携带 subscriptionTarget：解析器只为订阅形态产出
+            // 该字段，normal 产物上出现只能是手写毒 AST。
+            let target = req
+                .ast
+                .get("subscriptionTarget")
+                .ok_or_else(|| {
+                    HookError::Message(
+                        "compiled subscription hook AST is missing subscriptionTarget".to_string(),
+                    )
+                })?
+                .clone();
             let source = target
-                .and_then(|target| target.get("source"))
+                .get("source")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
             let signal = target
-                .and_then(|target| target.get("signal"))
+                .get("signal")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
@@ -360,6 +374,11 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                 )),
             }
         } else {
+            if ast_object.contains_key("subscriptionTarget") {
+                return Err(HookError::Message(
+                    "compiled normal hook AST must not carry subscriptionTarget".to_string(),
+                ));
+            }
             (String::new(), String::new())
         };
     let now = parse_time(&req.now, req.profile)?;
@@ -436,6 +455,33 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
 fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<String, SignalEntry>> {
     let mut result = BTreeMap::new();
     for signal in signals {
+        // 解码层最后一道防线：事实身份必须与解析器对 hook 侧身份的口径
+        // 一致——source 是 plain identifier 且 ≤36（hook_dependency.
+        // source_zhixu_id VARCHAR(36)），signal_name 是三段式
+        // task.stage.signal、每段 plain identifier、全名 ≤100
+        // （individual_record.signal_name VARCHAR(100)）。空 source 是
+        // 合法的"无归属事实"（语义语料的负例形态，永不匹配非空 hook
+        // source），不是畸形身份。
+        if !signal.source.is_empty()
+            && (!is_plain_identifier(&signal.source) || signal.source.len() > 36)
+        {
+            return Err(HookError::Message(format!(
+                "signal fact source must be a plain identifier of at most 36 characters: {:?}",
+                signal.source
+            )));
+        }
+        if !is_strict_signal_ref(&signal.signal_name)
+            || signal.signal_name.len() > 100
+            || !signal
+                .signal_name
+                .split('.')
+                .all(is_plain_identifier)
+        {
+            return Err(HookError::Message(format!(
+                "signal fact name must use task.stage.signal and be at most 100 characters: {:?}",
+                signal.signal_name
+            )));
+        }
         let received_at = parse_time(&signal.received_at, profile)?;
         // First-writer-wins matches the replay oracle and the documented
         // runtime contract: a repeated source::signalName fact never replaces
@@ -458,13 +504,13 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
     Ok(result)
 }
 
-const MAX_PARSE_DEPTH: usize = 256;
+/// 深度上限单一闸：解析器（递归下降）与求值器（cloud AST 解码）共用同一
+/// 常量，且必须低于 serde_json 对请求 JSON 的 128 层递归反序列化上限——
+/// 合法表达式编译出的 cloud AST 连同求值信封序列化后深度约 ≤ 该值 + 常数，
+/// 保证"能解析就能求值"，不会在求值入口被 serde_json 以另一口径拒绝。
+const MAX_PARSE_DEPTH: usize = 120;
 
-fn parse_hook_expr(raw: &str, profile: Profile) -> Result<HookExpr> {
-    parse_hook_expr_at_depth(raw, profile)
-}
-
-fn parse_hook_expr_at_depth(raw: &str, _profile: Profile) -> Result<HookExpr> {
+fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
     let (source, condition_raw) = raw
         .trim()
         .split_once("::")
@@ -727,11 +773,15 @@ fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
 
 fn starts_cross_source(value: &str) -> bool {
     // 不受支持的关键字仍放行进解析器，以便命中精确的 unsupported 报错
-    // 而非笼统的空标头报错。
-    value.starts_with("ANCHOR")
-        || value.starts_with("OUTSIDE")
-        || value.starts_with("MERGE")
-        || value.starts_with("OUTSOURCE")
+    // 而非笼统的空标头报错。匹配必须落到完整 token 边界：关键字后随
+    // 标识符字符（如 ::MERGEX / ::ANCHORX 伪前缀）不是关键字形态，
+    // 不得绕过空标头门禁。
+    ["ANCHOR", "OUTSIDE", "MERGE", "OUTSOURCE"].iter().any(|keyword| {
+        let Some(rest) = value.strip_prefix(keyword) else {
+            return false;
+        };
+        rest.chars().next().is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
+    })
 }
 
 fn reject_unsupported_operators(condition: &str) -> Result<()> {
@@ -749,7 +799,7 @@ fn reject_unsupported_operators(condition: &str) -> Result<()> {
 }
 
 fn validate_hook(expr: &Expr, profile: Profile) -> Result<()> {
-    let anchored = validate_anchors(expr, profile)?;
+    let anchored = validate_anchors(expr)?;
     if !anchored {
         return Err(HookError::Message(
             "hook condition must contain at least one positive signal anchor".to_string(),
@@ -767,7 +817,7 @@ fn validate_hook(expr: &Expr, profile: Profile) -> Result<()> {
     Ok(())
 }
 
-fn validate_anchors(expr: &Expr, _profile: Profile) -> Result<bool> {
+fn validate_anchors(expr: &Expr) -> Result<bool> {
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
         Expr::Not(inner) => {
@@ -786,7 +836,7 @@ fn validate_anchors(expr: &Expr, _profile: Profile) -> Result<bool> {
             if *duration_seconds <= 0 {
                 return Err(HookError::Message("delay must be positive".to_string()));
             }
-            let anchored = validate_anchors(expr, _profile)?;
+            let anchored = validate_anchors(expr)?;
             if !anchored {
                 return Err(HookError::Message(
                     "delay requires a positive signal anchor".to_string(),
@@ -797,14 +847,14 @@ fn validate_anchors(expr: &Expr, _profile: Profile) -> Result<bool> {
         Expr::And(terms) => {
             let mut anchored = false;
             for term in terms {
-                anchored |= validate_anchors(term, _profile)?;
+                anchored |= validate_anchors(term)?;
             }
             Ok(anchored)
         }
         Expr::Or(terms) => {
             let mut anchored = false;
             for term in terms {
-                let term_anchored = validate_anchors(term, _profile)?;
+                let term_anchored = validate_anchors(term)?;
                 if !term_anchored {
                     return Err(HookError::Message(
                         "each OR branch must contain a positive signal anchor".to_string(),
@@ -1131,9 +1181,10 @@ fn expr_to_cloud_value(expr: &Expr) -> Value {
 }
 
 fn fold_cloud_terms(kind: &str, terms: &[Expr]) -> Value {
-    // 分治平衡折叠：AST 会被 serde_json 以递归下降反序列化（默认 128 层），
-    // 左斜折叠把 n 项链折成深度 n-1 的树，126 项即编译合法、求值必败的
-    // 毒钩子。平衡树深度 O(log n)，任意合法项数都在反序列化限界内。
+    // 分治平衡折叠：扁平 n 项链若左斜折叠会得到深度 n-1 的 AST，请求 JSON
+    // 经 serde_json 反序列化时有 128 层递归上限。平衡树深度 O(log n)，
+    // 任意合法项数都远低于该限界（嵌套深度另由 MAX_PARSE_DEPTH=120 单一
+    // 上闸约束，"能解析就能求值"）。
     fn fold_balanced(kind: &str, terms: &[Expr]) -> Value {
         match terms.len() {
             0 => Value::Null,
@@ -1737,15 +1788,18 @@ fn duration_to_seconds(duration: &str) -> Result<i64> {
         Some((index, unit)) if unit.is_ascii() => (&duration[..index], unit),
         _ => return Err(HookError::Message(format!("invalid duration: {duration}"))),
     };
+    // 数值段必须是纯 ASCII 数字：Rust 的 i64::from_str 接受前导 '+'（毒
+    // AST 的 rawDuration 可携带 "+5s"），解析器产出的 duration 永不带符号，
+    // 解码侧按严格格式拒绝，两侧输入在同一口径下收敛。
+    if num.is_empty() || !num.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(HookError::Message(format!("invalid duration: {duration}")));
+    }
     if num.starts_with('0') {
         return Err(HookError::Message(format!("invalid duration: {duration}")));
     }
     let value = num
         .parse::<i64>()
         .map_err(|err| HookError::Message(format!("invalid duration {duration}: {err}")))?;
-    if value <= 0 {
-        return Err(HookError::Message(format!("invalid duration: {duration}")));
-    }
     let multiplier = match unit {
         's' => 1,
         'm' => 60,
@@ -1848,7 +1902,55 @@ mod tests {
             hook: deep,
         })
         .unwrap_err();
-        assert!(err.to_string().contains("maximum depth of 256"));
+        assert!(err.to_string().contains("maximum depth of 120"));
+    }
+
+    #[test]
+    fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
+        // 单一深度闸契约：解析器上限必须给 serde_json 的 128 层请求反序列化
+        // 留足余量——最深的合法形态（括号嵌套延时链：入口开销 3 层 + 每层
+        // 括号 2 个解析深度、产出 1 层 delay 节点）在解析上限内编译、并以
+        // JSON 字符串形式过求值入口（不触 serde_json 递归上限）。再深一层
+        // 则解析期拒绝。
+        let legal = format!(
+            "buyer::{}task.main.cmp +1s{}",
+            "(".repeat(58),
+            ")".repeat(58)
+        );
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "TIMEOUT".to_string(),
+            hook: legal,
+        })
+        .unwrap();
+        let request = json!({
+            "profile": "evm_strict",
+            "ast": parsed.cloud_ast,
+            "signals": [{
+                "source": "buyer",
+                "signalName": "task.main.cmp",
+                "receivedAt": "2026-04-27T00:00:00.000Z"
+            }],
+            "now": "2026-04-27T00:01:00.000Z"
+        });
+        let output = eval_compiled_hook_json(&request.to_string());
+        assert!(
+            output.contains("\"ok\":true"),
+            "deepest legal hook must stay evaluable through the JSON entry: {output}"
+        );
+
+        let illegal = format!(
+            "buyer::{}task.main.cmp +1s{}",
+            "(".repeat(59),
+            ")".repeat(59)
+        );
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "TIMEOUT".to_string(),
+            hook: illegal,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("maximum depth of 120"));
     }
 
     #[test]
@@ -1889,7 +1991,7 @@ mod tests {
             now: "2026-04-27T00:00:00.000Z".to_string(),
         })
         .unwrap_err();
-        assert!(err.to_string().contains("maximum depth of 256"));
+        assert!(err.to_string().contains("maximum depth of 120"));
     }
 
     #[test]
@@ -2225,6 +2327,172 @@ mod tests {
                 "unexpected error for {hook}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
+        // 伪前缀形态（::MERGEX / ::ANCHORX / ::OUTSIDER）不是退役关键字：
+        // 空标头门禁按完整 token 边界匹配，直接以空标头错误拒绝，而不是
+        // 借 starts_with 前缀命中放行进解析器。
+        for hook in [
+            "::MERGEX@(seller::task.main.cmp)",
+            "::ANCHORX(@seller::task.main.cmp)",
+            "::OUTSIDER",
+        ] {
+            let err = parse_hook(ParseHookRequest {
+                profile: Profile::CloudCompat,
+                hook_name: "HOOK".to_string(),
+                hook: hook.to_string(),
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("empty source"),
+                "unexpected error for {hook}: {err}"
+            );
+        }
+        // 真关键字仍然放行到解析器，命中精确的 retired 报错。
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "HOOK".to_string(),
+            hook: "::MERGE @seller::task.main.cmp".to_string(),
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("retired"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn signed_raw_duration_is_rejected_at_decode() {
+        // i64::from_str 接受前导 '+'：毒 AST 的 rawDuration "+5s" 与
+        // durationSeconds=5 自洽，必须在解码层按严格格式拒绝。
+        let poisoned = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "buyer",
+            "mode": "normal",
+            "root": {
+                "type": "delay",
+                "expr": { "type": "signal", "signal": "task.receive.cmp" },
+                "rawDuration": "+5s",
+                "durationSeconds": 5
+            }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: poisoned,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid duration"),
+            "unexpected error: {err}"
+        );
+        assert!(duration_to_seconds("+5s").is_err());
+        assert!(duration_to_seconds("-5s").is_err());
+    }
+
+    #[test]
+    fn eval_rejects_signal_facts_with_invalid_identity() {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "TRIGGER".to_string(),
+            hook: "buyer::task.main.cmp".to_string(),
+        })
+        .unwrap();
+        for fact in [
+            SignalFact {
+                source: "has space".to_string(),
+                signal_name: "task.main.cmp".to_string(),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            },
+            SignalFact {
+                source: "buyer.ü".to_string(),
+                signal_name: "task.main.cmp".to_string(),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            },
+            SignalFact {
+                source: "s".repeat(37),
+                signal_name: "task.main.cmp".to_string(),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            },
+            SignalFact {
+                source: "buyer".to_string(),
+                signal_name: "main.cmp".to_string(),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            },
+            SignalFact {
+                source: "buyer".to_string(),
+                signal_name: "task..cmp".to_string(),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            },
+            SignalFact {
+                source: "buyer".to_string(),
+                signal_name: format!("{}.{}", "t".repeat(60), "s".repeat(50)),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            },
+        ] {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast: parsed.cloud_ast.clone(),
+                signals: vec![fact],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("signal fact"),
+                "unexpected error: {err}"
+            );
+        }
+        // 边界值（36/100 字节、三段式）照常放行。
+        eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: parsed.cloud_ast.clone(),
+            signals: vec![SignalFact {
+                source: "s".repeat(36),
+                signal_name: "task.main.cmp".to_string(),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            }],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .unwrap();
+        // 空 source 是合法的无归属事实：解码放行，但永不满足带 source 的
+        // hook（与语义语料的负例口径一致）。
+        let unattributed = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: parsed.cloud_ast,
+            signals: vec![SignalFact {
+                source: String::new(),
+                signal_name: "task.main.cmp".to_string(),
+                received_at: "2026-04-27T00:00:00Z".to_string(),
+            }],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .unwrap();
+        assert_eq!(unattributed.state, EvalState::NeedsMore);
+    }
+
+    #[test]
+    fn normal_ast_with_subscription_target_is_rejected_at_decode() {
+        // O18：normal 模式携带 subscriptionTarget 只能是手写毒 AST——
+        // 解析器只给订阅形态产出该字段。
+        let poisoned = json!({
+            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+            "source": "buyer",
+            "mode": "normal",
+            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "root": { "type": "signal", "signal": "task.main.cmp" }
+        });
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: poisoned,
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("normal hook AST must not carry subscriptionTarget"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
