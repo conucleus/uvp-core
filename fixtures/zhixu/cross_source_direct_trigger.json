@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "cross_source_trigger",
-      "uid": "fx-crosssrc-001",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-crosssrc-001"
     },
     "spec": {
       "platform": {

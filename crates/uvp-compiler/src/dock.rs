@@ -250,12 +250,9 @@ pub fn merkle_proof(leaves: &[Word], leaf: &Word) -> Option<Vec<Word>> {
 // 身份推导（PRD94 §7.3-§7.5）
 // ---------------------------------------------------------------------------
 
-/// `definitionRefHash = H("UVP_DEFINITION_REF_V1", keccak(uid), keccak(version))`
-pub fn definition_ref_hash(uid: &str, version: &str) -> Word {
-    keccak_words(
-        DOMAIN_DEFINITION_REF,
-        &[keccak_word(uid.as_bytes()), keccak_word(version.as_bytes())],
-    )
+/// `definitionRefHash = H("UVP_DEFINITION_REF_V1", keccak(uid))`
+pub fn definition_ref_hash(uid: &str) -> Word {
+    keccak_words(DOMAIN_DEFINITION_REF, &[keccak_word(uid.as_bytes())])
 }
 
 pub fn stage_key(stage_identifier: &str) -> Word {
@@ -455,7 +452,6 @@ const UNSUPPORTED_HINT: &str = "Zhixu delegation is not supported (PRD94 §13): 
 #[derive(Debug, Clone)]
 pub struct ZhixuExecutorConfigV1 {
     pub target_zhixu: String,
-    pub target_version: String,
     pub input_map: BTreeMap<String, String>,
     pub signal_map: BTreeMap<String, String>,
 }
@@ -522,6 +518,27 @@ pub fn parse_zhixu_executor_config(
             ));
         }
     }
+    // D002：target 只携带 zhixu（uid 即完整定义身份）；残留 version 等字段
+    // 是确定性非法输入——静默忽略会让调用方误以为版本钉扎仍生效。
+    if let Some(target) = config_object.get("target") {
+        if !target.is_object() {
+            issues.push(DockIssue::new(
+                "D002",
+                format!("{path}.target"),
+                "target must be an object",
+            ));
+        } else {
+            for key in target.as_object().expect("checked").keys() {
+                if key != "zhixu" {
+                    issues.push(DockIssue::new(
+                        "D002",
+                        format!("{path}.target.{key}"),
+                        format!("unknown field {key:?}; allowed: [\"zhixu\"]"),
+                    ));
+                }
+            }
+        }
+    }
 
     let target_zhixu = config_object
         .get("target")
@@ -530,26 +547,12 @@ pub fn parse_zhixu_executor_config(
         .unwrap_or_default()
         .trim()
         .to_string();
-    let target_version = config_object
-        .get("target")
-        .and_then(|target| target.get("version"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    // D003：精确版本；禁止 latest/范围/空白。
+    // D003：目标 UID（不可变 catalog UID 即完整定义身份）。
     if target_zhixu.is_empty() {
         issues.push(DockIssue::new(
             "D003",
             format!("{path}.target.zhixu"),
             "target zhixu UID is required (immutable catalog UID, not display name)",
-        ));
-    }
-    if !is_exact_version(&target_version) {
-        issues.push(DockIssue::new(
-            "D003",
-            format!("{path}.target.version"),
-            format!("target version must be an exact published immutable version, found {target_version:?}"),
         ));
     }
 
@@ -707,21 +710,9 @@ pub fn parse_zhixu_executor_config(
     }
     Ok(ZhixuExecutorConfigV1 {
         target_zhixu,
-        target_version,
         input_map: parsed_input,
         signal_map: parsed_signal,
     })
-}
-
-/// D003：目标版本必须是精确的已发布不可变版本。白名单字符集
-/// `[0-9A-Za-z.+-]`（与 Go 镜像 isExactDockVersion 同集），拒绝 latest、
-/// 空白与任何范围/通配语法（`1/2` 这类链轨串在白名单下同样被拒）。
-fn is_exact_version(version: &str) -> bool {
-    !version.is_empty()
-        && version != "latest"
-        && version
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
 }
 
 pub fn valid_port_name(name: &str) -> bool {
@@ -816,7 +807,6 @@ pub struct DockInterfaceArtifactPortOutput {
 #[derive(Debug, Clone)]
 pub struct DockInterfaceArtifact {
     pub uid: String,
-    pub version: String,
     pub definition_ref_hash: Word,
     pub inputs: Vec<DockInterfaceArtifactPortInput>,
     pub outputs: Vec<DockInterfaceArtifactPortOutput>,
@@ -831,7 +821,6 @@ const TERMINAL_TABLE: [&str; 4] = ["none", "success", "failure", "cancelled"];
 pub fn compile_dock_interface(
     dock: &DockInterfaceSource,
     uid: &str,
-    version: &str,
     entries: &[(String, ZhixuStage)],
 ) -> DockResult<DockInterfaceArtifact> {
     let mut issues = Vec::new();
@@ -995,7 +984,7 @@ pub fn compile_dock_interface(
         let leaf_hash = keccak_words(
             DOMAIN_INTERFACE_INPUT,
             &[
-                definition_ref_hash(uid, version),
+                definition_ref_hash(uid),
                 port_key_word,
                 kind_word,
                 hook_key_word,
@@ -1092,7 +1081,7 @@ pub fn compile_dock_interface(
         let leaf_hash = keccak_words(
             DOMAIN_INTERFACE_OUTPUT,
             &[
-                definition_ref_hash(uid, version),
+                definition_ref_hash(uid),
                 port_key(port_name),
                 source_id_word,
                 signal_id_word,
@@ -1120,8 +1109,7 @@ pub fn compile_dock_interface(
     outputs.sort_by_key(|port| port.port.clone());
     Ok(DockInterfaceArtifact {
         uid: uid.to_string(),
-        version: version.to_string(),
-        definition_ref_hash: definition_ref_hash(uid, version),
+        definition_ref_hash: definition_ref_hash(uid),
         inputs,
         outputs,
         interface_root: merkle_root(&leaves),
@@ -1159,7 +1147,6 @@ impl DockInterfaceArtifact {
             "schemaVersion": DOCK_INTERFACE_ARTIFACT_SCHEMA_VERSION,
             "definition": {
                 "uid": self.uid,
-                "version": self.version,
                 "definitionRefHash": word_hex(&self.definition_ref_hash),
             },
             "inputs": self.inputs.iter().map(|port| json!({
@@ -1208,14 +1195,13 @@ impl DockInterfaceArtifact {
 #[derive(Debug, Clone)]
 pub struct ResolutionTarget {
     pub zhixu: String,
-    pub version: String,
     pub definition_ref_hash: Word,
     pub artifact_hash: Word,
     pub published: bool,
     pub interface: DockInterfaceArtifact,
     pub cloud_artifact_id: Option<String>,
     pub evm_plan_id: Option<Word>,
-    pub dock_edges: Vec<(String, String)>,
+    pub dock_edges: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1253,16 +1239,11 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let version = entry
-            .get("version")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        if zhixu.is_empty() || version.is_empty() {
+        if zhixu.is_empty() {
             issues.push(DockIssue::new(
                 "D008",
                 &path,
-                "zhixu and version are required",
+                "zhixu is required",
             ));
             continue;
         }
@@ -1322,17 +1303,12 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
                 .get("zhixu")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let target_version = edge
-                .get("version")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !target_zhixu.is_empty() && !target_version.is_empty() {
-                dock_edges.push((target_zhixu.to_string(), target_version.to_string()));
+            if !target_zhixu.is_empty() {
+                dock_edges.push(target_zhixu.to_string());
             }
         }
         targets.push(ResolutionTarget {
             zhixu,
-            version,
             definition_ref_hash: definition_ref,
             artifact_hash,
             published,
@@ -1364,11 +1340,6 @@ fn parse_interface_artifact(value: &Value) -> DockResult<DockInterfaceArtifact> 
     let definition = value.get("definition").cloned().unwrap_or(Value::Null);
     let uid = definition
         .get("uid")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let version = definition
-        .get("version")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
@@ -1597,7 +1568,6 @@ fn parse_interface_artifact(value: &Value) -> DockResult<DockInterfaceArtifact> 
     }
     Ok(DockInterfaceArtifact {
         uid,
-        version,
         definition_ref_hash: definition_ref,
         inputs,
         outputs,
@@ -1650,7 +1620,6 @@ pub struct DockRoute {
     pub stage_key: Word,
     pub target_definition_ref_hash: Word,
     pub target_zhixu_uid: String,
-    pub target_version: String,
     pub target_artifact_hash: Word,
     pub target_cloud_artifact_id: Option<String>,
     pub target_evm_plan_id: Option<Word>,
@@ -1683,7 +1652,6 @@ impl DockRoute {
             "target": {
                 "definitionRefHash": word_hex(&self.target_definition_ref_hash),
                 "zhixuUid": self.target_zhixu_uid,
-                "version": self.target_version,
                 "artifactHash": word_hex(&self.target_artifact_hash),
                 "cloudArtifactId": self.target_cloud_artifact_id.clone(),
                 "evmPlanId": self.target_evm_plan_id.map(|word| word_hex(&word)),
@@ -1734,7 +1702,6 @@ impl DockRoute {
 /// 父定义本地身份（link 输入）。
 pub struct LocalLinkIdentity {
     pub uid: String,
-    pub version: String,
 }
 
 /// Link：本地未链接 routes + resolution manifest → 已解析 DockRouteV1
@@ -1746,7 +1713,7 @@ pub fn link_dock_routes(
     manifest: &ResolutionManifest,
 ) -> DockResult<Vec<DockRoute>> {
     let mut issues = Vec::new();
-    let local_definition_ref = definition_ref_hash(&local.uid, &local.version);
+    let local_definition_ref = definition_ref_hash(&local.uid);
     let stages_by_identifier: BTreeMap<&str, &ZhixuStage> = stages
         .iter()
         .map(|(identifier, stage)| (identifier.as_str(), stage))
@@ -1858,11 +1825,8 @@ pub fn link_dock_routes(
         }
     }
 
-    let find_target = |zhixu: &str, version: &str| -> Option<&ResolutionTarget> {
-        manifest
-            .targets
-            .iter()
-            .find(|target| target.zhixu == zhixu && target.version == version)
+    let find_target = |zhixu: &str| -> Option<&ResolutionTarget> {
+        manifest.targets.iter().find(|target| target.zhixu == zhixu)
     };
 
     let mut routes = Vec::new();
@@ -1872,13 +1836,13 @@ pub fn link_dock_routes(
         let mut route_issues = Vec::new();
         let config = &route.config;
         let path = format!("{}.executor.zhixuExecutorConfig", route.stage_identifier);
-        let Some(target) = find_target(&config.target_zhixu, &config.target_version) else {
+        let Some(target) = find_target(&config.target_zhixu) else {
             route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
                 format!(
-                    "resolution manifest has no published artifact for {}@{}",
-                    config.target_zhixu, config.target_version
+                    "resolution manifest has no published artifact for {}",
+                    config.target_zhixu
                 ),
             ));
             issues.extend(route_issues);
@@ -1889,8 +1853,8 @@ pub fn link_dock_routes(
                 "D008",
                 format!("{path}.target"),
                 format!(
-                    "target artifact {}@{} is not published/immutable",
-                    config.target_zhixu, config.target_version
+                    "target artifact {} is not published/immutable",
+                    config.target_zhixu
                 ),
             ));
             issues.extend(route_issues);
@@ -1911,8 +1875,8 @@ pub fn link_dock_routes(
                     "D009",
                     format!("{path}.inputMap.{local_hook}"),
                     format!(
-                        "target {}@{} has no input port {port_name:?}",
-                        config.target_zhixu, config.target_version
+                        "target {} has no input port {port_name:?}",
+                        config.target_zhixu
                     ),
                 ));
                 continue;
@@ -1984,8 +1948,8 @@ pub fn link_dock_routes(
                     "D009",
                     format!("{path}.signalMap.{local_signal}"),
                     format!(
-                        "target {}@{} has no output port {port_name:?}",
-                        config.target_zhixu, config.target_version
+                        "target {} has no output port {port_name:?}",
+                        config.target_zhixu
                     ),
                 ));
                 continue;
@@ -2135,7 +2099,6 @@ pub fn link_dock_routes(
             stage_key: route.stage_key,
             target_definition_ref_hash: target.definition_ref_hash,
             target_zhixu_uid: target.zhixu.clone(),
-            target_version: target.version.clone(),
             target_artifact_hash: target.artifact_hash,
             target_cloud_artifact_id: target.cloud_artifact_id.clone(),
             target_evm_plan_id: target.evm_plan_id,
@@ -2160,24 +2123,21 @@ pub fn link_dock_routes(
         return Err(issues);
     }
 
-    // D015：route 启动图无环且深度受限。节点 (zhixu, version)，边为
-    // resolved route 与 manifest 提供的目标自身 dockEdges。
+    // D015：route 启动图无环且深度受限。节点为 zhixu UID（uid 即完整定义
+    // 身份），边为 resolved route 与 manifest 提供的目标自身 dockEdges。
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let local_node = format!("{}@{}", local.uid, local.version);
+    let local_node = local.uid.clone();
     for target in &manifest.targets {
-        let node = format!("{}@{}", target.zhixu, target.version);
-        for (zhixu, version) in &target.dock_edges {
-            edges
-                .entry(node.clone())
-                .or_default()
-                .insert(format!("{zhixu}@{version}"));
+        let node = target.zhixu.clone();
+        for zhixu in &target.dock_edges {
+            edges.entry(node.clone()).or_default().insert(zhixu.clone());
         }
     }
     for route in &routes {
-        edges.entry(local_node.clone()).or_default().insert(format!(
-            "{}@{}",
-            route.target_zhixu_uid, route.target_version
-        ));
+        edges
+            .entry(local_node.clone())
+            .or_default()
+            .insert(route.target_zhixu_uid.clone());
     }
     if let Some(cycle) = find_route_cycle(&edges) {
         issues.push(DockIssue::new(
@@ -2367,12 +2327,11 @@ mod tests {
     fn manifest_output_ports_with_missing_identity_words_are_rejected() {
         // F-14/F15：output 端口 sourceId/signalId 缺失/非法不得静默落成
         // 零 word——与 input 端口同口径的 D008 确定性错误。
-        let definition_ref = definition_ref_hash("zx-target", "1.0.0");
+        let definition_ref = definition_ref_hash("zx-target");
         let interface = json!({
             "schemaVersion": DOCK_INTERFACE_ARTIFACT_SCHEMA_VERSION,
             "definition": {
                 "uid": "zx-target",
-                "version": "1.0.0",
                 "definitionRefHash": word_hex(&definition_ref),
             },
             "inputs": [],
@@ -2393,7 +2352,6 @@ mod tests {
                 "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
                 "definitions": [{
                     "zhixu": "zx-target",
-                    "version": "1.0.0",
                     "definitionRefHash": word_hex(&definition_ref),
                     "artifactHash": word_hex(&[0xee; 32]),
                     "published": true,
@@ -2482,12 +2440,12 @@ mod tests {
             )]),
         };
         for terminal in [None, Some("none")] {
-            let artifact = compile_dock_interface(&dock(terminal), "zx", "1.0.0", &entries)
+            let artifact = compile_dock_interface(&dock(terminal), "zx", &entries)
                 .expect("explicit terminal none is legal");
             assert_eq!(artifact.outputs[0].terminal, "none");
         }
         let issues =
-            compile_dock_interface(&dock(Some("bogus")), "zx", "1.0.0", &entries).unwrap_err();
+            compile_dock_interface(&dock(Some("bogus")), "zx", &entries).unwrap_err();
         let issue = issues
             .iter()
             .find(|issue| issue.code == "D024")

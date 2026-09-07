@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "merge_entry",
-      "uid": "fx-merge-001",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-merge-001"
     },
     "spec": {
       "platform": {

@@ -19,9 +19,6 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "annotations": {
-        "version": "2.0.0"
-      },
       "name": "settlement",
       "uid": "zx-settlement"
     },
@@ -89,7 +86,6 @@
                     "str": "started"
                   },
                   "target": {
-                    "version": "1.2.0",
                     "zhixu": "zx-payment-execution"
                   }
                 }
@@ -117,15 +113,14 @@
   "resolutionManifest": {
     "definitions": [
       {
-        "artifactHash": "0x73a10595bf70fe4896baa3fe20d99d103b9bdf23859ad127726e04e2b5a890f7",
-        "cloudArtifactId": "artifact://0x73a10595bf70fe4896baa3fe20d99d103b9bdf23859ad127726e04e2b5a890f7",
-        "definitionRefHash": "0xf6f56fd462a369374a6cf79edc7b9d16ecb181d85e436cd6eb6ec96d1f62eae3",
-        "evmPlanId": "0x51e9db2b4bebb934ee7b12e7ab614152d6bff1bb2e836dc7b869155eb7a3600a",
+        "artifactHash": "0x1088ee3c10490d615e4016d399e086eab10b115ee5184d1543c67aa08309fb2b",
+        "cloudArtifactId": "artifact://0x1088ee3c10490d615e4016d399e086eab10b115ee5184d1543c67aa08309fb2b",
+        "definitionRefHash": "0xb856a8c224b990635dd99ab2f31cef9e6257723c5953c92a17ef277bebd6a137",
+        "evmPlanId": "0x54b8b25e1f5ec8bf50b14cd327238274bcafee28c78800bcc92ddc53a217bac2",
         "interface": {
           "definition": {
-            "definitionRefHash": "0xf6f56fd462a369374a6cf79edc7b9d16ecb181d85e436cd6eb6ec96d1f62eae3",
-            "uid": "zx-payment-execution",
-            "version": "1.2.0"
+            "definitionRefHash": "0xb856a8c224b990635dd99ab2f31cef9e6257723c5953c92a17ef277bebd6a137",
+            "uid": "zx-payment-execution"
           },
           "inputs": [
             {
@@ -135,7 +130,7 @@
               "hookId": "payment_flow.control#DOCK_CANCEL",
               "hookName": "DOCK_CANCEL",
               "kind": "signal",
-              "leafHash": "0x4c09607930364bed0b314f8c36816e3ea329e8404e8937988cd79645b8c998df",
+              "leafHash": "0x60c422016aaab24cf844f27aded2ccb6e17006f09965eac45693764cb756bd3e",
               "port": "cancel",
               "signalId": "0xf317d3126c268fd9fa8c65229783a38cca1e722a360c47c9f20bc70e68ca693b",
               "source": "payment",
@@ -149,7 +144,7 @@
               "hookId": "payment_flow.init#DOCK_EXECUTE",
               "hookName": "DOCK_EXECUTE",
               "kind": "entrance",
-              "leafHash": "0xed1b22f15ea4d79d3e55f3ac13c9f374825f5042740fa9a7ec70417d5e85903d",
+              "leafHash": "0x2262c743e1861b421cb66779c5deba5bbd4e62ccf3dd9eda8f35340a737e4ac2",
               "port": "execute",
               "signalId": "0x24d6bcca551d3e2d3d0012283739845bbf327c61d27d62ec9cfe0e6209087077",
               "source": "payment",
@@ -157,12 +152,12 @@
               "stageIdentifier": "payment_flow.init"
             }
           ],
-          "interfaceRoot": "0x52902b46b4ef7f4cebbba94ab0828a70f0ff0f7dedceae852253c0806de370b7",
+          "interfaceRoot": "0x3b9e80e111e6b237320c797bfc39fbc4424272b617af6568dca983a36412c49b",
           "outputs": [
             {
               "canonicalOutputSignal": "payment::payment_flow.settle.cmp",
               "canonicalOutputSignalHash": "0x9254df0fb94ce94d344463df1c86235f20b895df721f6c6946645bb1407833cc",
-              "leafHash": "0x7d0cd550dc2da21e5942b6fda5249daf88156b00f55bb7f2aabfce34f4182050",
+              "leafHash": "0x94a605dcc23443a95e8990c63650ca428f17dafd0dd464d46dd618c6d634e3f8",
               "port": "completed",
               "signalId": "0xfa3459e8aafae9b423ce5c581b918f437ac86eb5c7fce87b3b02ba31a92d4319",
               "source": "payment",
@@ -172,7 +167,7 @@
             {
               "canonicalOutputSignal": "payment::payment_flow.settle.err",
               "canonicalOutputSignalHash": "0x44e1ffcfe8b84f948c1244cb0b1a6230197a64f91d3fe83a95a459d06ec4262e",
-              "leafHash": "0x3bf15682bcfc2db678439f9c51590c189820a864024da119c7602b54e2e09d7a",
+              "leafHash": "0xe571be9f9d7185bfb32e61b7fca8c4df9c525dec8f002f5cd3ed7e872e82b17f",
               "port": "failed",
               "signalId": "0x52f257dbeed0f76cd253880e9f7ea66bf4a23169fc82a9593f37981b0a9a6201",
               "source": "payment",
@@ -182,7 +177,7 @@
             {
               "canonicalOutputSignal": "payment::payment_flow.init.str",
               "canonicalOutputSignalHash": "0x9090568ecee23acb8eb792871ed6e0e8fc502fef53077e167c7c04bf3d986d56",
-              "leafHash": "0x24dd4fc47ee0c807892c691293cd2832de5cad16179ca0ffcefcead1dfd3637b",
+              "leafHash": "0xdfecb70cb6bd2bf75f00f0c1028d8b8a19aa30f2a4e20cd6fa286123cc9816a2",
               "port": "started",
               "signalId": "0x1ae2be0f9616054d6ae9e2af0eca753862405236d03ababf97793f296dcfed44",
               "source": "payment",
@@ -193,7 +188,6 @@
           "schemaVersion": "uvp.dockInterfaceArtifact.v1"
         },
         "published": true,
-        "version": "1.2.0",
         "zhixu": "zx-payment-execution"
       }
     ],

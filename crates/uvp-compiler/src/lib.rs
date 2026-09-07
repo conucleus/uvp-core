@@ -99,36 +99,15 @@ fn definition_uid(definition: &ZhixuDefinition, requires_uid: bool) -> Result<St
     }
 }
 
-fn definition_version(definition: &ZhixuDefinition) -> Result<String> {
-    definition
-        .metadata
-        .annotations
-        .get("version")
-        .map(String::as_str)
-        .filter(|version| !version.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            CompilerError::Message(
-                "metadata.annotations.version is required: missing or empty version".to_string(),
-            )
-        })
-}
-
 /// Compute the stable plan identity shared by hook-plan and cloud artifacts.
 /// Dock routes carry this value as their local plan namespace so that two
 /// otherwise identical orders from different plan revisions cannot alias.
-fn plan_id(
-    definition: &ZhixuDefinition,
-    platform: &Value,
-    version: &str,
-    zhixu_id: &str,
-) -> Result<String> {
+fn plan_id(definition: &ZhixuDefinition, platform: &Value, zhixu_id: &str) -> Result<String> {
     hash_canonical(
         "uvp:hook-plan-id:v1",
         &json!({
             "compiler": { "name": COMPILER_NAME, "version": COMPILER_VERSION },
             "platform": platform,
-            "version": version,
             "zhixuId": zhixu_id,
             "zhixuName": definition.metadata.name,
         }),
@@ -211,7 +190,6 @@ pub fn compile_zhixu_hook_plan(
     }
 
     let zhixu_id = definition_uid(&definition, dock_state.requires_uid)?;
-    let version = definition_version(&definition)?;
     let platform = normalize_platform_value(&definition.spec.platform)?;
 
     let mut compiled_hooks = Vec::new();
@@ -221,14 +199,13 @@ pub fn compile_zhixu_hook_plan(
     let dependency_index = build_dependency_index(&compiled_hooks);
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
     let executor_routes = build_executor_routes(&stage_entries);
-    let plan_id = plan_id(&definition, &platform, &version, &zhixu_id)?;
+    let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
     let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
 
     let payload = json!({
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
         "planId": plan_id,
         "zhixuId": zhixu_id,
-        "version": version,
         "zhixuName": definition.metadata.name,
         "platform": platform,
         "compiledHooks": compiled_hooks,
@@ -249,7 +226,6 @@ pub fn compile_zhixu_hook_plan(
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
         "planId": payload["planId"].clone(),
         "zhixuId": payload["zhixuId"].clone(),
-        "version": payload["version"].clone(),
         "zhixuName": payload["zhixuName"].clone(),
         "platform": payload["platform"].clone(),
         "compiledHooks": payload["compiledHooks"].clone(),
@@ -320,9 +296,8 @@ pub fn compile_cloud_artifact(
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
     let zhixu_id = definition_uid(&definition, dock_state.requires_uid)?;
-    let version = definition_version(&definition)?;
     let platform = normalize_platform_value(&definition.spec.platform)?;
-    let plan_id = plan_id(&definition, &platform, &version, &zhixu_id)?;
+    let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
     let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
     let mut stages = Vec::new();
     let mut hooks = Vec::new();
@@ -344,7 +319,6 @@ pub fn compile_cloud_artifact(
         "schemaVersion": CLOUD_ARTIFACT_SCHEMA_VERSION,
         "planId": plan_id,
         "zhixuId": zhixu_id,
-        "version": version,
         "zhixuName": definition.metadata.name,
         "platform": platform,
         "stages": stages,
@@ -384,9 +358,8 @@ fn compile_dock_link(
     // local.planId（见 with_local_plan_id 契约），dock_link 产物漏注会使同
     // 一 route 经不同产物路径推导出不一致的实例身份。
     let zhixu_id = definition_uid(&definition, dock_state.requires_uid)?;
-    let version = definition_version(&definition)?;
     let platform = normalize_platform_value(&definition.spec.platform)?;
-    let plan_id = plan_id(&definition, &platform, &version, &zhixu_id)?;
+    let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
     let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
     Ok(json!({
         "schemaVersion": "uvp.dockLink.v1",
@@ -424,7 +397,6 @@ fn compile_dock_state(
     allow_unresolved: bool,
     profile: DockProfile,
 ) -> Result<DockState> {
-    let version = definition_version(definition)?;
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
     let requires_uid = definition.spec.dock_interface.is_some() || !unlinked.is_empty();
@@ -434,7 +406,6 @@ fn compile_dock_state(
             dock::compile_dock_interface(
                 dock_interface,
                 &definition_uid(definition, true)?,
-                &version,
                 stage_pairs,
             )
             .map_err(|issues| issues_from_dock(&issues))?,
@@ -465,7 +436,6 @@ fn compile_dock_state(
                     .map_err(|issues| issues_from_dock(&issues))?;
                 let identity = dock::LocalLinkIdentity {
                     uid: definition_uid(definition, true)?,
-                    version,
                 };
                 dock::link_dock_routes(&identity, stage_pairs, &unlinked, &manifest)
                     .map_err(|issues| issues_from_dock(&issues))?
@@ -487,10 +457,9 @@ fn compile_dock_state(
             };
             if !resolvable {
                 return Err(CompilerError::Message(format!(
-                    "D018 {}.executor.zhixuExecutorConfig: resolved target {}@{} has no {} in the resolution manifest; the {} profile cannot resolve the runtime target identity",
+                    "D018 {}.executor.zhixuExecutorConfig: resolved target {} has no {} in the resolution manifest; the {} profile cannot resolve the runtime target identity",
                     route.stage_identifier,
                     route.target_zhixu_uid,
-                    route.target_version,
                     match profile {
                         DockProfile::Evm => "evmPlanId",
                         DockProfile::Cloud => "cloudArtifactId",
@@ -1632,8 +1601,7 @@ mod tests {
             "kind": "Zhixu",
             "metadata": {
                 "name": "payment_execution",
-                "uid": "zx-payment-execution",
-                "annotations": { "version": "1.2.0" }
+                "uid": "zx-payment-execution"
             },
             "spec": {
                 "platform": { "type": "cloud" },
@@ -1708,8 +1676,7 @@ mod tests {
             "kind": "Zhixu",
             "metadata": {
                 "name": "settlement",
-                "uid": "zx-settlement",
-                "annotations": { "version": "2.0.0" }
+                "uid": "zx-settlement"
             },
             "spec": {
                 "platform": { "type": "cloud" },
@@ -1746,7 +1713,7 @@ mod tests {
                                 "supplierType": "zhixu",
                                 "zhixuExecutorConfig": {
                                     "schemaVersion": "uvp.dock.v1",
-                                    "target": { "zhixu": "zx-payment-execution", "version": "1.2.0" },
+                                    "target": { "zhixu": "zx-payment-execution" },
                                     "order": { "idPolicy": "derived-v1" },
                                     "inputMap": { "EXECUTE": "execute", "CANCEL": "cancel" },
                                     "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
@@ -1766,7 +1733,6 @@ mod tests {
         let interface = plan["dockInterface"].clone();
         let mut entry = json!({
             "zhixu": "zx-payment-execution",
-            "version": "1.2.0",
             "definitionRefHash": interface["definition"]["definitionRefHash"].clone(),
             "artifactHash": plan["planHash"].clone(),
             "published": true,
@@ -1794,8 +1760,7 @@ mod tests {
                 "kind": "Zhixu",
                 "metadata": {
                     "name": "capability_cap",
-                    "uid": "zx-capability-cap",
-                    "annotations": { "version": "1.0.0" }
+                    "uid": "zx-capability-cap"
                 },
                 "spec": {
                     "platform": { "type": "cloud" },
@@ -1850,9 +1815,11 @@ mod tests {
             .expect("cloud link tolerates a missing evmPlanId");
         let route = &cloud["dockRoutes"][0];
         assert_eq!(route["target"]["evmPlanId"], Value::Null);
+        // PRD_101 后重钉：definitionRefHash 不再吸收 version 维度，preimage
+        // 变化使缺省哈希向量同步变化。
         assert_eq!(
             route["routeHash"],
-            "0xb398030882051fa73cbc4a9992a837864b2287586dd2edad36a3c8fd2b859e06",
+            "0xbaf7065c1b74bf6af77a28728b2c26dd5749872c6f91d405a44d91aa4e9f4caa",
             "zero-word default routeHash vector changed"
         );
 
@@ -1906,7 +1873,7 @@ mod tests {
                 "supplierType": "zhixu",
                 "zhixuExecutorConfig": {
                     "schemaVersion": "uvp.dock.v1",
-                    "target": { "zhixu": "zx-unknown-target", "version": "9.9.9" },
+                    "target": { "zhixu": "zx-unknown-target" },
                     "order": { "idPolicy": "derived-v1" },
                     "inputMap": { "START": "execute" },
                     "signalMap": { "str": "started", "cmp": "completed" }
@@ -1925,7 +1892,7 @@ mod tests {
         assert!(
             message.contains("D008")
                 && message.contains("settlement.second_dock")
-                && message.contains("zx-unknown-target@9.9.9"),
+                && message.contains("zx-unknown-target"),
             "failing route must be reported: {message}"
         );
     }
@@ -2110,31 +2077,78 @@ mod tests {
     }
 
     #[test]
-    fn rejects_target_versions_outside_whitelist_charset() {
-        // D003：黑名单时代 `1/2` 之类链轨串可通过；白名单与 Go 镜像同集。
-        for version in ["1/2", "^1.0.0", "1.0.0 beta", "latest", ""] {
-            let mut parent = parent_settlement_definition();
-            parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
-                .as_object_mut()
-                .unwrap()["target"]["version"] = json!(version);
-            let error = compile_zhixu_hook_plan(&parent, None, false)
-                .expect_err("non-whitelisted target version must be rejected");
-            assert!(
-                error.to_string().contains("D003"),
-                "version {version:?}: {error}"
-            );
-        }
-        // 合法精确版本（含 +build 元数据）仍放行到 link 阶段。
+    fn rejects_leftover_target_version_field() {
+        // PRD_101：target 只携带 zhixu（uid 即完整定义身份）。残留 version
+        // 键按 D002 未知字段硬拒绝——静默忽略会让调用方误以为版本钉扎仍生效。
         let mut parent = parent_settlement_definition();
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
-            .unwrap()["target"]["version"] = json!("1.2.0+build.1");
+            .unwrap()["target"]["version"] = json!("1.2.0");
         let error = compile_zhixu_hook_plan(&parent, None, false)
-            .expect_err("valid version reaches linking, which fails without a manifest");
+            .expect_err("leftover target.version must be rejected");
+        let message = error.to_string();
         assert!(
-            !error.to_string().contains("D003"),
-            "valid charset must not trip D003: {error}"
+            message.contains("D002") && message.contains("target.version"),
+            "{message}"
         );
+        assert!(
+            message.contains("unknown field"),
+            "must be reported as an unknown field: {message}"
+        );
+    }
+
+    #[test]
+    fn annotations_do_not_participate_in_plan_identity() {
+        // PRD_101：metadata.annotations 不再要求 version，也不再参与任何
+        // 身份推导——同一 uid 下 annotations 任意取值（含残留 version 键）
+        // 必须产出完全一致的 planId。planHash 是 artifact 内容摘要，内嵌
+        // source 快照，随文档内容自然变化，不属于身份维度。
+        let mut annotated = target_payment_definition();
+        annotated["metadata"]["annotations"] = json!({
+            "team": "payments",
+            "version": "9.9.9"
+        });
+        let mut bare = target_payment_definition();
+        bare["metadata"]["annotations"] = json!({});
+        let annotated_plan = compile_zhixu_hook_plan(&annotated, None, true)
+            .expect("annotations (incl. version key) compile");
+        let bare_plan = compile_zhixu_hook_plan(&bare, None, true).expect("no annotations compile");
+        assert_eq!(
+            annotated_plan["planId"], bare_plan["planId"],
+            "annotations must not participate in planId"
+        );
+        assert_eq!(
+            dock::definition_ref_hash("zx-payment-execution"),
+            dock::definition_ref_hash("zx-payment-execution"),
+            "definitionRefHash derives from uid alone"
+        );
+        assert!(
+            bare_plan.get("version").is_none(),
+            "hook plan artifact must not carry a zhixu business version field"
+        );
+    }
+
+    #[test]
+    fn links_manifest_entries_without_version() {
+        // PRD_101：resolution manifest 条目与 dock route target 均无
+        // version 维度——uid 即完整定义身份，无 version 可正常解析。
+        let manifest = manifest_for(&target_payment_definition(), None);
+        assert!(
+            manifest["definitions"][0]
+                .as_object()
+                .unwrap()
+                .get("version")
+                .is_none(),
+            "manifest entries must not carry version"
+        );
+        let plan = compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
+            .expect("version-less manifest links");
+        let route = &plan["dockRoutes"][0];
+        assert!(
+            route["target"].get("version").is_none(),
+            "resolved route target must not carry version"
+        );
+        assert_eq!(route["target"]["zhixuUid"], "zx-payment-execution");
     }
 
     /// 无锚扇入订阅 + zhixu 委托执行器（UVP-01）：编译期拒绝；本类存在
@@ -2151,7 +2165,7 @@ mod tests {
                     "supplierType": "zhixu",
                     "zhixuExecutorConfig": {
                         "schemaVersion": "uvp.dock.v1",
-                        "target": { "zhixu": "zx-target", "version": "1.0.0" },
+                        "target": { "zhixu": "zx-target" },
                         "order": { "idPolicy": "derived-v1" },
                         "inputMap": { "SUB": "execute" },
                         "signalMap": { "str": "started", "cmp": "completed" }
@@ -2183,8 +2197,7 @@ mod tests {
             "kind": "Zhixu",
             "metadata": {
                 "name": "delegation_subscription",
-                "uid": "zx-delegation-sub",
-                "annotations": { "version": "1.0.0" }
+                "uid": "zx-delegation-sub"
             },
             "spec": {
                 "platform": { "type": "cloud" },
@@ -2385,7 +2398,7 @@ mod tests {
         assert!(error.to_string().contains("D010"), "{}", error.to_string());
 
         // D015：目标边回指父定义（经 manifest dockEdges）。
-        let edges = json!([{ "zhixu": "zx-settlement", "version": "2.0.0" }]);
+        let edges = json!([{ "zhixu": "zx-settlement" }]);
         let manifest = manifest_for(&target_payment_definition(), Some(edges));
         let error =
             compile_zhixu_hook_plan(&parent_settlement_definition(), Some(&manifest), false)
@@ -2536,8 +2549,7 @@ mod tests {
             "kind": "Zhixu",
             "metadata": {
                 "name": "supplier_id_required",
-                "uid": "zx-supplier-id",
-                "annotations": { "version": "1" }
+                "uid": "zx-supplier-id"
             },
             "spec": {
                 "platform": { "type": "evm" },
@@ -2604,8 +2616,7 @@ mod tests {
             "kind": "Zhixu",
             "metadata": {
                 "name": "subscription_static_executor",
-                "uid": "zx-subscription-static",
-                "annotations": { "version": "1" }
+                "uid": "zx-subscription-static"
             },
             "spec": {
                 "platform": { "type": "cloud" },
@@ -2662,8 +2673,7 @@ mod tests {
             "kind": "Zhixu",
             "metadata": {
                 "name": "unmaterializable_watcher",
-                "uid": "zx-unmaterializable",
-                "annotations": { "version": "1" }
+                "uid": "zx-unmaterializable"
             },
             "spec": {
                 "platform": { "type": "evm" },
@@ -2868,8 +2878,7 @@ mod tests {
             "kind": "Zhixu",
             "metadata": {
                 "name": "mint_cycle",
-                "uid": "zhixu-mint-cycle-001",
-                "annotations": { "version": "1" }
+                "uid": "zhixu-mint-cycle-001"
             },
             "spec": {
                 "platform": { "type": "cloud" },

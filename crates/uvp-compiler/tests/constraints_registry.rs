@@ -21,7 +21,7 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
 ///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "3b0a947f84547abcf6433939ca9a1ce53d9b6f1a47dbf6c599df2a4d0bc4b8bd";
+const PINNED_SHA256: &str = "fe443673bc321721ad98ca9770bb6eef5d14d657dcb6fcb10bcae3d0d0d94431";
 
 fn default_constraints_path() -> std::path::PathBuf {
     // 测试进程 cwd = crates/uvp-compiler。
@@ -119,8 +119,7 @@ fn base_definition() -> Value {
         "kind": "Zhixu",
         "metadata": {
             "name": "constraints_probe",
-            "uid": "zx-constraints-probe",
-            "annotations": { "version": "1.0.0" }
+            "uid": "zx-constraints-probe"
         },
         "spec": {
             "platform": { "type": "cloud" },
@@ -156,7 +155,7 @@ fn dock_definition() -> Value {
         "supplierType": "zhixu",
         "zhixuExecutorConfig": {
             "schemaVersion": "uvp.dock.v1",
-            "target": { "zhixu": "zx-target", "version": "1.0.0" },
+            "target": { "zhixu": "zx-target" },
             "order": { "idPolicy": "derived-v1" },
             "inputMap": { "START": "entrance" },
             "signalMap": { "str": "out_str", "cmp": "out_cmp" }
@@ -450,16 +449,16 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
-        "dock-target-version-exact".into(),
+        "dock-target-uid-required".into(),
         (
             || probe_compile(dock_definition()),
             || {
                 probe_compile({
                     let mut d = dock_definition();
                     *d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/target/version",
+                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/target/zhixu",
                     )
-                    .expect("version path") = json!("latest");
+                    .expect("zhixu path") = json!("");
                     d
                 })
             },

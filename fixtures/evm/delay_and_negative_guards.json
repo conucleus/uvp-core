@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "evm_guards",
-      "uid": "fx-evmguard-001",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-evmguard-001"
     },
     "spec": {
       "platform": {

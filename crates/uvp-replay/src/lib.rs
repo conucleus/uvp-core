@@ -1255,7 +1255,6 @@ mod tests {
                 "plan": {
                     "planId": "0x01",
                     "zhixuId": "demo",
-                    "version": "1",
                     "compiledHooks": [{
                         "hookId": "match.exchange#PAIR",
                         "stageId": "match.exchange",
@@ -1356,7 +1355,6 @@ mod tests {
                 "plan": {
                     "planId": "0x01",
                     "zhixuId": "demo",
-                    "version": "1",
                     "compiledHooks": [{
                         "hookId": "flow.start#START",
                         "stageId": "flow.start",
@@ -1472,7 +1470,6 @@ mod tests {
                 "plan": {
                     "planId": "0x01",
                     "zhixuId": "demo",
-                    "version": "1",
                     "compiledHooks": [{
                         "hookId": "linked.entry#BIRTH",
                         "stageId": "linked.entry",
@@ -1554,7 +1551,6 @@ mod tests {
                 "plan": {
                     "planId": "0x01",
                     "zhixuId": "demo",
-                    "version": "1",
                     "compiledHooks": [{
                         "hookId": "flow.pay#TIMEOUT",
                         "stageId": "flow.pay",
@@ -1758,7 +1754,6 @@ mod tests {
                 "plan": {
                     "planId": "0x01",
                     "zhixuId": "demo",
-                    "version": "1",
                     "compiledHooks": [{
                         "hookId": "0x10",
                         "stageId": "0x20",
@@ -1967,7 +1962,6 @@ mod tests {
                 "plan": {
                     "planId": "0x01",
                     "zhixuId": "demo",
-                    "version": "1",
                     "compiledHooks": [{
                         "hookId": "flow.exec#WATCH",
                         "stageId": "flow.exec",

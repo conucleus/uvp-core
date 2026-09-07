@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "evm_only_template",
-      "uid": "fx-evmonly-001",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-evmonly-001"
     },
     "spec": {
       "platform": {

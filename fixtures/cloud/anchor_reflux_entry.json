@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "anchor_entry",
-      "uid": "fx-anchor-001",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-anchor-001"
     },
     "spec": {
       "platform": {

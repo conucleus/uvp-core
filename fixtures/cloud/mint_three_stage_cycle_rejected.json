@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "mint_three_stage_cycle",
-      "uid": "fx-mintcycle-002",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-mintcycle-002"
     },
     "spec": {
       "platform": {

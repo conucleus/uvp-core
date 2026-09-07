@@ -18,8 +18,7 @@ fn target_payment_definition() -> Value {
         "kind": "Zhixu",
         "metadata": {
             "name": "payment_execution",
-            "uid": "zx-payment-execution",
-            "annotations": { "version": "1.2.0" }
+            "uid": "zx-payment-execution"
         },
         "spec": {
             "platform": { "type": "cloud" },
@@ -91,8 +90,7 @@ fn parent_settlement_definition() -> Value {
         "kind": "Zhixu",
         "metadata": {
             "name": "settlement",
-            "uid": "zx-settlement",
-            "annotations": { "version": "2.0.0" }
+            "uid": "zx-settlement"
         },
         "spec": {
             "platform": { "type": "cloud" },
@@ -134,7 +132,7 @@ fn parent_settlement_definition() -> Value {
                             "supplierType": "zhixu",
                             "zhixuExecutorConfig": {
                                 "schemaVersion": "uvp.dock.v1",
-                                "target": { "zhixu": "zx-payment-execution", "version": "1.2.0" },
+                                "target": { "zhixu": "zx-payment-execution" },
                                 "order": { "idPolicy": "derived-v1" },
                                 "inputMap": { "EXECUTE": "execute", "CANCEL": "cancel" },
                                 "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
@@ -157,7 +155,6 @@ fn build_manifest(target_plan: &Value) -> Value {
         "schemaVersion": "uvp.dock.resolution.v1",
         "definitions": [{
             "zhixu": "zx-payment-execution",
-            "version": "1.2.0",
             "definitionRefHash": interface["definition"]["definitionRefHash"].clone(),
             "artifactHash": target_plan["planHash"].clone(),
             "published": true,
@@ -207,7 +204,7 @@ fn main() {
     let local_order_key = dock::local_order_key("order-fixture-001");
     let route_id = word(&route["routeId"]);
     let route_hash = word(&route["routeHash"]);
-    let parent_ref = dock::definition_ref_hash("zx-settlement", "2.0.0");
+    let parent_ref = dock::definition_ref_hash("zx-settlement");
     // The synthetic runtime vector must use the same local plan namespace
     // emitted in `route.local.planId`; otherwise a consumer can pass the
     // fixture while deriving a different dockInstanceId in production.
@@ -418,12 +415,15 @@ fn main() {
     .expect("write compat manifest");
 
     // 重写委托 profile fixture：独立子订单语义（PRD96 §11 处置表 REWRITE）。
-    let parent_hooks = parent_plan["compiledHooks"]
+    // profile_fixtures 断言按排序比较 hook id；生成侧同口径排序，避免
+    // 编译顺序漂移被误读为语义变化。
+    let mut parent_hooks = parent_plan["compiledHooks"]
         .as_array()
         .expect("compiled hooks")
         .iter()
         .map(|hook| hook["hookId"].as_str().expect("hookId").to_string())
         .collect::<Vec<_>>();
+    parent_hooks.sort();
     let mut dependency_counts = serde_json::Map::new();
     for hook in parent_plan["compiledHooks"]
         .as_array()

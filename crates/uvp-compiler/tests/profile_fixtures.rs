@@ -231,7 +231,6 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
             );
             assert_non_empty_string(value, "planId", fixture);
             assert_non_empty_string(value, "zhixuId", fixture);
-            assert_non_empty_string(value, "version", fixture);
             assert_word(value, "planId", fixture);
             assert_word(value, "planHash", fixture);
         }
@@ -244,7 +243,6 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
             assert_non_empty_string(value, "planId", fixture);
             assert_word(value, "planId", fixture);
             assert_non_empty_string(value, "zhixuId", fixture);
-            assert_non_empty_string(value, "version", fixture);
             assert_non_empty_string(value, "zhixuName", fixture);
         }
         other => panic!("{} has unsupported success target {other:?}", fixture.name),

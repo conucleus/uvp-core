@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "portable_template",
-      "uid": "fx-portable-001",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-portable-001"
     },
     "spec": {
       "platform": {

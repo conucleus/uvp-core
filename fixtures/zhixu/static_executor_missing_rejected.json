@@ -8,10 +8,7 @@
     "kind": "Zhixu",
     "metadata": {
       "name": "static_executor_missing",
-      "uid": "fx-statexec-002",
-      "annotations": {
-        "version": "1"
-      }
+      "uid": "fx-statexec-002"
     },
     "spec": {
       "platform": {
