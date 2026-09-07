@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "multi_stage_dep",
-      "uid": "fx-fanin-001"
+      "name": "multi_stage_dep"
     },
     "spec": {
       "platform": {

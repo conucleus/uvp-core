@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "portable_template",
-      "uid": "fx-portable-001"
+      "name": "portable_template"
     },
     "spec": {
       "platform": {

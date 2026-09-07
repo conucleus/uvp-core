@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "zero_hook_stage",
-      "uid": "fx-zerohook-001"
+      "name": "zero_hook_stage"
     },
     "spec": {
       "platform": {

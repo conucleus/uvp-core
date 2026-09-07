@@ -1,6 +1,6 @@
-//! 生成 M0 兼容性 fixture（PRD96 §3）：
+//! 生成 dock v2 兼容性 fixture（PRD_100/PRD_102）：
 //! - `fixtures/dock/v1/manifest.json`：冻结常量、目标/父定义、resolution
-//!   manifest、全部 leaf/root/hash/ID/envelope/permit golden vectors；
+//!   manifest v2、全部 leaf/root/hash/ID/envelope/permit golden vectors；
 //! - `fixtures/zhixu/child_order_source_switch.json`：重写后的委托 fixture
 //!   （目标接口 + resolution + 独立子订单语义向量）。
 //!
@@ -10,73 +10,58 @@
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+use uvp_compiler::definition_uid;
 use uvp_compiler::dock;
 
-fn target_payment_definition() -> Value {
+/// 目标定义：两个具名接口——production_service[new]（建单型服务）与
+/// production_evidence[existing]（只读既有事实，PRD_100 §12.1）。
+fn target_production_definition() -> Value {
     json!({
         "apiVersion": "uvp/v0",
         "kind": "Zhixu",
-        "metadata": {
-            "name": "payment_execution",
-            "uid": "zx-payment-execution"
-        },
+        "metadata": { "name": "friction_wheel_production" },
         "spec": {
             "platform": { "type": "cloud" },
-            "nucleation": { "id": "payment-core" },
+            "nucleation": { "id": "production-core" },
             "dockInterface": {
-                "schemaVersion": "uvp.dock.v1",
-                "inputs": {
-                    "execute": {
-                        "kind": "entrance",
-                        "hook": "payment_flow.init#DOCK_EXECUTE",
-                        "access": { "policy": "permit" }
+                "production_service": {
+                    "orderModes": ["new"],
+                    "inputs": {
+                        "execute": { "hook": "manufacturing.intake#EXECUTE" },
+                        "amend": { "hook": "manufacturing.produce#DOCK_AMEND" }
                     },
-                    "cancel": {
-                        "kind": "signal",
-                        "hook": "payment_flow.control#DOCK_CANCEL",
-                        "access": { "policy": "linked" }
+                    "outputs": {
+                        "started": { "signal": "factory::manufacturing.intake.str" },
+                        "completed": { "signal": "factory::manufacturing.produce.cmp" }
                     }
                 },
-                "outputs": {
-                    "started": { "signal": "payment::payment_flow.init.str" },
-                    "completed": {
-                        "signal": "payment::payment_flow.settle.cmp",
-                        "terminal": "success"
-                    },
-                    "failed": {
-                        "signal": "payment::payment_flow.settle.err",
-                        "terminal": "failure"
+                "production_evidence": {
+                    "orderModes": ["existing"],
+                    "outputs": {
+                        "scrap_declared": { "signal": "factory::manufacturing.produce.scrap_created" }
                     }
                 }
             },
             "taskPatterns": [
-                { "name": "payment_flow", "stages": [
+                { "name": "manufacturing", "stages": [
                     {
-                        "name": "init",
-                        "source": "payment",
+                        "name": "intake",
+                        "source": "factory",
                         "receiveSignals": {
-                            "DOCK_EXECUTE": "payment::payment_flow.init.execute"
+                            "EXECUTE": "factory::manufacturing.intake.execute"
                         },
                         "sendSignals": ["str"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+                        "executor": { "supplierType": "organization", "supplierID": "friction-factory" }
                     },
                     {
-                        "name": "control",
-                        "source": "payment",
+                        "name": "produce",
+                        "source": "factory",
                         "receiveSignals": {
-                            "DOCK_CANCEL": "payment::payment_flow.control.cancel"
+                            "RUN": "factory::manufacturing.intake.str",
+                            "DOCK_AMEND": "factory::manufacturing.produce.amend"
                         },
-                        "sendSignals": ["cxl"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
-                    },
-                    {
-                        "name": "settle",
-                        "source": "payment",
-                        "receiveSignals": {
-                            "SETTLE": "payment::payment_flow.init.str"
-                        },
-                        "sendSignals": ["cmp", "err"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+                        "sendSignals": ["cmp", "scrap_created"],
+                        "executor": { "supplierType": "organization", "supplierID": "friction-factory" }
                     }
                 ]}
             ]
@@ -84,58 +69,57 @@ fn target_payment_definition() -> Value {
     })
 }
 
-fn parent_settlement_definition() -> Value {
+/// 调用方定义：new 模式生产委托（PRD_100 §12.2）+ existing 模式既有事实
+/// 引用（PRD_100 §12.3）。
+fn parent_sourcing_definition(target_uid: &str) -> Value {
     json!({
         "apiVersion": "uvp/v0",
         "kind": "Zhixu",
-        "metadata": {
-            "name": "settlement",
-            "uid": "zx-settlement"
-        },
+        "metadata": { "name": "sourcing" },
         "spec": {
             "platform": { "type": "cloud" },
-            "nucleation": { "id": "settlement-core" },
+            "nucleation": { "id": "sourcing-core" },
             "taskPatterns": [
-                { "name": "checkout", "stages": [
+                { "name": "procurement", "stages": [
                     {
                         "name": "confirm",
-                        "source": "buyer",
+                        "source": "purchaser",
                         // P0-4 物化门：零 hook 阶段在链上永不可物化、信号没有
-                        // 钩子可挂；seed 是执行者自发入口信号，让 confirm 拥有
-                        // EMIT_READY 物化位。
-                        "receiveSignals": {
-                            "PLACE": "buyer::checkout.confirm.seed"
-                        },
+                        // 钩子可挂；seed 是执行者自发入口信号。
+                        "receiveSignals": { "ORDER": "purchaser::procurement.confirm.seed" },
                         "sendSignals": ["cmp", "seed"],
-                        "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
-                    },
-                    {
-                        "name": "cancel",
-                        "source": "buyer",
-                        "receiveSignals": {
-                            "ABORT": "buyer::checkout.cancel.seed"
-                        },
-                        "sendSignals": ["cmp", "seed"],
-                        "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                        "executor": { "supplierType": "organization", "supplierID": "purchaser-app" }
                     }
                 ]},
-                { "name": "settlement", "stages": [
+                { "name": "sourcing", "stages": [
                     {
-                        "name": "execute_payment",
-                        "source": "buyer",
-                        "receiveSignals": {
-                            "EXECUTE": "buyer::checkout.confirm.cmp",
-                            "CANCEL": "buyer::checkout.cancel.cmp"
-                        },
-                        "sendSignals": ["str", "cmp", "err", "cxl"],
+                        "name": "manufacture",
+                        "source": "purchaser",
+                        "receiveSignals": { "EXECUTE": "purchaser::procurement.confirm.cmp" },
+                        "sendSignals": ["str", "cmp"],
                         "executor": {
                             "supplierType": "zhixu",
                             "zhixuExecutorConfig": {
-                                "schemaVersion": "uvp.dock.v1",
-                                "target": { "zhixu": "zx-payment-execution" },
-                                "order": { "idPolicy": "derived-v1" },
-                                "inputMap": { "EXECUTE": "execute", "CANCEL": "cancel" },
-                                "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
+                                "target": { "zhixu": target_uid },
+                                "interface": "production_service",
+                                "order": { "mode": "new" },
+                                "inputMap": { "EXECUTE": "execute" },
+                                "signalMap": { "str": "started", "cmp": "completed" }
+                            }
+                        }
+                    },
+                    {
+                        "name": "source_evidence",
+                        "source": "recycler",
+                        "receiveSignals": { "READ": "recycler::sourcing.source_evidence.seed" },
+                        "sendSignals": ["cmp", "seed"],
+                        "executor": {
+                            "supplierType": "zhixu",
+                            "zhixuExecutorConfig": {
+                                "target": { "zhixu": target_uid },
+                                "interface": "production_evidence",
+                                "order": { "mode": "existing" },
+                                "signalMap": { "cmp": "scrap_declared" }
                             }
                         }
                     }
@@ -149,16 +133,17 @@ fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
-fn build_manifest(target_plan: &Value) -> Value {
+fn build_manifest(target: &Value, target_plan: &Value) -> Value {
     let interface = target_plan["dockInterface"].clone();
     json!({
-        "schemaVersion": "uvp.dock.resolution.v1",
+        "schemaVersion": dock::DOCK_RESOLUTION_SCHEMA_VERSION,
         "definitions": [{
-            "zhixu": "zx-payment-execution",
+            "zhixu": definition_uid(target).expect("target uid derives"),
+            "definition": target,
             "definitionRefHash": interface["definition"]["definitionRefHash"].clone(),
             "artifactHash": target_plan["planHash"].clone(),
             "published": true,
-            "interface": interface,
+            "interfaces": interface["interfaces"].clone(),
             "evmPlanId": target_plan["planId"].clone(),
             "cloudArtifactId": format!(
                 "artifact://{}",
@@ -180,68 +165,110 @@ fn word(value: &Value) -> dock::Word {
     out
 }
 
+fn find_interface<'a>(artifact: &'a Value, name: &str) -> &'a Value {
+    artifact["interfaces"]
+        .as_array()
+        .expect("interfaces array")
+        .iter()
+        .find(|interface| interface["name"] == json!(name))
+        .unwrap_or_else(|| panic!("interface {name} present"))
+}
+
+fn find_route<'a>(routes: &'a [Value], interface_name: &str) -> &'a Value {
+    routes
+        .iter()
+        .find(|route| route["target"]["interfaceName"] == json!(interface_name))
+        .unwrap_or_else(|| panic!("route on {interface_name} present"))
+}
+
 fn main() {
-    let target = target_payment_definition();
-    let parent = parent_settlement_definition();
+    let target = target_production_definition();
+    let target_uid = definition_uid(&target).expect("target uid derives");
+    let parent = parent_sourcing_definition(&target_uid);
+    let parent_uid = definition_uid(&parent).expect("parent uid derives");
 
     let target_plan =
         uvp_compiler::compile_zhixu_hook_plan(&target, None, true).expect("target compiles");
-    let manifest = build_manifest(&target_plan);
+    let manifest = build_manifest(&target, &target_plan);
     let parent_plan = uvp_compiler::compile_zhixu_hook_plan(&parent, Some(&manifest), false)
         .expect("parent links");
-    let routes = parent_plan["dockRoutes"].as_array().expect("one route");
-    assert_eq!(routes.len(), 1, "parent exposes exactly one dock route");
-    let route = &routes[0];
-    let target_interface = manifest["definitions"][0]["interface"].clone();
+    let routes = parent_plan["dockRoutes"].as_array().expect("dock routes");
+    assert_eq!(routes.len(), 2, "parent exposes one route per interface");
+    let service_route = find_route(routes, "production_service");
+    let evidence_route = find_route(routes, "production_evidence");
+    let target_interface = target_plan["dockInterface"].clone();
+    let service_interface = find_interface(&target_interface, "production_service");
 
     // ---- runtime domains & identity vectors ----
     let chain_id: u64 = 31337;
     let state_machine = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
     let docking_module = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+    // 链侧 docking module EIP-712 域 version（abiVersion 3.0 线）。
+    let permit_domain_version = "3";
     let evm_domain = dock::evm_runtime_domain(chain_id, state_machine).expect("address");
     let cloud_domain =
         dock::cloud_runtime_domain("uvp-cloud-deployment-fixture", "uvp-cloud-security-fixture");
     let local_order_key = dock::local_order_key("order-fixture-001");
-    let route_id = word(&route["routeId"]);
-    let route_hash = word(&route["routeHash"]);
-    let parent_ref = dock::definition_ref_hash("zx-settlement");
+    let service_route_id = word(&service_route["routeId"]);
+    let service_route_hash = word(&service_route["routeHash"]);
+    let parent_ref = dock::definition_ref_hash(&parent_uid);
     // The synthetic runtime vector must use the same local plan namespace
     // emitted in `route.local.planId`; otherwise a consumer can pass the
     // fixture while deriving a different dockInstanceId in production.
     let parent_plan_id = word(&parent_plan["planId"]);
-    let target_ref = word(&target_interface["definition"]["definitionRefHash"]);
+    let target_ref = word(&service_route["target"]["definitionRefHash"]);
+    let new_mode = dock::mode_word("new").expect("mode word");
+    let existing_mode = dock::mode_word("existing").expect("mode word");
+    let service_name_hash = dock::interface_name_key("production_service");
+    let evidence_name_hash = dock::interface_name_key("production_evidence");
+    // new 模式：route 身份 + 本地单（幂等建单锚，A06）。
     let dock_instance = dock::dock_instance_id(
         &evm_domain,
         &parent_plan_id,
         &parent_ref,
         &local_order_key,
-        &route_id,
-        &route_hash,
+        &service_route_id,
+        &service_route_hash,
+        &new_mode,
+        &service_name_hash,
+        None,
     );
     let linked_order = dock::linked_order_id(&dock_instance, &target_ref);
+    // existing 模式：派生加入 target order 引用（A07；云轨运行时语义）。
+    let existing_order_ref = dock::target_order_ref_key("factory-a/P001");
+    let evidence_route_id = word(&evidence_route["routeId"]);
+    let evidence_route_hash = word(&evidence_route["routeHash"]);
+    let existing_dock_instance = dock::dock_instance_id(
+        &cloud_domain,
+        &parent_plan_id,
+        &parent_ref,
+        &local_order_key,
+        &evidence_route_id,
+        &evidence_route_hash,
+        &existing_mode,
+        &evidence_name_hash,
+        Some(&existing_order_ref),
+    );
 
-    // ---- input envelope ----
-    let entrance_binding = route["entrance"].as_object().expect("entrance");
-    let _ = entrance_binding;
-    let entrance_input = route["inputs"]
+    // ---- input envelope（new 模式：唯一 input 绑定即出生锚）----
+    let birth_binding = service_route["inputBindings"]
         .as_array()
-        .expect("inputs")
+        .expect("input bindings")
         .iter()
-        .find(|input| input["kind"] == json!("entrance"))
-        .expect("entrance input");
-    let entrance_binding_hash = word(&entrance_input["bindingHash"]);
-    let source_fact_set = dock::source_fact_set_hash(&[
-        dock::canonical_signal_hash("buyer::checkout.confirm.cmp"),
-        dock::canonical_signal_hash("buyer::checkout.cancel.cmp"),
-    ]);
-    let local_stage_key = word(&route["local"]["stageKey"]);
-    let local_hook_key = dock::hook_key("settlement.execute_payment#EXECUTE");
+        .find(|binding| binding["targetPort"] == json!("execute"))
+        .expect("execute binding");
+    let birth_binding_hash = word(&birth_binding["bindingHash"]);
+    let source_fact_set = dock::source_fact_set_hash(&[dock::canonical_signal_hash(
+        "purchaser::procurement.confirm.cmp",
+    )]);
+    let local_stage_key = word(&service_route["local"]["stageKey"]);
+    let local_hook_key = dock::hook_key("sourcing.manufacture#EXECUTE");
     let target_plan_id = word(&manifest["definitions"][0]["evmPlanId"]);
     let target_port_key = dock::port_key("execute");
-    let target_input_signal = word(&entrance_input["targetSignalId"]);
+    let target_input_signal = word(&birth_binding["targetSignalId"]);
     let input_payload = dock::dock_input_payload_hash(
         &dock_instance,
-        &route_hash,
+        &service_route_hash,
         &parent_plan_id,
         &local_order_key,
         &local_stage_key,
@@ -253,19 +280,19 @@ fn main() {
         0,
     );
     let input_idempotency =
-        dock::dock_input_idempotency_key(&dock_instance, &entrance_binding_hash, 0);
+        dock::dock_input_idempotency_key(&dock_instance, &birth_binding_hash, 0);
 
     // ---- output envelope ----
-    let completed_output = route["outputs"]
+    let completed_output = service_route["outputBindings"]
         .as_array()
-        .expect("outputs")
+        .expect("output bindings")
         .iter()
-        .find(|output| output["localSignalName"] == json!("cmp"))
-        .expect("completed output");
+        .find(|binding| binding["localSignalName"] == json!("cmp"))
+        .expect("completed output binding");
     let output_binding_hash = word(&completed_output["bindingHash"]);
     let target_fact_id = dock::signal_key(
-        &dock::keccak_word(b"payment"),
-        &dock::keccak_word(b"payment_flow.settle.cmp"),
+        &dock::keccak_word(b"factory"),
+        &dock::keccak_word(b"manufacturing.produce.cmp"),
     );
     let output_idempotency =
         dock::dock_output_idempotency_key(&dock_instance, &output_binding_hash, &target_fact_id);
@@ -274,10 +301,12 @@ fn main() {
     let permit_digest = dock::eip712_permit_digest(
         chain_id,
         docking_module,
+        permit_domain_version,
         &target_plan_id,
         &target_port_key,
+        &service_name_hash,
         &parent_plan_id,
-        &route_hash,
+        &service_route_hash,
         &dock_instance,
         &linked_order,
         1,
@@ -291,45 +320,47 @@ fn main() {
             .iter()
             .map(|route| word(&route["routeHash"]))
             .collect::<Vec<_>>();
-        dock::merkle_proof(&leaves, &route_hash).expect("route leaf in root")
+        dock::merkle_proof(&leaves, &service_route_hash).expect("route leaf in root")
     };
     let interface_leaf_proof = {
-        let mut leaves = target_interface["inputs"]
+        let leaves = target_interface["interfaces"]
+            .as_array()
+            .expect("interfaces")
+            .iter()
+            .map(|interface| word(&interface["interfaceRoot"]))
+            .collect::<Vec<_>>();
+        let service_leaf = word(&service_interface["interfaceRoot"]);
+        dock::merkle_proof(&leaves, &service_leaf).expect("interface leaf in definition root")
+    };
+    let input_port_leaf_proof = {
+        let leaves = service_interface["inputs"]
             .as_array()
             .expect("interface inputs")
             .iter()
             .map(|port| word(&port["leafHash"]))
-            .chain(
-                target_interface["outputs"]
-                    .as_array()
-                    .expect("interface outputs")
-                    .iter()
-                    .map(|port| word(&port["leafHash"])),
-            )
             .collect::<Vec<_>>();
-        leaves.sort_unstable();
-        leaves.dedup();
-        let entrance_leaf = target_interface["inputs"]
+        let execute_leaf = service_interface["inputs"]
             .as_array()
             .expect("interface inputs")
             .iter()
             .find(|port| port["port"] == json!("execute"))
             .map(|port| word(&port["leafHash"]))
-            .expect("entrance leaf");
-        dock::merkle_proof(&leaves, &entrance_leaf).expect("entrance leaf in interface root")
+            .expect("execute leaf");
+        dock::merkle_proof(&leaves, &execute_leaf).expect("port leaf in interface inputsRoot")
     };
 
     let compat = json!({
         "schemaVersion": dock::DOCK_COMPAT_SCHEMA_VERSION,
         "constants": {
             "schemaVersions": {
-                "dock": dock::DOCK_SCHEMA_VERSION,
                 "dockInterfaceArtifact": dock::DOCK_INTERFACE_ARTIFACT_SCHEMA_VERSION,
                 "dockRoute": dock::DOCK_ROUTE_SCHEMA_VERSION,
                 "resolution": dock::DOCK_RESOLUTION_SCHEMA_VERSION
             },
             "domains": {
+                "definitionUid": uvp_compiler::DEFINITION_UID_DOMAIN,
                 "definitionRef": dock::DOMAIN_DEFINITION_REF,
+                "dockInterface": dock::DOMAIN_INTERFACE,
                 "interfaceInput": dock::DOMAIN_INTERFACE_INPUT,
                 "interfaceOutput": dock::DOMAIN_INTERFACE_OUTPUT,
                 "routeId": dock::DOMAIN_ROUTE_ID,
@@ -357,12 +388,11 @@ fn main() {
                 "leafOrder": "sorted-unique leaves, odd tail promoted"
             },
             "enumWords": {
-                "inputKind": { "signal": 0, "entrance": 1 },
-                "accessPolicy": { "open": 0, "permit": 1, "linked": 2 },
-                "terminal": { "none": 0, "success": 1, "failure": 2, "cancelled": 3 },
-                "orderIdPolicy": { "derived-v1": 0 }
+                "orderMode": { "new": 0, "existing": 1 },
+                "orderModesMask": { "new": 1, "existing": 2 }
             },
-            "permitTypeHash": dock::PERMIT_TYPEHASH_SUFFIX
+            "permitTypeHash": dock::PERMIT_TYPEHASH_SUFFIX,
+            "permitDomainVersion": permit_domain_version
         },
         "inputs": {
             "chainId": chain_id,
@@ -371,7 +401,12 @@ fn main() {
             "cloudDeploymentId": "uvp-cloud-deployment-fixture",
             "cloudSecurityDomain": "uvp-cloud-security-fixture",
             "localOrderId": "order-fixture-001",
+            "existingTargetOrderRef": "factory-a/P001",
             "parentPlanIdWord": dock::word_hex(&parent_plan_id)
+        },
+        "identities": {
+            "targetUid": target_uid,
+            "parentUid": parent_uid
         },
         "targetDefinition": target,
         "parentDefinition": parent,
@@ -382,6 +417,10 @@ fn main() {
             "targetPlanId": manifest["definitions"][0]["evmPlanId"].clone(),
             "targetArtifactHash": manifest["definitions"][0]["artifactHash"].clone(),
             "interfaceArtifact": target_interface,
+            "interfaceNameIds": {
+                "production_service": dock::word_hex(&service_name_hash),
+                "production_evidence": dock::word_hex(&evidence_name_hash)
+            },
             "dockRoutes": routes.clone(),
             "dockRoutesRoot": parent_plan["dockRoutesRoot"].clone(),
             "dockInterfaceRoot": parent_plan["dockInterfaceRoot"].clone(),
@@ -390,6 +429,7 @@ fn main() {
             "localOrderKey": dock::word_hex(&local_order_key),
             "dockInstanceId": dock::word_hex(&dock_instance),
             "linkedOrderId": dock::word_hex(&linked_order),
+            "existingDockInstanceId": dock::word_hex(&existing_dock_instance),
             "sourceFactSetHash": dock::word_hex(&source_fact_set),
             "inputPayloadHash": dock::word_hex(&input_payload),
             "inputIdempotencyKey": dock::word_hex(&input_idempotency),
@@ -399,7 +439,11 @@ fn main() {
                 .iter()
                 .map(dock::word_hex)
                 .collect::<Vec<_>>(),
-            "entranceInterfaceLeafProof": interface_leaf_proof
+            "interfaceLeafProof": interface_leaf_proof
+                .iter()
+                .map(dock::word_hex)
+                .collect::<Vec<_>>(),
+            "inputPortLeafProof": input_port_leaf_proof
                 .iter()
                 .map(dock::word_hex)
                 .collect::<Vec<_>>()
@@ -414,9 +458,8 @@ fn main() {
     )
     .expect("write compat manifest");
 
-    // 重写委托 profile fixture：独立子订单语义（PRD96 §11 处置表 REWRITE）。
-    // profile_fixtures 断言按排序比较 hook id；生成侧同口径排序，避免
-    // 编译顺序漂移被误读为语义变化。
+    // 重写委托 profile fixture：独立子订单语义。profile_fixtures 断言按排序
+    // 比较 hook id；生成侧同口径排序，避免编译顺序漂移被误读为语义变化。
     let mut parent_hooks = parent_plan["compiledHooks"]
         .as_array()
         .expect("compiled hooks")
@@ -438,7 +481,7 @@ fn main() {
         );
     }
     let child_fixture = json!({
-        "name": "delegation binds a resolved dock route with independent child identity",
+        "name": "delegation binds resolved dock routes with independent child identity",
         "semanticVersion": "uvp.semantic.v1",
         "target": "hook_plan",
         "portable": true,
@@ -448,7 +491,7 @@ fn main() {
             "platform": "cloud",
             "hookIds": parent_hooks,
             "hookDependencyCounts": dependency_counts,
-            "dockRouteCount": 1
+            "dockRouteCount": 2
         }
     });
     std::fs::write(

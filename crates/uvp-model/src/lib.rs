@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ObjectMeta {
+    /// 作者技术标签（PRD_102）：参与内容派生，但无唯一性/关系语义。
+    /// 定义身份由编译器从内容派生，uid 不是作者可写字段——出现即未知字段。
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -33,10 +33,10 @@ pub struct ZhixuSpec {
     pub nucleation: Nucleation,
     #[serde(default)]
     pub task_patterns: Vec<ZhixuTaskPattern>,
-    /// 目标侧公开的版本化对接接口（PRD94 §3）。`uvp.dock.v1` 子协议；
-    /// 调用方只能引用端口名，不能看到目标内部 stage/signal。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dock_interface: Option<DockInterfaceSource>,
+    /// 目标侧公开的具名对接接口 map（PRD_100 §9）：键为接口名。调用方
+    /// 只能引用接口名与端口名，不能看到目标内部 stage/signal。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dock_interface: BTreeMap<String, DockInterfaceSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,11 +115,13 @@ pub struct ZhixuExecutor {
     pub selectable_resource: Option<Value>,
 }
 
-/// `spec.dockInterface` source 形状（`uvp.dock.v1`）。
+/// `spec.dockInterface` 下的具名接口（PRD_100 §9.1-§9.4）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockInterfaceSource {
-    pub schema_version: String,
+pub struct DockInterfaceSpec {
+    /// `{new, existing}` 的非空子集，无重复；new ⇒ 至少一个 input 端口
+    /// （建单型服务必须有入口）。
+    pub order_modes: Vec<String>,
     #[serde(default)]
     pub inputs: BTreeMap<String, DockInputPortSource>,
     #[serde(default)]
@@ -129,16 +131,8 @@ pub struct DockInterfaceSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockInputPortSource {
-    pub kind: String,
     /// `<task>.<stage>#<receiveHookName>`
     pub hook: String,
-    pub access: DockPortAccessSource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockPortAccessSource {
-    pub policy: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +140,4 @@ pub struct DockPortAccessSource {
 pub struct DockOutputPortSource {
     /// `<source>::<task>.<stage>.<signal>`
     pub signal: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terminal: Option<String>,
 }

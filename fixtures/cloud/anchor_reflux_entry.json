@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "anchor_entry",
-      "uid": "fx-anchor-001"
+      "name": "anchor_entry"
     },
     "spec": {
       "platform": {

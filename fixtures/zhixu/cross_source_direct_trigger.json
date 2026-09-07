@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "cross_source_trigger",
-      "uid": "fx-crosssrc-001"
+      "name": "cross_source_trigger"
     },
     "spec": {
       "platform": {

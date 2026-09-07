@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "undeclared_subscription_source",
-      "uid": "fx-undclsrc-001"
+      "name": "undeclared_subscription_source"
     },
     "spec": {
       "platform": {

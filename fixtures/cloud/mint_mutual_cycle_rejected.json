@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "mint_mutual_cycle",
-      "uid": "fx-mintcycle-001"
+      "name": "mint_mutual_cycle"
     },
     "spec": {
       "platform": {

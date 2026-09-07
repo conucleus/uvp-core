@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "evm_only_template",
-      "uid": "fx-evmonly-001"
+      "name": "evm_only_template"
     },
     "spec": {
       "platform": {

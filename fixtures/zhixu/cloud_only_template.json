@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "cloud_only_template",
-      "uid": "fx-cloudonly-001"
+      "name": "cloud_only_template"
     },
     "spec": {
       "platform": {

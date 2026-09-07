@@ -7,8 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "merge_entry",
-      "uid": "fx-merge-001"
+      "name": "merge_entry"
     },
     "spec": {
       "platform": {

@@ -21,7 +21,7 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
 ///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "fe443673bc321721ad98ca9770bb6eef5d14d657dcb6fcb10bcae3d0d0d94431";
+const PINNED_SHA256: &str = "f9df448ec029b1afc2ab0adc8903892dddcb614a47936c52c5d84ab1f73e043b";
 
 fn default_constraints_path() -> std::path::PathBuf {
     // 测试进程 cwd = crates/uvp-compiler。
@@ -79,6 +79,17 @@ fn probe_compile(definition: Value) -> (bool, String) {
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
 
+/// link 级探针：target=hook_plan + resolution manifest（D018/D020 等
+/// link 期校验的可达路径）。
+fn probe_link(definition: Value, manifest: Value) -> (bool, String) {
+    let request = json!({
+        "target": "hook_plan",
+        "definition": definition,
+        "resolutionManifest": manifest,
+    });
+    envelope_message(&uvp_compiler::compile_json(&request.to_string()))
+}
+
 /// hook 级探针：profile = evm_strict / cloud_compat。
 fn probe_hook(profile: &str, hook_name: &str, hook: &str) -> (bool, String) {
     let request = json!({ "profile": profile, "hookName": hook_name, "hook": hook });
@@ -118,8 +129,7 @@ fn base_definition() -> Value {
         "apiVersion": "uvp/v0",
         "kind": "Zhixu",
         "metadata": {
-            "name": "constraints_probe",
-            "uid": "zx-constraints-probe"
+            "name": "constraints_probe"
         },
         "spec": {
             "platform": { "type": "cloud" },
@@ -145,8 +155,80 @@ fn stage_mut(definition: &mut Value) -> &mut Value {
         .expect("base definition has one stage")
 }
 
-/// 带 uvp.dock.v1 委托 executor 的定义（dock D001-D007 探针基底）。
+/// 发布具名接口的目标定义（目标侧 interface 探针基底 + link 探针的被引用方）。
+/// production_service 只允许 new（建单型服务）。
+fn target_interface_definition() -> Value {
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "constraints_target" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "target-core" },
+            "dockInterface": {
+                "production_service": {
+                    "orderModes": ["new"],
+                    "inputs": {
+                        "execute": { "hook": "main.work#DOCK_ENTER" }
+                    },
+                    "outputs": {
+                        "done": { "signal": "buyer::main.work.cmp" }
+                    }
+                }
+            },
+            "taskPatterns": [
+                { "name": "main", "stages": [
+                    {
+                        "name": "work",
+                        "source": "buyer",
+                        "receiveSignals": {
+                            "DOCK_ENTER": "buyer::main.work.enter",
+                            "SELF": "buyer::main.work.seed"
+                        },
+                        "sendSignals": ["str", "cmp", "seed"],
+                        "executor": { "supplierType": "organization", "supplierID": "target-org" }
+                    }
+                ]}
+            ]
+        }
+    })
+}
+
+fn target_interface_uid() -> String {
+    uvp_compiler::definition_uid(&target_interface_definition()).expect("uid derives")
+}
+
+/// resolution manifest v2：内嵌目标定义全文（内容寻址），由目标侧编译产物
+/// 组装；真实流程由 Store/发布系统生成。
+fn interface_manifest() -> Value {
+    let target = target_interface_definition();
+    let request = json!({ "target": "parse", "definition": target });
+    let output = uvp_compiler::compile_json(&request.to_string());
+    let (ok, message) = envelope_message(&output);
+    assert!(ok, "target interface definition compiles: {message}");
+    let envelope: Value = serde_json::from_str(&output).expect("envelope");
+    let plan = envelope["value"].clone();
+    json!({
+        "schemaVersion": "uvp.dock.resolution.v2",
+        "definitions": [{
+            "zhixu": uvp_compiler::definition_uid(&target).expect("uid derives"),
+            "definition": target,
+            "definitionRefHash": plan["dockInterface"]["definition"]["definitionRefHash"],
+            "artifactHash": plan["planHash"],
+            "published": true,
+            "interfaces": plan["dockInterface"]["interfaces"],
+            "evmPlanId": plan["planId"],
+            "cloudArtifactId": format!("artifact://{}", plan["planHash"].as_str().unwrap_or(""))
+        }]
+    })
+}
+
+/// 带 zhixu 委托 executor 的定义（调用方 config 探针基底）。
 fn dock_definition() -> Value {
+    dock_definition_with("new")
+}
+
+fn dock_definition_with(mode: &str) -> Value {
     let mut definition = base_definition();
     let stage = stage_mut(&mut definition);
     stage["receiveSignals"] = json!({ "START": "buyer::main.work.cmp" });
@@ -154,14 +236,21 @@ fn dock_definition() -> Value {
     stage["executor"] = json!({
         "supplierType": "zhixu",
         "zhixuExecutorConfig": {
-            "schemaVersion": "uvp.dock.v1",
-            "target": { "zhixu": "zx-target" },
-            "order": { "idPolicy": "derived-v1" },
-            "inputMap": { "START": "entrance" },
-            "signalMap": { "str": "out_str", "cmp": "out_cmp" }
+            "target": { "zhixu": target_interface_uid() },
+            "interface": "production_service",
+            "order": { "mode": mode },
+            "inputMap": { "START": "execute" },
+            "signalMap": { "str": "done" }
         }
     });
     definition
+}
+
+/// 解析后的 config 对象（探针变异入口）。
+fn dock_config_mut(definition: &mut Value) -> &mut Value {
+    definition
+        .pointer_mut("/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig")
+        .expect("dock definition has a zhixuExecutorConfig")
 }
 
 fn signal_map_mut(definition: &mut Value) -> &mut Value {
@@ -241,17 +330,31 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
-        "metadata-uid-max-length".into(),
+        "metadata-uid-not-an-input".into(),
         (
             || probe_compile(base_definition()),
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    d["metadata"]["uid"] = json!(oversize_ascii(65, b'u'));
+                    d["metadata"]["uid"] = json!("zx-constraints-probe");
                     d
                 })
             },
-            "exceeds 64 bytes (global_zhixu.uid)",
+            "unknown field `uid`",
+        ),
+    ));
+    probes.push((
+        "metadata-name-slug-shape".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["metadata"]["name"] = json!("Constraints_Probe");
+                    d
+                })
+            },
+            "must match ^[a-z][a-z0-9_-]{0,99}$",
         ),
     ));
     probes.push((
@@ -413,39 +516,19 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
-    // --- dock 级 ---
+    // --- dock 级（调用方 config）---
     probes.push((
-        "dock-schema-version-closed-enum".into(),
+        "dock-order-mode-closed-enum".into(),
         (
             || probe_compile(dock_definition()),
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    *d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/schemaVersion",
-                    )
-                    .expect("schemaVersion path") = json!("uvp.dock.v2");
+                    dock_config_mut(&mut d)["order"]["mode"] = json!("reused");
                     d
                 })
             },
-            "D002",
-        ),
-    ));
-    probes.push((
-        "dock-order-id-policy-closed-enum".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    *d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/order/idPolicy",
-                    )
-                    .expect("idPolicy path") = json!("sequential-v1");
-                    d
-                })
-            },
-            "D004",
+            "must be \"new\" or \"existing\"",
         ),
     ));
     probes.push((
@@ -455,10 +538,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    *d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/target/zhixu",
-                    )
-                    .expect("zhixu path") = json!("");
+                    dock_config_mut(&mut d)["target"]["zhixu"] = json!("");
                     d
                 })
             },
@@ -486,7 +566,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    signal_map_mut(&mut d)[oversize_ascii(27, b'a')] = json!("out_x");
+                    signal_map_mut(&mut d)[oversize_ascii(27, b'a')] = json!("done");
                     d
                 })
             },
@@ -500,7 +580,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    signal_map_mut(&mut d)["bad.key"] = json!("out_x");
+                    signal_map_mut(&mut d)["bad.key"] = json!("done");
                     d
                 })
             },
@@ -526,11 +606,85 @@ fn rust_probes() -> Vec<(String, Probe)> {
                     d.pointer_mut(
                         "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap",
                     )
-                    .expect("signalMap path")["s12345"] = json!("out_x");
+                    .expect("signalMap path")["s12345"] = json!("done");
                     d
                 })
             },
             "exceeds 100 (individual_record.signal_name)",
+        ),
+    ));
+    probes.push((
+        "dock-at-least-one-mapping".into(),
+        (
+            || probe_compile(dock_definition()),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    let config = dock_config_mut(&mut d).as_object_mut().unwrap();
+                    config.remove("inputMap");
+                    config.remove("signalMap");
+                    d
+                })
+            },
+            "at least one of inputMap/signalMap must bind a port",
+        ),
+    ));
+    probes.push((
+        "dock-new-mode-single-input-binding".into(),
+        (
+            || probe_compile(dock_definition()),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    let stage = stage_mut(&mut d);
+                    stage["receiveSignals"]["ALSO"] = json!("buyer::main.work.cmp");
+                    dock_config_mut(&mut d)["inputMap"]["ALSO"] = json!("execute");
+                    d
+                })
+            },
+            "exactly one inputMap binding",
+        ),
+    ));
+
+    // --- dock 级（目标侧接口形状）---
+    probes.push((
+        "dock-interface-name-pattern".into(),
+        (
+            || probe_compile(target_interface_definition()),
+            || {
+                probe_compile({
+                    let mut d = target_interface_definition();
+                    let dock = d["spec"]["dockInterface"].as_object_mut().unwrap();
+                    let spec = dock.remove("production_service").unwrap();
+                    dock.insert("ProductionService".to_string(), spec);
+                    d
+                })
+            },
+            "interface name must match ^[a-z][a-z0-9_]{0,31}$",
+        ),
+    ));
+    probes.push((
+        "dock-interface-order-modes".into(),
+        (
+            || probe_compile(target_interface_definition()),
+            || {
+                probe_compile({
+                    let mut d = target_interface_definition();
+                    d["spec"]["dockInterface"]["production_service"]["orderModes"] = json!([]);
+                    d
+                })
+            },
+            "orderModes must be a non-empty subset of {new, existing}",
+        ),
+    ));
+
+    // --- dock 级（link 期）---
+    probes.push((
+        "dock-order-mode-allowed-by-interface".into(),
+        (
+            || probe_link(dock_definition_with("new"), interface_manifest()),
+            || probe_link(dock_definition_with("existing"), interface_manifest()),
+            "allows orderModes",
         ),
     ));
 
