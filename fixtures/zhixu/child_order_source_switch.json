@@ -106,6 +106,7 @@
     "definitions": [
       {
         "name": "friction_wheel_production",
+        "dockEdges": [],
         "interfaces": [
           {
             "name": "production_evidence",

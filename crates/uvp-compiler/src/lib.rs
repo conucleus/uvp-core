@@ -2629,7 +2629,22 @@ mod tests {
             error.to_string()
         );
 
-        // D015：route 目标 name 回指父定义（自环）。
+        // D015：目标经 manifest dockEdges 回指父定义（跨定义启动环）。
+        let mut cycled = manifest_for(&target);
+        cycled["definitions"][0]["dockEdges"] = json!([{ "target": "settlement" }]);
+        let error = compile_zhixu_hook_plan(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&cycled),
+            false,
+        )
+        .expect_err("route cycle through manifest dockEdges must fail");
+        assert!(
+            error.to_string().contains("D015") && error.to_string().contains("cycle"),
+            "{}",
+            error.to_string()
+        );
+
+        // D015：route 目标 name 回指父定义（单边自环）。
         let interfaces = manifest["definitions"][0]["interfaces"].clone();
         let self_manifest = json!({
             "schemaVersion": dock::DOCK_RESOLUTION_SCHEMA_VERSION,
@@ -2642,6 +2657,70 @@ mod tests {
         let error = compile_zhixu_hook_plan(&parent, Some(&self_manifest), false)
             .expect_err("self-referencing route must fail");
         assert!(error.to_string().contains("D015"), "{}", error.to_string());
+    }
+
+    /// manifest 定义的最小合法接口（D015 深度链垫底用）。
+    fn minimal_interface_value(name: &str) -> Value {
+        json!({
+            "name": name,
+            "orderModes": ["new"],
+            "inputs": { "enter": { "hook": "main.work#DOCK_ENTER" } },
+            "outputs": {},
+        })
+    }
+
+    #[test]
+    fn rejects_startup_depth_beyond_limit_via_manifest_edges() {
+        // 链长 = settlement(1) + payment_execution(1) + mid-1..mid-7(7) = 9
+        // > MAX_DOCK_DEPTH(8)；深度按 manifest 声明的静态 name 边累计。
+        let target = target_payment_definition();
+        let mut deep = manifest_for(&target);
+        deep["definitions"][0]["dockEdges"] = json!([{ "target": "mid-1" }]);
+        for index in 1..7 {
+            deep["definitions"].as_array_mut().unwrap().push(json!({
+                "name": format!("mid-{index}"),
+                "interfaces": [minimal_interface_value(&format!("svc{index}"))],
+                "dockEdges": [{ "target": format!("mid-{}", index + 1) }],
+            }));
+        }
+        // 尾节点不声明 dockEdges：缺省=无出边。
+        deep["definitions"].as_array_mut().unwrap().push(json!({
+            "name": "mid-7",
+            "interfaces": [minimal_interface_value("svc7")],
+        }));
+        let error = compile_zhixu_hook_plan(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&deep),
+            false,
+        )
+        .expect_err("startup depth beyond MAX_DOCK_DEPTH must fail");
+        assert!(
+            error.to_string().contains("D015") && error.to_string().contains("depth"),
+            "{}",
+            error.to_string()
+        );
+
+        // 截短到限内（settlement + payment_execution + mid-1..mid-4 = 6）同
+        // 一父定义照常编译。
+        let mut shallow = manifest_for(&target);
+        shallow["definitions"][0]["dockEdges"] = json!([{ "target": "mid-1" }]);
+        for index in 1..4 {
+            shallow["definitions"].as_array_mut().unwrap().push(json!({
+                "name": format!("mid-{index}"),
+                "interfaces": [minimal_interface_value(&format!("svc{index}"))],
+                "dockEdges": [{ "target": format!("mid-{}", index + 1) }],
+            }));
+        }
+        shallow["definitions"].as_array_mut().unwrap().push(json!({
+            "name": "mid-4",
+            "interfaces": [minimal_interface_value("svc4")],
+        }));
+        compile_zhixu_hook_plan(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&shallow),
+            false,
+        )
+        .expect("in-limit startup depth compiles");
     }
 
     #[test]

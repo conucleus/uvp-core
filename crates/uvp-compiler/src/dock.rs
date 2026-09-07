@@ -870,6 +870,9 @@ fn parse_canonical_signal(signal: &str) -> Option<(String, String, String)> {
 pub struct ResolutionTarget {
     pub name: String,
     pub interfaces: Vec<InterfaceDeclaration>,
+    /// 该定义声明的静态 dock 出边（目标定义 name）。linker 用它做 D015
+    /// 环/深度检测；缺省 = 无出边，运行时建立的边由各轨解析面兜底。
+    pub dock_edges: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -878,8 +881,9 @@ pub struct ResolutionManifest {
 }
 
 /// 解析 resolution manifest（Store/发布系统或离线 lock 文件提供）。
-/// manifest 是中性 name→interfaces 目录：manifest 内 name 重名是发布方
-/// 数据错误，响亮拒绝；name 到实体的解析权威在各轨。
+/// manifest 是中性 name 目录：name→interfaces 是 linker 的解析面（manifest
+/// 内 name 重名是发布方数据错误，响亮拒绝；name 到实体的解析权威在各
+/// 轨），可选 dockEdges 声明目标自身的静态出边供启动图检测。
 pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest> {
     let mut issues = Vec::new();
     let schema = value
@@ -936,6 +940,58 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
             ));
             continue;
         }
+        // 可选 dockEdges：[{target: <definition name>}]，纯 name 出边。
+        // 缺省视为无出边；形状/残留键非法按 D008 响亮拒绝。
+        let mut dock_edges = Vec::new();
+        match entry.get("dockEdges") {
+            None => {}
+            Some(Value::Array(edge_values)) => {
+                for (edge_index, edge) in edge_values.iter().enumerate() {
+                    let edge_path = format!("{path}.dockEdges[{edge_index}]");
+                    let Some(edge_object) = edge.as_object() else {
+                        issues.push(DockIssue::new(
+                            "D008",
+                            &edge_path,
+                            "dock edge must be an object {target: <definition name>}",
+                        ));
+                        continue;
+                    };
+                    for key in edge_object.keys() {
+                        if key != "target" {
+                            issues.push(DockIssue::new(
+                                "D008",
+                                format!("{edge_path}.{key}"),
+                                format!("unknown field {key:?}; allowed: [\"target\"]"),
+                            ));
+                        }
+                    }
+                    let edge_target = edge_object
+                        .get("target")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    if !crate::is_name_slug(&edge_target) {
+                        issues.push(DockIssue::new(
+                            "D008",
+                            format!("{edge_path}.target"),
+                            format!(
+                                "target must be a definition metadata.name, matching ^[a-z][a-z0-9_-]{{0,99}}$, found {edge_target:?}"
+                            ),
+                        ));
+                        continue;
+                    }
+                    dock_edges.push(edge_target);
+                }
+            }
+            Some(_) => {
+                issues.push(DockIssue::new(
+                    "D008",
+                    format!("{path}.dockEdges"),
+                    "dockEdges must be an array of {target: <definition name>}",
+                ));
+            }
+        }
         let mut interfaces = Vec::new();
         let mut interfaces_valid = true;
         for (interface_index, interface_value) in entry
@@ -981,7 +1037,11 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
         if !issues.is_empty() {
             continue;
         }
-        targets.push(ResolutionTarget { name, interfaces });
+        targets.push(ResolutionTarget {
+            name,
+            interfaces,
+            dock_edges,
+        });
     }
     if !issues.is_empty() {
         return Err(issues);
@@ -1399,11 +1459,20 @@ pub fn link_dock_routes(
         return Err(issues);
     }
 
-    // D015：route 启动图无环且深度受限。linker 只观测得到本地定义的出边
-    //（manifest 不携带目标的下游边），跨定义环检测由持有完整图的各轨
-    // 解析面承担；本地可见的自环（name 解析键回指自身）在此拒绝。
+    // D015：route 启动图无环且深度受限。节点为定义 name，边 = 本地
+    // resolved route + manifest 各定义声明的静态 dockEdges；缺 dockEdges
+    // 的定义视为无出边（运行时建立的边由各轨解析面对实际父实例深度
+    // 兜底）。环拒绝先于深度计算，保证最长路径有限且确定。
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let local_node = local_name.to_string();
+    for target in &manifest.targets {
+        for edge in &target.dock_edges {
+            edges
+                .entry(target.name.clone())
+                .or_default()
+                .insert(edge.clone());
+        }
+    }
     for route in &routes {
         edges
             .entry(local_node.clone())
@@ -1518,6 +1587,51 @@ mod tests {
                 .any(|issue| issue.code == "D008" && issue.message.contains("duplicate")),
             "{issues:?}"
         );
+    }
+
+    #[test]
+    fn manifest_parses_optional_name_dock_edges() {
+        // dockEdges 是可选的纯 name 出边：缺省=无出边；形状/残留键/非法
+        // name 都是确定性的 D008，不得静默吞成空边。
+        let manifest = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "payment_execution",
+                "interfaces": [minimal_interface("svc")],
+                "dockEdges": [{ "target": "settlement" }],
+            }]
+        });
+        let parsed = parse_resolution_manifest(&manifest).expect("dockEdges parse");
+        assert_eq!(parsed.targets[0].dock_edges, vec!["settlement".to_string()]);
+
+        let without_edges = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "payment_execution",
+                "interfaces": [minimal_interface("svc")],
+            }]
+        });
+        let parsed = parse_resolution_manifest(&without_edges).expect("missing dockEdges parses");
+        assert!(parsed.targets[0].dock_edges.is_empty());
+
+        for (label, bad) in [
+            ("not an array", json!("nope")),
+            (
+                "unknown edge field",
+                json!([{ "target": "settlement", "zhixu": "x" }]),
+            ),
+            ("bad target slug", json!([{ "target": "Not-A-Name" }])),
+            ("missing target", json!([{ "ref": "settlement" }])),
+        ] {
+            let mut poisoned = manifest.clone();
+            poisoned["definitions"][0]["dockEdges"] = bad;
+            let issues = parse_resolution_manifest(&poisoned)
+                .expect_err(&format!("{label}: dockEdges must be rejected"));
+            assert!(
+                !issues.is_empty() && issues.iter().all(|issue| issue.code == "D008"),
+                "{label}: {issues:?}"
+            );
+        }
     }
 
     #[test]
