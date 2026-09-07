@@ -144,6 +144,20 @@ fn with_local_plan_id(mut routes: Vec<Value>, local_plan_id: &str) -> Vec<Value>
     routes
 }
 
+/// 未解析 route 的同款 planId 注入（§8.8）：dockInstanceId 推导消费
+/// localPlanId，运行时在选择记录补齐目标后按 v2 公式重算身份。
+fn with_unresolved_plan_id(mut routes: Vec<Value>, local_plan_id: &str) -> Vec<Value> {
+    for route in &mut routes {
+        if let Some(object) = route.as_object_mut() {
+            object.insert(
+                "localPlanId".to_string(),
+                Value::String(local_plan_id.to_string()),
+            );
+        }
+    }
+    routes
+}
+
 pub fn compile_zhixu_hook_plan(
     definition_value: &Value,
     resolution_manifest: Option<&Value>,
@@ -216,8 +230,9 @@ pub fn compile_zhixu_hook_plan(
     let executor_routes = build_executor_routes(&stage_entries);
     let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
     let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
+    let unresolved_routes = with_unresolved_plan_id(dock_state.unresolved_json.clone(), &plan_id);
 
-    let payload = json!({
+    let mut payload = json!({
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
         "planId": plan_id,
         "zhixuId": zhixu_id,
@@ -236,10 +251,14 @@ pub fn compile_zhixu_hook_plan(
         // planHash 随业务内容变化、不随文档注解变化。
         "source": uvp_ir::canonicalize(&strip_annotations(definition_value)).map_err(|err| CompilerError::Message(err.to_string()))?,
     });
+    // 空清单不落字段：既有定义的 planHash 不因新增可选字段漂移。
+    if !unresolved_routes.is_empty() {
+        payload["unresolvedDockRoutes"] = Value::Array(unresolved_routes.clone());
+    }
     let plan_hash = hash_canonical("uvp:hook-plan-artifact:v1", &payload)
         .map_err(|err| CompilerError::Message(err.to_string()))?;
 
-    Ok(json!({
+    let mut artifact = json!({
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
         "planId": payload["planId"].clone(),
         "zhixuId": payload["zhixuId"].clone(),
@@ -255,7 +274,11 @@ pub fn compile_zhixu_hook_plan(
         "selectedStageBindings": payload["selectedStageBindings"].clone(),
         "signalCapabilities": payload["signalCapabilities"].clone(),
         "planHash": plan_hash,
-    }))
+    });
+    if !unresolved_routes.is_empty() {
+        artifact["unresolvedDockRoutes"] = Value::Array(unresolved_routes);
+    }
+    Ok(artifact)
 }
 
 pub fn compile_cloud_artifact(
@@ -317,6 +340,7 @@ pub fn compile_cloud_artifact(
     let platform = normalize_platform_value(&definition.spec.platform)?;
     let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
     let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
+    let unresolved_routes = with_unresolved_plan_id(dock_state.unresolved_json.clone(), &plan_id);
     let mut stages = Vec::new();
     let mut hooks = Vec::new();
 
@@ -333,7 +357,7 @@ pub fn compile_cloud_artifact(
         }
     }
 
-    Ok(json!({
+    let mut artifact = json!({
         "schemaVersion": CLOUD_ARTIFACT_SCHEMA_VERSION,
         "planId": plan_id,
         "zhixuId": zhixu_id,
@@ -346,7 +370,13 @@ pub fn compile_cloud_artifact(
         "dockRoutes": dock_routes,
         "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
         "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
-    }))
+    });
+    // 空清单不落字段：未解析 route 是动态选择的声明面（§8.8），无目标
+    // 身份可承诺，也不参与 dockRoutesRoot。
+    if !unresolved_routes.is_empty() {
+        artifact["unresolvedDockRoutes"] = Value::Array(unresolved_routes);
+    }
+    Ok(artifact)
 }
 
 /// dock_link：只做 link，输出已解析 route 与根（dock_link API 边界）。
@@ -401,6 +431,9 @@ enum DockProfile {
 struct DockState {
     interface_json: Option<Value>,
     routes_json: Vec<Value>,
+    /// target:null 动态选择 route 的声明面产物（§8.8）：不进 link、不进
+    /// dockRoutesRoot——目标身份空缺的 route 没有可承诺的 routeHash。
+    unresolved_json: Vec<Value>,
     dock_routes_root: dock::Word,
     dock_interface_root: dock::Word,
     /// dockInterface input port 引用的本地 hook（`<task>.<stage>#<hook>`），
@@ -421,6 +454,18 @@ fn compile_dock_state(
 ) -> Result<DockState> {
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
+
+    // target:null 的动态选择 route 不进 link（目标身份空缺，无 D008 可言），
+    // 改入未解析清单随产物携带（PRD_100 §10.3：云轨运行时由选择记录补齐）。
+    let local_definition_ref = dock::definition_ref_hash(zhixu_id);
+    let mut static_routes = Vec::new();
+    let mut unresolved_json = Vec::new();
+    for route in unlinked {
+        match route.config.target_zhixu.as_ref() {
+            Some(_) => static_routes.push(route),
+            None => unresolved_json.push(route.unresolved_json(&local_definition_ref)),
+        }
+    }
 
     let interface_artifact = if definition.spec.dock_interface.is_empty() {
         None
@@ -443,7 +488,7 @@ fn compile_dock_state(
         .map(|artifact| artifact.entrance_hook_ids())
         .unwrap_or_default();
 
-    let routes = if unlinked.is_empty() {
+    let routes = if static_routes.is_empty() {
         Vec::new()
     } else {
         match resolution_manifest {
@@ -453,13 +498,13 @@ fn compile_dock_state(
                 let identity = dock::LocalLinkIdentity {
                     uid: zhixu_id.to_string(),
                 };
-                dock::link_dock_routes(&identity, stage_pairs, &unlinked, &manifest)
+                dock::link_dock_routes(&identity, stage_pairs, &static_routes, &manifest)
                     .map_err(|issues| issues_from_dock(&issues))?
             }
             None if allow_unresolved => Vec::new(),
             None => {
                 return Err(CompilerError::Message(
-                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes but no resolutionManifest was provided; runnable compilation requires linking against published target interfaces (PRD_100 §10)".to_string(),
+                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes with static targets but no resolutionManifest was provided; runnable compilation requires linking against published target interfaces (PRD_100 §10)".to_string(),
                 ));
             }
         }
@@ -497,6 +542,7 @@ fn compile_dock_state(
             .as_ref()
             .map(|artifact| artifact.to_json()),
         routes_json,
+        unresolved_json,
         dock_routes_root: dock::dock_routes_root(&routes),
         dock_interface_root: interface_root,
         input_port_hook_ids,
@@ -2617,7 +2663,8 @@ mod tests {
     #[test]
     fn accepts_dynamic_target_null_for_parse_only_compilation() {
         // target:null 表示运行时选择补齐（PRD_100 §10.3）：本地校验通过，
-        // 无 manifest 的 parse 编译可过；可运行编译没有静态目标即响亮拒绝。
+        // 无 manifest 的 parse 编译可过；静态目标缺失 manifest 才是
+        // UNRESOLVED_DOCK_TARGET（见 rejects_parent_without_manifest）。
         let mut parent = parent_settlement_definition(&target_uid());
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
@@ -2625,13 +2672,161 @@ mod tests {
         let parsed = compile_zhixu_hook_plan(&parent, None, true)
             .expect("parse-only compilation accepts a null target");
         assert_eq!(parsed["dockRoutes"].as_array().unwrap().len(), 0);
+    }
+
+    /// target:null 的父定义（无 manifest）：本地声明面完整进产物，两个
+    /// 可运行 target 都放行——链轨拒绝在 TS onchain 边界（UNRESOLVED_DOCK_
+    /// TARGET 口径），云轨运行时由选择记录补齐。
+    fn null_target_parent() -> Value {
+        let mut parent = parent_settlement_definition(&target_uid());
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["target"] = json!(null);
+        parent
+    }
+
+    #[test]
+    fn dynamic_target_null_lands_in_unresolved_dock_routes() {
+        let parent = null_target_parent();
+        let artifact =
+            compile_cloud_artifact(&parent, None, false).expect("cloud compiles a null target");
+        assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 0);
+        // 未解析 route 不参与 dockRoutesRoot（无 routeHash 可承诺）。
+        assert_eq!(
+            artifact["dockRoutesRoot"],
+            json!(dock::word_hex(&dock::EMPTY_MERKLE_ROOT))
+        );
+        let unresolved = artifact["unresolvedDockRoutes"].as_array().unwrap();
+        assert_eq!(unresolved.len(), 1);
+        let route = &unresolved[0];
+        assert_eq!(route["schemaVersion"], "uvp.dockRoute.unresolved.v1");
+        assert_eq!(route["stageIdentifier"], "settlement.execute_payment");
+        assert_ne!(
+            route["stageId"],
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_ne!(
+            route["localDefinitionRefHash"],
+            "0x0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(route["localSource"], "buyer");
+        assert_eq!(route["interfaceName"], "payment_service");
+        assert_eq!(route["orderMode"], "new");
+        assert_eq!(
+            route["inputBindings"],
+            json!([{ "hookId": "settlement.execute_payment#EXECUTE", "port": "execute" }])
+        );
+        assert_eq!(
+            route["outputBindings"],
+            json!([
+                { "signal": "cmp", "port": "completed" },
+                { "signal": "err", "port": "failed" },
+                { "signal": "str", "port": "started" }
+            ])
+        );
+        // localPlanId 与产物 planId 同源（dockInstanceId 推导消费）。
+        assert_eq!(route["localPlanId"], artifact["planId"]);
+        // 未解析元素没有目标身份与哈希承诺字段。
+        for absent in ["routeId", "routeHash", "target", "sourceSeam"] {
+            assert!(
+                route.get(absent).is_none(),
+                "unresolved route must not carry {absent}"
+            );
+        }
+
+        // hook_plan 同口径携带（链轨拒绝由 TS onchain 边界承担）。
+        let plan = compile_zhixu_hook_plan(&parent, None, false)
+            .expect("hook_plan compiles a null target");
+        assert_eq!(
+            plan["unresolvedDockRoutes"].as_array().unwrap().len(),
+            1,
+            "hook plan artifact carries the unresolved declaration face"
+        );
+        assert_eq!(plan["dockRoutes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn unresolved_routes_absent_when_all_targets_static() {
+        // 无未解析 route 的产物不落字段：既有 planHash 不因新增可选字段漂移。
+        let target = target_payment_definition();
+        let manifest = manifest_for(&target, None);
+        let artifact = compile_cloud_artifact(
+            &parent_settlement_definition(&target_uid()),
+            Some(&manifest),
+            false,
+        )
+        .expect("static-only parent compiles");
+        assert!(artifact.get("unresolvedDockRoutes").is_none());
+    }
+
+    #[test]
+    fn manifest_present_null_target_route_stays_unresolved() {
+        // manifest 在场时 null-target route 不进 link（不报 D008），静态
+        // route 照常解析：两类 route 各归其位。
+        let target = target_payment_definition();
+        let manifest = manifest_for(&target, None);
+        let mut parent = null_target_parent();
+        parent["spec"]["taskPatterns"][1]["stages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "name": "static_dock",
+                "source": "buyer",
+                "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
+                "sendSignals": ["str"],
+                "executor": {
+                    "supplierType": "zhixu",
+                    "zhixuExecutorConfig": {
+                        "target": { "zhixu": target_uid() },
+                        "interface": "payment_service",
+                        "order": { "mode": "new" },
+                        "inputMap": { "START": "execute" },
+                        "signalMap": { "str": "started" }
+                    }
+                }
+            }));
+        let artifact = compile_cloud_artifact(&parent, Some(&manifest), false)
+            .expect("mixed static/dynamic parent compiles");
+        assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            artifact["dockRoutes"][0]["local"]["stageIdentifier"],
+            "settlement.static_dock"
+        );
+        let unresolved = artifact["unresolvedDockRoutes"].as_array().unwrap();
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(
+            unresolved[0]["stageIdentifier"],
+            "settlement.execute_payment"
+        );
+    }
+
+    #[test]
+    fn dynamic_target_null_still_enforces_local_config_validation() {
+        // 本地校验不依赖目标：D010 在 target:null 上同样拒绝（两 input 绑定）。
+        let mut parent = null_target_parent();
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["inputMap"]["CANCEL"] = json!("cancel");
         let error = compile_cloud_artifact(&parent, None, false)
-            .expect_err("runnable compilation must reject a null target loudly");
+            .expect_err("new mode with two input bindings must fail without a target");
         assert!(
-            error.to_string().contains("UNRESOLVED_DOCK_TARGET"),
+            error.to_string().contains("D010")
+                && error.to_string().contains("exactly one inputMap binding"),
             "{}",
             error
         );
+
+        // D019：无任何映射。
+        let mut parent = null_target_parent();
+        let config = parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]
+            ["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap();
+        config.remove("inputMap");
+        config.remove("signalMap");
+        let error = compile_cloud_artifact(&parent, None, false)
+            .expect_err("empty mappings must fail without a target");
+        assert!(error.to_string().contains("D019"), "{}", error);
     }
 
     #[test]

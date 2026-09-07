@@ -38,6 +38,9 @@ pub type Word = [u8; 32];
 
 pub const DOCK_INTERFACE_ARTIFACT_SCHEMA_VERSION: &str = "uvp.dockInterfaceArtifact.v2";
 pub const DOCK_ROUTE_SCHEMA_VERSION: &str = "uvp.dockRoute.v2";
+/// 未解析 route（target:null 动态选择）的声明面产物形态：本地声明完整、
+/// 目标身份空缺，云轨运行时由选择记录补齐（PRD_100 §10.3、设计文档 §8.8）。
+pub const DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION: &str = "uvp.dockRoute.unresolved.v1";
 pub const DOCK_RESOLUTION_SCHEMA_VERSION: &str = "uvp.dock.resolution.v2";
 pub const DOCK_COMPAT_SCHEMA_VERSION: &str = "uvp.dock.compat.v1";
 
@@ -877,6 +880,9 @@ fn is_zhixu_executor(executor: &Option<uvp_model::ZhixuExecutor>) -> bool {
 pub struct UnlinkedDockRoute {
     pub stage_identifier: String,
     pub stage_key: Word,
+    /// 本地 stage source：运行时重算 output 绑定 localSourceId 的输入
+    /// （keccak(stage.source)），未解析 route 必须随声明面携带。
+    pub stage_source: String,
     pub config: ZhixuExecutorConfig,
 }
 
@@ -899,6 +905,7 @@ pub fn collect_unlinked_routes(
             Ok(config) => routes.push(UnlinkedDockRoute {
                 stage_identifier: stage_identifier.clone(),
                 stage_key: stage_key(stage_identifier),
+                stage_source: stage.source.clone(),
                 config,
             }),
             Err(mut stage_issues) => issues.append(&mut stage_issues),
@@ -908,6 +915,33 @@ pub fn collect_unlinked_routes(
         return Err(issues);
     }
     Ok(routes)
+}
+
+impl UnlinkedDockRoute {
+    /// 未解析 route（target:null）的声明面产物：本地声明完整、目标身份
+    /// 空缺（PRD_100 §10.3、设计文档 §8.8）。不携带 routeId/routeHash/
+    /// bindingHash——它们的 preimage 含目标定义身份与目标端口寻址 word，
+    /// 只能由云轨运行时在选择记录补齐目标后用 v2 派生函数重算。
+    /// `localPlanId` 由产物组装层注入（与 resolved route 同一契约）。
+    pub fn unresolved_json(&self, local_definition_ref: &Word) -> Value {
+        json!({
+            "schemaVersion": DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION,
+            "stageIdentifier": self.stage_identifier,
+            "stageId": word_hex(&self.stage_key),
+            "localDefinitionRefHash": word_hex(local_definition_ref),
+            "localSource": self.stage_source,
+            "interfaceName": self.config.interface_name,
+            "orderMode": self.config.order_mode,
+            "inputBindings": self.config.input_map.iter().map(|(hook_name, port)| json!({
+                "hookId": format!("{}#{hook_name}", self.stage_identifier),
+                "port": port,
+            })).collect::<Vec<_>>(),
+            "outputBindings": self.config.signal_map.iter().map(|(signal_name, port)| json!({
+                "signal": signal_name,
+                "port": port,
+            })).collect::<Vec<_>>(),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
