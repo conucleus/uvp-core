@@ -3,7 +3,7 @@
 > 状态：对齐基线（v1，替代 merge-anchor-delivery-spec.md）
 > 语义版本：`uvp.semantic.v1`（上线前版本线整体重置为 v1：原 0.6→0.7 等开发期迭代编号全部作废，一次到位，不并存两套语义）
 > 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
-> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.10、`UVPDockingModule` 2.1 及其余 module fixtures；PlanCommitV2、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出已退役的旧指令/入口。
+> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.10、`UVPDockingModule` 3.0 及其余 module fixtures；PlanCommitV2、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出已退役的旧指令/入口。
 
 ---
 
@@ -81,9 +81,11 @@
 - mint 阶段自身的订阅一律扇入（铸前无单）。
 - 同单 hook（`{source}::{condition}`）的 header source 类必须在本域声明（引用存在性校验，与订阅目标同款）；接收方阶段自身是否"有锚"只决定 ANCHOR 订阅的路由方式（按单/扇入），不限制同单 hook 的可声明面——同单 hook 在订阅方订单上下文内求值，而订单对该 zhixu 的全部阶段可见（fixture `cross_source_direct_trigger.json`：无 mint 声明的 watch 阶段挂同单 hook 合法编译）。
 
-### 2.4 跨域：委托 dock + signalMap
+### 2.4 跨域：委托 dock + 接口映射
 
-- 委托是一个秩序 dock 另一个秩序：A 的委托 stage 与 B 被 trigger 的入口 stage 在接缝处视为**同一个 source** 的两半；signalMap 是接缝上的对译表。
+- 委托是一个秩序 dock 另一个秩序：目标定义在 `spec.dockInterface` 发布**具名接口 map**（接口名 → {orderModes, inputs, outputs}），调用方 stage 在 `executor.zhixuExecutorConfig` 按接口名引用，`inputMap`/`signalMap` 是接缝上的对译表；A 的委托 stage 与 B 被绑定的端口在接缝处视为**同一个 source** 的两半（单源 seam，被绑定端口范围）。
+- `target` 携带目标定义的**内容派生身份**（`zx-<32hex>`，由 canonical JSON 剔除 `metadata.annotations` 后 keccak 派生；`metadata.uid` 不是作者可写字段）或显式 `null`（云轨运行时按选择记录补齐）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）。链上轨道只承接 `new`，`existing` 与未解析 target 在 on-chain 编译期显式拒绝。
+- 委托声明至少一项输入或输出映射（无需虚构 str/cmp 映射满足格式）；接口输出不自动置任何一方为终态，终态只由本地阶段/订单结束驱动。
 - 委托共享订单上下文（现有 zhixu 执行器 `NewSource=false` 通道不变）；事实经 signalMap 逐条映射回父阶段。
 - 委托关系一次性绑定、禁 patch（现有门禁不变）。
 - `rel_order_order` 语义从"父子血缘"改为**对接记录**（谁 dock 谁、映射实例、接缝两侧锚点）；表结构不变，写读两处语义与命名更新。按单路由以对接记录为落点。
@@ -159,7 +161,7 @@ Stage 字段总表（目标态）：
 | `mint` | 新增，可选，仅 `per-fact`；由出生阶段声明，是该类铸单的唯一声明点 |
 | `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
 | `sendSignals` | 保留 |
-| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target, order.idPolicy, inputMap, signalMap→端口名} |
+| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(派生uid|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
 | `trigger` | **删除**（原必填入口表） |
 | `externalSignals` | **删除** |
 | `fileResources`、`selectedStages` | 保留 |
@@ -175,7 +177,7 @@ Stage 字段总表（目标态）：
 | 收购回流 | `::ANCHOR@(裸三段)` | 有锚阶段 + `::ANCHOR(@…)`（按单路由） |
 | 观察入口（k=1） | k=1 MERGE | 无锚监听 + 单条 `::ANCHOR(@…)` |
 | 交易所开门/关门 | 无（外部 trigger + 载体单） | match source 上一个发开门/关门事实的 stage，通道锚定 |
-| 委托 | 目标 dockInterface 端口 + inputMap/signalMap，独立子订单 | 支持 |
+| 委托 | 目标 dockInterface 端口 + inputMap/signalMap，独立子订单 | 支持：具名接口 + order.mode（new 建子单/existing 接既有单），inputMap/signalMap 对译目标接口端口 |
 
 ---
 
@@ -190,8 +192,8 @@ Stage 字段总表（目标态）：
 ## 7. 兼容与退役
 
 - 版本 slate 重置（2026-08-31 裁决）：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格且语义/AST/语料/部署清单置 v1；云执行产物因已冻结为结构化复合身份信封，使用 `uvp.cloudArtifact.v2`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件同步更名 semantics.v1.json）、`uvp.cloudArtifact.v2`；部署清单 `uvp-eth.addresses.v5` → `uvp-eth.addresses.v1`。开发期累积的 0.7/v2/v5 编号无兼容义务，作废。
-- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v2`、`onchainHookPlan.v2`、`cloudArtifact.v2`、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
-- `UVPStateMachine` 0.10 的 PlanCommitV2、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 2.1 的 open/input/output/terminal boundary 必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
+- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v2`、`onchainHookPlan.v2`、`cloudArtifact.v2`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
+- `UVPStateMachine` 0.10 的 PlanCommitV2、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 3.0 的 open/input/output boundary 必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
 - 旧关键字（OUTSIDE/MERGE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
 
 ## 8. 决策记录
@@ -204,7 +206,7 @@ Stage 字段总表（目标态）：
 | 血缘闸门 | 不再是过滤开关，而是域内路由规则 + 域作用域本身 | "只有我的农户"由按单路由与 zhixu 局部命名空间免费获得 |
 | 锚定依据 | mint 声明是编译期唯一锚定依据 | 自发 str 编译期不可见；订阅方按溯源分拣是执行器责任 |
 | 孤儿 | 概念删除 | 订单天然存在，无 dock = 尚无关系，非异常态 |
-| 版本 slate 与 dock v2 冻结 | 语义/AST/语料保持 v1；HookPlan、OnchainHookPlan、CloudArtifact 分别为 v2；合约 ABI/EIP-712 以 `uvp-stack.v1.json` 和 fixtures 的 0.10/2.1 等值为准 | 结构化 dock identity、PlanCommitV2 和复合订单键已进入 wire；任何一侧继续消费旧 v1/v0.8 fixture 都会造成跨轨漂移 |
+| 版本 slate 与 dock v2 冻结 | 语义/AST/语料保持 v1；HookPlan、OnchainHookPlan、CloudArtifact 分别为 v2，dock 制品为 `uvp.dockInterfaceArtifact.v2`/`uvp.dockRoute.v2`/`uvp.dock.resolution.v2`；合约 ABI/EIP-712 以 `uvp-stack.v1.json` 和 fixtures 的 0.10/3.0 等值为准 | 结构化 dock identity、PlanCommitV2 和复合订单键已进入 wire；任何一侧继续消费旧 v1/v0.8 fixture 都会造成跨轨漂移 |
 
 ### 补充决策（2026-08-31，安全架构审查后）
 
