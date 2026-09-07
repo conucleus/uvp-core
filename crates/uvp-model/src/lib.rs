@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ObjectMeta {
-    /// 作者技术标签（PRD_102）：参与内容派生，但无唯一性/关系语义。
-    /// 定义身份由编译器从内容派生，uid 不是作者可写字段——出现即未知字段。
+    /// 作者技术标签（PRD_102）：无唯一性/关系语义；跨轨引用一律走 name，
+    /// 名字到实体的解析是各轨权威的事。uid 不是作者可写字段——出现即
+    /// 未知字段。
     pub name: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,

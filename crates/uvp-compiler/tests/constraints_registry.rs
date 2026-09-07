@@ -9,8 +9,8 @@
 //!
 //! 读不到注册表时硬失败并给出路径/环境变量指引，绝不 skip。
 //! 路径解析：优先环境变量 `UVP_CONSTRAINTS_PATH`；默认相对 crate 目录的
-//! `../../../uvp-protocol/protocol/uvp-constraints.v1.json`（uvp-core 与
-//! uvp-protocol 同父目录的检出布局）。
+//! `../../../uvp-eth/uvp-protocol/protocol/uvp-constraints.v1.json`（uvp-core
+//! 与 uvp-eth/uvp-protocol 同父目录的检出布局）。
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -21,12 +21,12 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
 ///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "f9df448ec029b1afc2ab0adc8903892dddcb614a47936c52c5d84ab1f73e043b";
+const PINNED_SHA256: &str = "43893292abcf61b3ab316afc4104cbadc0af8deed61d2ae0211fcf454ec5a826";
 
 fn default_constraints_path() -> std::path::PathBuf {
     // 测试进程 cwd = crates/uvp-compiler。
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../uvp-protocol/protocol/uvp-constraints.v1.json")
+        .join("../../../uvp-eth/uvp-protocol/protocol/uvp-constraints.v1.json")
 }
 
 fn load_constraints_table() -> (String, Value) {
@@ -194,11 +194,11 @@ fn target_interface_definition() -> Value {
     })
 }
 
-fn target_interface_uid() -> String {
-    uvp_compiler::definition_uid(&target_interface_definition()).expect("uid derives")
+fn target_interface_name() -> &'static str {
+    "constraints_target"
 }
 
-/// resolution manifest v2：内嵌目标定义全文（内容寻址），由目标侧编译产物
+/// resolution manifest v2（中性 name→interfaces 目录）：由目标侧编译产物
 /// 组装；真实流程由 Store/发布系统生成。
 fn interface_manifest() -> Value {
     let target = target_interface_definition();
@@ -211,14 +211,8 @@ fn interface_manifest() -> Value {
     json!({
         "schemaVersion": "uvp.dock.resolution.v2",
         "definitions": [{
-            "zhixu": uvp_compiler::definition_uid(&target).expect("uid derives"),
-            "definition": target,
-            "definitionRefHash": plan["dockInterface"]["definition"]["definitionRefHash"],
-            "artifactHash": plan["planHash"],
-            "published": true,
-            "interfaces": plan["dockInterface"]["interfaces"],
-            "evmPlanId": plan["planId"],
-            "cloudArtifactId": format!("artifact://{}", plan["planHash"].as_str().unwrap_or(""))
+            "name": target_interface_name(),
+            "interfaces": plan["dockInterface"],
         }]
     })
 }
@@ -236,7 +230,7 @@ fn dock_definition_with(mode: &str) -> Value {
     stage["executor"] = json!({
         "supplierType": "zhixu",
         "zhixuExecutorConfig": {
-            "target": { "zhixu": target_interface_uid() },
+            "target": { "zhixu": target_interface_name() },
             "interface": "production_service",
             "order": { "mode": mode },
             "inputMap": { "START": "execute" },

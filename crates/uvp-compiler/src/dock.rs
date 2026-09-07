@@ -1,48 +1,33 @@
-//! Zhixu Dock 统一委托协议（PRD_100/PRD_102）的语义权威实现。
+//! Zhixu Dock 委托协议（PRD_100/PRD_102）DSL 壳的结构性语义。
 //!
 //! 本模块固定：
-//! - 目标 `spec.dockInterface`（具名接口 map）与调用方
-//!   `executor.zhixuExecutorConfig`（键闭集 {target, interface, order,
-//!   inputMap, signalMap}）的 source 语义；
-//! - 跨定义 linker（resolution manifest v2 输入，纯函数，无网络；内嵌
-//!   目标定义全文，按内容派生身份三方一致校验）；
-//! - 全部跨运行时 commitment 的 keccak/ABI-word 编码（v2 word 布局见
-//!   PRD100_102_DESIGN.md §8）、Merkle root、`dockInstanceId`/
-//!   `linkedOrderId` 推导与 envelope 幂等键；
-//! - 编译期错误码 D001-D016、D018-D020、D025、接口形状错误码 D021/D022。
+//! - 调用方 `executor.zhixuExecutorConfig`（键闭集 {target, interface,
+//!   order, inputMap, signalMap}）与目标 `spec.dockInterface`（具名接口
+//!   map）的 source 语义；
+//! - 跨定义 linker（resolution manifest 输入，纯函数，无网络；目标按
+//!   name 解析）；
+//! - 中性 route/接口声明产物形状；
+//! - 编译期错误码 D001-D016、D019-D020、D025、接口形状错误码
+//!   D021/D022。
 //!
-//! 哈希规则（Rust/TS/Solidity/Go 必须逐字节一致）：
-//! - 所有 commitment 哈希 = `keccak256(domainWord ‖ w1 ‖ … ‖ wn)`，其中
-//!   `domainWord = keccak256("<DOMAIN>")`，`wi` 为 32-byte word。这与
-//!   Solidity `keccak256(abi.encode(keccak256("<DOMAIN>"), …))` 完全一致
-//!   （全部字段均为 word，无动态类型，禁 encodePacked）。
-//! - Merkle：叶子为 word；空集合 root = `keccak256("")`
-//!   （`EMPTY_MERKLE_ROOT`）；配对合并 `keccak256(min(a,b) ‖ max(a,b))`
-//!   （字节序取小者为左）；叶子列表先按字节升序排序再建树。
-//! - 枚举 word：route modeWord new=0/existing=1；接口 orderModesWord
-//!   u8 位掩码 bit0=new、bit1=existing。派生 linked order 的最高位是
-//!   dock 专用 namespace 标记；普通 MINT/trigger-order 路径必须拒绝该
-//!   namespace，以免公开的确定性 linkedOrderId 被抢先注册。
+//! 哈希承诺与派生身份是各轨权威的内务（链轨 TS、云轨 DB），不入共享
+//! core：目标引用一律走 `metadata.name`（slug），产物不携带任何
+//! uid/hash/root 字段。
 
 use serde_json::{json, Map, Value};
-use sha3::{Digest, Keccak256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use uvp_hook_dsl::{parse_hook, DependencyKind, HookMode, ParseHookRequest, Profile};
 use uvp_model::{DockInterfaceSpec, ZhixuStage};
-
-pub type Word = [u8; 32];
 
 // ---------------------------------------------------------------------------
 // 冻结常量
 // ---------------------------------------------------------------------------
 
-pub const DOCK_INTERFACE_ARTIFACT_SCHEMA_VERSION: &str = "uvp.dockInterfaceArtifact.v2";
 pub const DOCK_ROUTE_SCHEMA_VERSION: &str = "uvp.dockRoute.v2";
 /// 未解析 route（target:null 动态选择）的声明面产物形态：本地声明完整、
-/// 目标身份空缺，云轨运行时由选择记录补齐（PRD_100 §10.3、设计文档 §8.8）。
+/// 目标空缺，云轨运行时由选择记录补齐（PRD_100 §10.3）。
 pub const DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION: &str = "uvp.dockRoute.unresolved.v1";
 pub const DOCK_RESOLUTION_SCHEMA_VERSION: &str = "uvp.dock.resolution.v2";
-pub const DOCK_COMPAT_SCHEMA_VERSION: &str = "uvp.dock.compat.v1";
 
 pub const MAX_DOCK_INPUTS: usize = 8;
 pub const MAX_DOCK_OUTPUTS: usize = 16;
@@ -67,408 +52,6 @@ pub const MAX_SIGNAL_NAME_BYTES: usize = 100;
 pub const ORDER_MODE_NEW: &str = "new";
 pub const ORDER_MODE_EXISTING: &str = "existing";
 pub const ORDER_MODES: [&str; 2] = [ORDER_MODE_NEW, ORDER_MODE_EXISTING];
-
-pub const DOMAIN_DEFINITION_REF: &str = "UVP_DEFINITION_REF_V1";
-pub const DOMAIN_INTERFACE: &str = "UVP_DOCK_INTERFACE_V2";
-pub const DOMAIN_INTERFACE_INPUT: &str = "UVP_DOCK_INTERFACE_INPUT_V2";
-pub const DOMAIN_INTERFACE_OUTPUT: &str = "UVP_DOCK_INTERFACE_OUTPUT_V2";
-pub const DOMAIN_ROUTE_ID: &str = "UVP_DOCK_ROUTE_ID_V1";
-pub const DOMAIN_INPUT_BINDING: &str = "UVP_DOCK_INPUT_BINDING_V2";
-pub const DOMAIN_OUTPUT_BINDING: &str = "UVP_DOCK_OUTPUT_BINDING_V2";
-pub const DOMAIN_ROUTE: &str = "UVP_DOCK_ROUTE_V2";
-pub const DOMAIN_DOCK_INSTANCE: &str = "UVP_DOCK_INSTANCE_V2";
-pub const DOMAIN_DOCK_ORDER: &str = "UVP_DOCK_ORDER_V1";
-/// Highest bit reserved for deterministically-derived dock child orders.
-/// Keeping the namespace bit outside the hash preimage preserves the
-/// commitment inputs while making public MINT order creation disjoint from
-/// dock creation.
-pub const DOCK_ORDER_NAMESPACE_MASK: u8 = 0x80;
-pub const DOMAIN_RUNTIME_EIP155: &str = "UVP_RUNTIME_EIP155_V1";
-pub const DOMAIN_RUNTIME_CLOUD: &str = "UVP_RUNTIME_CLOUD_V1";
-pub const DOMAIN_INPUT_PAYLOAD: &str = "UVP_DOCK_INPUT_PAYLOAD_V1";
-pub const DOMAIN_INPUT_IDEMPOTENCY: &str = "UVP_DOCK_INPUT_IDEMPOTENCY_V1";
-pub const DOMAIN_OUTPUT_IDEMPOTENCY: &str = "UVP_DOCK_OUTPUT_IDEMPOTENCY_V1";
-pub const DOMAIN_SOURCE_FACT_SET: &str = "UVP_DOCK_SOURCE_FACT_SET_V1";
-
-/// 空 Merkle root：`keccak256("")`。
-pub const EMPTY_MERKLE_ROOT: Word = [
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
-];
-
-// ---------------------------------------------------------------------------
-// 哈希原语
-// ---------------------------------------------------------------------------
-
-pub fn keccak_word(data: &[u8]) -> Word {
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&Keccak256::digest(data));
-    out
-}
-
-pub fn word_hex(word: &Word) -> String {
-    let mut out = String::with_capacity(66);
-    out.push_str("0x");
-    for byte in word {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
-fn word_from_hex(value: &str) -> Option<Word> {
-    let body = value.strip_prefix("0x")?;
-    if body.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (index, chunk) in body.as_bytes().chunks(2).enumerate() {
-        let high = (chunk[0] as char).to_digit(16)?;
-        let low = (chunk[1] as char).to_digit(16)?;
-        out[index] = ((high << 4) | low) as u8;
-    }
-    Some(out)
-}
-
-/// `keccak256(keccak256(domain) ‖ words…)`，等价于 Solidity
-/// `keccak256(abi.encode(keccak256(domain), …words))`。
-pub fn keccak_words(domain: &str, words: &[Word]) -> Word {
-    let mut buf = Vec::with_capacity(32 * (words.len() + 1));
-    buf.extend_from_slice(&keccak_word(domain.as_bytes()));
-    for word in words {
-        buf.extend_from_slice(word);
-    }
-    keccak_word(&buf)
-}
-
-fn u64_word(value: u64) -> Word {
-    let mut out = [0u8; 32];
-    out[24..].copy_from_slice(&value.to_be_bytes());
-    out
-}
-
-fn u8_word(value: u8) -> Word {
-    let mut out = [0u8; 32];
-    out[31] = value;
-    out
-}
-
-fn address_word(address: &str) -> Option<Word> {
-    let body = address.strip_prefix("0x")?;
-    if body.len() != 40 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (index, chunk) in body.as_bytes().chunks(2).enumerate() {
-        let high = (chunk[0] as char).to_digit(16)? as u8;
-        let low = (chunk[1] as char).to_digit(16)? as u8;
-        out[12 + index] = (high << 4) | low;
-    }
-    Some(out)
-}
-
-/// route 的 order mode word：new=0、existing=1（PRD_100 §11）。
-pub fn mode_word(mode: &str) -> Option<Word> {
-    match mode {
-        ORDER_MODE_NEW => Some(u8_word(0)),
-        ORDER_MODE_EXISTING => Some(u8_word(1)),
-        _ => None,
-    }
-}
-
-/// 接口 orderModes word：u8 位掩码，bit0=new、bit1=existing；未知取值或
-/// 重复项返回 None（由调用方按 D025/D008 上报）。
-pub fn order_modes_word(modes: &[String]) -> Option<Word> {
-    let mut mask = 0u8;
-    let mut seen = BTreeSet::new();
-    for mode in modes {
-        if !seen.insert(mode.as_str()) {
-            return None;
-        }
-        match mode.as_str() {
-            ORDER_MODE_NEW => mask |= 0b01,
-            ORDER_MODE_EXISTING => mask |= 0b10,
-            _ => return None,
-        }
-    }
-    if mask == 0 {
-        return None;
-    }
-    Some(u8_word(mask))
-}
-
-/// 排序配对 Merkle root。叶子先按字节升序去重排序，逐层
-/// `keccak256(min ‖ max)` 合并；空集合返回 `EMPTY_MERKLE_ROOT`。
-pub fn merkle_root(leaves: &[Word]) -> Word {
-    if leaves.is_empty() {
-        return EMPTY_MERKLE_ROOT;
-    }
-    let mut level: Vec<Word> = leaves.to_vec();
-    level.sort_unstable();
-    level.dedup();
-    while level.len() > 1 {
-        let mut next = Vec::with_capacity(level.len() / 2 + 1);
-        let mut index = 0;
-        while index < level.len() {
-            if index + 1 == level.len() {
-                // 奇数层：最后一个叶子提升一层（不与自身合并）。
-                next.push(level[index]);
-            } else {
-                let (left, right) = if level[index] <= level[index + 1] {
-                    (level[index], level[index + 1])
-                } else {
-                    (level[index + 1], level[index])
-                };
-                let mut buf = [0u8; 64];
-                buf[..32].copy_from_slice(&left);
-                buf[32..].copy_from_slice(&right);
-                next.push(keccak_word(&buf));
-            }
-            index += 2;
-        }
-        level = next;
-    }
-    level[0]
-}
-
-/// Merkle inclusion proof（供 TS/Solidity 测试对齐；core 自身仅需要 root）。
-pub fn merkle_proof(leaves: &[Word], leaf: &Word) -> Option<Vec<Word>> {
-    if leaves.is_empty() || !leaves.contains(leaf) {
-        return None;
-    }
-    let mut level: Vec<Word> = {
-        let mut sorted = leaves.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        sorted
-    };
-    let mut index = level.iter().position(|candidate| candidate == leaf)?;
-    let mut proof = Vec::new();
-    while level.len() > 1 {
-        let mut next = Vec::with_capacity(level.len() / 2 + 1);
-        let mut cursor = 0;
-        while cursor < level.len() {
-            if cursor + 1 == level.len() {
-                next.push(level[cursor]);
-                if cursor == index {
-                    index = next.len() - 1;
-                }
-            } else {
-                let (left, right) = if level[cursor] <= level[cursor + 1] {
-                    (level[cursor], level[cursor + 1])
-                } else {
-                    (level[cursor + 1], level[cursor])
-                };
-                let mut buf = [0u8; 64];
-                buf[..32].copy_from_slice(&left);
-                buf[32..].copy_from_slice(&right);
-                next.push(keccak_word(&buf));
-                if cursor == index {
-                    proof.push(level[cursor + 1]);
-                    index = next.len() - 1;
-                } else if cursor + 1 == index {
-                    proof.push(level[cursor]);
-                    index = next.len() - 1;
-                }
-            }
-            cursor += 2;
-        }
-        level = next;
-    }
-    Some(proof)
-}
-
-// ---------------------------------------------------------------------------
-// 身份推导（PRD_102 §5、PRD_100 §13）
-// ---------------------------------------------------------------------------
-
-/// `definitionRefHash = H("UVP_DEFINITION_REF_V1", keccak(uid))`
-pub fn definition_ref_hash(uid: &str) -> Word {
-    keccak_words(DOMAIN_DEFINITION_REF, &[keccak_word(uid.as_bytes())])
-}
-
-pub fn stage_key(stage_identifier: &str) -> Word {
-    keccak_word(stage_identifier.as_bytes())
-}
-
-pub fn hook_key(hook_id: &str) -> Word {
-    keccak_word(hook_id.as_bytes())
-}
-
-pub fn port_key(port_name: &str) -> Word {
-    keccak_word(port_name.as_bytes())
-}
-
-/// 接口名在全部 v2 preimage 中的 word 形态：`keccak256(utf8(name))`。
-pub fn interface_name_key(interface_name: &str) -> Word {
-    keccak_word(interface_name.as_bytes())
-}
-
-pub fn canonical_signal_hash(canonical: &str) -> Word {
-    keccak_word(canonical.as_bytes())
-}
-
-/// StateMachine 事实寻址键：`keccak256(abi.encode(sourceId, signalId))`
-/// （64 字节拼接，无 domain）。output 幂等键的 targetFactId 在链上只能
-/// 从 word 推导，采用本键。
-pub fn signal_key(source_id: &Word, signal_id: &Word) -> Word {
-    let mut buf = [0u8; 64];
-    buf[..32].copy_from_slice(source_id);
-    buf[32..].copy_from_slice(signal_id);
-    keccak_word(&buf)
-}
-
-pub fn route_id(local_definition_ref: &Word, stage_key_word: &Word) -> Word {
-    keccak_words(DOMAIN_ROUTE_ID, &[*local_definition_ref, *stage_key_word])
-}
-
-/// EVM runtime domain：chainId + StateMachine 地址。
-pub fn evm_runtime_domain(chain_id: u64, state_machine_address: &str) -> Option<Word> {
-    let address = address_word(state_machine_address)?;
-    Some(keccak_words(
-        DOMAIN_RUNTIME_EIP155,
-        &[u64_word(chain_id), address],
-    ))
-}
-
-/// Cloud runtime domain：deploymentId + securityDomain（须为持久配置）。
-pub fn cloud_runtime_domain(deployment_id: &str, security_domain: &str) -> Word {
-    keccak_words(
-        DOMAIN_RUNTIME_CLOUD,
-        &[
-            keccak_word(deployment_id.as_bytes()),
-            keccak_word(security_domain.as_bytes()),
-        ],
-    )
-}
-
-/// 字符串 orderID 先哈希成 word（入口 API 固定派生规则）。
-pub fn local_order_key(order_id: &str) -> Word {
-    keccak_word(order_id.as_bytes())
-}
-
-/// existing 模式的目标 order 引用（运行系统作用域内解析的唯一引用，
-/// PRD_100 §11.4）在 dockInstanceId preimage 中的 word 形态。
-pub fn target_order_ref_key(order_ref: &str) -> Word {
-    keccak_word(order_ref.as_bytes())
-}
-
-/// dockInstanceId v2：new 模式 8 word（幂等建单锚），existing 模式在尾部
-/// 追加第 9 个 word = target order 引用（引用不同即不同实例）。
-#[allow(clippy::too_many_arguments)]
-pub fn dock_instance_id(
-    runtime_domain: &Word,
-    local_plan_id: &Word,
-    local_definition_ref: &Word,
-    local_order_key: &Word,
-    route_id_word: &Word,
-    route_hash: &Word,
-    mode_word: &Word,
-    interface_name_hash: &Word,
-    target_order_ref: Option<&Word>,
-) -> Word {
-    let mut words = vec![
-        *runtime_domain,
-        *local_plan_id,
-        *local_definition_ref,
-        *local_order_key,
-        *route_id_word,
-        *route_hash,
-        *mode_word,
-        *interface_name_hash,
-    ];
-    if let Some(order_ref) = target_order_ref {
-        words.push(*order_ref);
-    }
-    keccak_words(DOMAIN_DOCK_INSTANCE, &words)
-}
-
-pub fn linked_order_id(dock_instance_id: &Word, target_definition_ref: &Word) -> Word {
-    let mut linked = keccak_words(
-        DOMAIN_DOCK_ORDER,
-        &[*dock_instance_id, *target_definition_ref],
-    );
-    linked[0] |= DOCK_ORDER_NAMESPACE_MASK;
-    linked
-}
-
-/// Dock input envelope payload hash。全部字段 word 化；target 信号词使用
-/// StateMachine 事实寻址的 signalId（keccak(task.stage.signal)），与
-/// UVPDockingModule._inputPayloadHash 逐字一致。
-#[allow(clippy::too_many_arguments)]
-pub fn dock_input_payload_hash(
-    dock_instance: &Word,
-    route_hash: &Word,
-    local_plan_id: &Word,
-    local_order: &Word,
-    local_stage_key: &Word,
-    local_hook_key: &Word,
-    target_plan_id: &Word,
-    linked_order: &Word,
-    target_port_key: &Word,
-    target_signal_id: &Word,
-    sequence: u64,
-) -> Word {
-    keccak_words(
-        DOMAIN_INPUT_PAYLOAD,
-        &[
-            *dock_instance,
-            *route_hash,
-            *local_plan_id,
-            *local_order,
-            *local_stage_key,
-            *local_hook_key,
-            *target_plan_id,
-            *linked_order,
-            *target_port_key,
-            *target_signal_id,
-            u64_word(sequence),
-            [0u8; 32],
-        ],
-    )
-}
-
-/// `sourceFactSetHash = H("UVP_DOCK_SOURCE_FACT_SET_V1", n, w1..wn)`，
-/// fact word 列表须按稳定顺序（canonical signal hash 升序）提供。
-pub fn source_fact_set_hash(fact_words: &[Word]) -> Word {
-    let mut words = Vec::with_capacity(fact_words.len() + 1);
-    words.push(u64_word(fact_words.len() as u64));
-    words.extend_from_slice(fact_words);
-    keccak_words(DOMAIN_SOURCE_FACT_SET, &words)
-}
-
-pub fn dock_input_idempotency_key(
-    dock_instance: &Word,
-    input_binding_hash: &Word,
-    local_hook_ready_occurrence: u64,
-) -> Word {
-    keccak_words(
-        DOMAIN_INPUT_IDEMPOTENCY,
-        &[
-            *dock_instance,
-            *input_binding_hash,
-            u64_word(local_hook_ready_occurrence),
-        ],
-    )
-}
-
-pub fn dock_output_idempotency_key(
-    dock_instance: &Word,
-    output_binding_hash: &Word,
-    target_fact_id: &Word,
-) -> Word {
-    keccak_words(
-        DOMAIN_OUTPUT_IDEMPOTENCY,
-        &[*dock_instance, *output_binding_hash, *target_fact_id],
-    )
-}
-
-/// N6 显示口径（PRD_102 §4）：`name(uid 去 zx- 后前 8 hex)`。name 只是
-/// 提示，uid 才是解析键；报错/日志在 name 可得时按此渲染。
-pub fn display_identity(name: &str, uid: &str) -> String {
-    let hex = uid.strip_prefix("zx-").unwrap_or(uid);
-    let short = &hex[..hex.len().min(8)];
-    format!("{name}({short})")
-}
 
 // ---------------------------------------------------------------------------
 // 错误模型
@@ -510,8 +93,9 @@ const UNSUPPORTED_HINT: &str = "Zhixu delegation binds a named target interface:
 
 #[derive(Debug, Clone)]
 pub struct ZhixuExecutorConfig {
-    /// `None` = `target: null`（动态选择，运行时由选择记录补齐）。
-    pub target_zhixu: Option<String>,
+    /// `None` = `target: null`（动态选择，运行时由选择记录补齐）；
+    /// `Some(name)` = 目标定义的 `metadata.name`。
+    pub target_name: Option<String>,
     pub interface_name: String,
     /// `new` | `existing`。
     pub order_mode: String,
@@ -519,19 +103,8 @@ pub struct ZhixuExecutorConfig {
     pub signal_map: BTreeMap<String, String>,
 }
 
-/// 目标定义派生身份的文本形态：`zx-` + 恰好 32 个小写 hex 字符。
-pub fn valid_derived_uid(uid: &str) -> bool {
-    let Some(hex) = uid.strip_prefix("zx-") else {
-        return false;
-    };
-    hex.len() == 32
-        && hex
-            .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
-}
-
 /// 解析并本地校验 `executor.zhixuExecutorConfig`（D001-D006、D010、D019）。
-/// `stage` 为该 executor 所属 stage；`path` 为报错 JSON path 前缀。
+/// `stage` 为该 executor 所属 stage；`stage_identifier` 为报错 JSON path 前缀。
 pub fn parse_zhixu_executor_config(
     executor_value: &Value,
     stage: &ZhixuStage,
@@ -582,13 +155,14 @@ pub fn parse_zhixu_executor_config(
         }
     }
 
-    // D003：target 必填键——{zhixu: <派生uid>} 或显式 null（动态选择）。
-    let target_zhixu = match config_object.get("target") {
+    // D003：target 必填键——{zhixu: <目标定义 metadata.name>} 或显式 null
+    // （动态选择）。跨轨引用一律走 name，壳上不携带任何派生身份。
+    let target_name = match config_object.get("target") {
         None => {
             issues.push(DockIssue::new(
                 "D003",
                 format!("{path}.target"),
-                "target is required: {zhixu: <derived uid>} for a static target, or null for runtime selection",
+                "target is required: {zhixu: <target definition metadata.name>} for a static target, or null for runtime selection",
             ));
             None
         }
@@ -604,22 +178,24 @@ pub fn parse_zhixu_executor_config(
                 }
             }
             match target.get("zhixu").and_then(Value::as_str) {
-                Some(uid) => {
-                    let uid = uid.trim();
-                    if !valid_derived_uid(uid) {
+                Some(name) => {
+                    let name = name.trim();
+                    if !crate::is_name_slug(name) {
                         issues.push(DockIssue::new(
                             "D003",
                             format!("{path}.target.zhixu"),
-                            "target.zhixu must be the target definition's derived identity zx-<32hex>; {UNSUPPORTED_HINT}",
+                            format!(
+                                "target.zhixu must be the target definition's metadata.name, matching ^[a-z][a-z0-9_-]{{0,99}}$, found {name:?}; {UNSUPPORTED_HINT}"
+                            ),
                         ));
                     }
-                    Some(uid.to_string())
+                    Some(name.to_string())
                 }
                 None => {
                     issues.push(DockIssue::new(
                         "D003",
                         format!("{path}.target.zhixu"),
-                        "target.zhixu is required when target is an object (the target definition's derived identity)",
+                        "target.zhixu is required when target is an object (the target definition metadata.name)",
                     ));
                     None
                 }
@@ -629,7 +205,7 @@ pub fn parse_zhixu_executor_config(
             issues.push(DockIssue::new(
                 "D003",
                 format!("{path}.target"),
-                "target must be an object {zhixu: <derived uid>} or null (dynamic selection)",
+                "target must be an object {zhixu: <target definition metadata.name>} or null (dynamic selection)",
             ));
             None
         }
@@ -848,7 +424,7 @@ pub fn parse_zhixu_executor_config(
         return Err(issues);
     }
     Ok(ZhixuExecutorConfig {
-        target_zhixu,
+        target_name,
         interface_name,
         order_mode,
         input_map: parsed_input,
@@ -869,6 +445,17 @@ pub fn valid_port_name(name: &str) -> bool {
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
 }
 
+/// orderModes 闭集校验：{new, existing} 的非空子集，无重复。
+fn valid_order_modes(modes: &[String]) -> bool {
+    if modes.is_empty() {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    modes
+        .iter()
+        .all(|mode| ORDER_MODES.contains(&mode.as_str()) && seen.insert(mode.as_str()))
+}
+
 fn is_zhixu_executor(executor: &Option<uvp_model::ZhixuExecutor>) -> bool {
     executor
         .as_ref()
@@ -879,9 +466,8 @@ fn is_zhixu_executor(executor: &Option<uvp_model::ZhixuExecutor>) -> bool {
 #[derive(Debug, Clone)]
 pub struct UnlinkedDockRoute {
     pub stage_identifier: String,
-    pub stage_key: Word,
-    /// 本地 stage source：运行时重算 output 绑定 localSourceId 的输入
-    /// （keccak(stage.source)），未解析 route 必须随声明面携带。
+    /// 本地 stage source：未解析 route 声明面的 localSource（运行期按
+    /// source 维度投递，须随声明面携带）。
     pub stage_source: String,
     pub config: ZhixuExecutorConfig,
 }
@@ -904,7 +490,6 @@ pub fn collect_unlinked_routes(
         match parse_zhixu_executor_config(&executor_value, stage, stage_identifier) {
             Ok(config) => routes.push(UnlinkedDockRoute {
                 stage_identifier: stage_identifier.clone(),
-                stage_key: stage_key(stage_identifier),
                 stage_source: stage.source.clone(),
                 config,
             }),
@@ -918,17 +503,13 @@ pub fn collect_unlinked_routes(
 }
 
 impl UnlinkedDockRoute {
-    /// 未解析 route（target:null）的声明面产物：本地声明完整、目标身份
-    /// 空缺（PRD_100 §10.3、设计文档 §8.8）。不携带 routeId/routeHash/
-    /// bindingHash——它们的 preimage 含目标定义身份与目标端口寻址 word，
-    /// 只能由云轨运行时在选择记录补齐目标后用 v2 派生函数重算。
-    /// `localPlanId` 由产物组装层注入（与 resolved route 同一契约）。
-    pub fn unresolved_json(&self, local_definition_ref: &Word) -> Value {
+    /// 未解析 route（target:null）的声明面产物：本地声明完整、目标空缺
+    /// （PRD_100 §10.3）。不携带任何派生字段——目标身份/承诺由各轨在
+    /// 选择记录补齐目标后自行计算。
+    pub fn unresolved_json(&self) -> Value {
         json!({
             "schemaVersion": DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION,
             "stageIdentifier": self.stage_identifier,
-            "stageId": word_hex(&self.stage_key),
-            "localDefinitionRefHash": word_hex(local_definition_ref),
             "localSource": self.stage_source,
             "interfaceName": self.config.interface_name,
             "orderMode": self.config.order_mode,
@@ -945,64 +526,60 @@ impl UnlinkedDockRoute {
 }
 
 // ---------------------------------------------------------------------------
-// 目标接口（spec.dockInterface → DockInterfaceArtifact v2）
+// 目标接口（spec.dockInterface → 中性接口声明）
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub struct DockInterfaceArtifactPortInput {
+pub struct InterfacePortInput {
     pub port: String,
-    pub stage_identifier: String,
-    pub hook_name: String,
     /// `<task>.<stage>#<receiveHookName>`
-    pub hook_id: String,
-    pub canonical_input_signal: String,
-    pub canonical_input_signal_hash: Word,
-    pub source: String,
-    pub source_id: Word,
-    pub signal_id: Word,
-    pub leaf_hash: Word,
+    pub hook: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct DockInterfaceArtifactPortOutput {
+pub struct InterfacePortOutput {
     pub port: String,
-    pub canonical_output_signal: String,
-    pub canonical_output_signal_hash: Word,
-    pub source: String,
-    pub source_id: Word,
-    pub signal_id: Word,
-    pub leaf_hash: Word,
+    /// `<source>::<task>.<stage>.<signal>`
+    pub signal: String,
 }
 
-/// 一个具名接口的编译产物；`interface_leaf` 即 manifest 里的
-/// `interfaceRoot`（该接口对外的完整承诺）。
+/// 一个具名接口的中性声明（与 resolution manifest 的接口元素同形状）。
 #[derive(Debug, Clone)]
-pub struct InterfaceArtifact {
+pub struct InterfaceDeclaration {
     pub name: String,
     pub order_modes: Vec<String>,
-    pub inputs: Vec<DockInterfaceArtifactPortInput>,
-    pub outputs: Vec<DockInterfaceArtifactPortOutput>,
-    pub inputs_root: Word,
-    pub outputs_root: Word,
-    pub interface_leaf: Word,
+    pub inputs: Vec<InterfacePortInput>,
+    pub outputs: Vec<InterfacePortOutput>,
 }
 
-#[derive(Debug, Clone)]
-pub struct DockInterfaceArtifact {
-    pub uid: String,
-    pub definition_ref_hash: Word,
-    /// 按接口名升序。
-    pub interfaces: Vec<InterfaceArtifact>,
-    /// 全部接口叶的 merkle root（无接口 → EMPTY root）。
-    pub interface_root: Word,
+impl InterfaceDeclaration {
+    fn to_json(&self) -> Value {
+        let inputs = Map::from_iter(
+            self.inputs
+                .iter()
+                .map(|port| (port.port.clone(), json!({ "hook": port.hook }))),
+        );
+        let outputs = Map::from_iter(
+            self.outputs
+                .iter()
+                .map(|port| (port.port.clone(), json!({ "signal": port.signal }))),
+        );
+        json!({
+            "name": self.name,
+            "orderModes": self.order_modes,
+            "inputs": inputs,
+            "outputs": outputs,
+        })
+    }
 }
 
 /// 编译目标定义的 `spec.dockInterface`（D013/D014、D021/D022、D025）。
+/// 产物是中性声明：接口名/orderModes/inputs/outputs 原文，不含任何
+/// 哈希或身份字段。
 pub fn compile_dock_interface(
     dock: &BTreeMap<String, DockInterfaceSpec>,
-    uid: &str,
     entries: &[(String, ZhixuStage)],
-) -> DockResult<DockInterfaceArtifact> {
+) -> DockResult<Vec<InterfaceDeclaration>> {
     let mut issues = Vec::new();
 
     let stages_by_identifier: BTreeMap<&str, &ZhixuStage> = entries
@@ -1012,9 +589,7 @@ pub fn compile_dock_interface(
     // mailbox hook 全定义唯一发布：同一物理入口被两个公开端口重复发布会
     // 让外部投递出现两条可寻址路径。
     let mut hooks_claimed: BTreeMap<String, String> = BTreeMap::new();
-    let uid_word = keccak_word(uid.as_bytes());
     let mut interfaces = Vec::new();
-    let mut interface_leaves = Vec::new();
 
     for (interface_name, spec) in dock {
         let base_path = format!("spec.dockInterface.{interface_name}");
@@ -1026,20 +601,17 @@ pub fn compile_dock_interface(
             ));
             continue;
         }
-        let Some(modes_word) = order_modes_word(&spec.order_modes) else {
+        if !valid_order_modes(&spec.order_modes) {
             issues.push(DockIssue::new(
                 "D025",
                 format!("{base_path}.orderModes"),
                 "orderModes must be a non-empty subset of {new, existing} without duplicates",
             ));
             continue;
-        };
-        let name_word = interface_name_key(interface_name);
+        }
 
         let mut inputs = Vec::new();
         let mut outputs = Vec::new();
-        let mut input_leaves = Vec::new();
-        let mut output_leaves = Vec::new();
 
         for (port_name, port) in &spec.inputs {
             let path = format!("{base_path}.inputs.{port_name}");
@@ -1146,33 +718,9 @@ pub fn compile_dock_interface(
                 continue;
             }
 
-            let canonical_input_signal = format!("{}::{}", stage.source, dependency.signal_name);
-            let canonical_hash = canonical_signal_hash(&canonical_input_signal);
-            // 叶子只提交对外承诺的 word（uid/接口名/端口名/hook 引用）；
-            // sourceId/signalId 是运行期投递寻址数据，随产物携带但不入叶。
-            let source_id_word = keccak_word(stage.source.as_bytes());
-            let signal_id_word = keccak_word(dependency.signal_name.as_bytes());
-            let leaf_hash = keccak_words(
-                DOMAIN_INTERFACE_INPUT,
-                &[
-                    uid_word,
-                    name_word,
-                    port_key(port_name),
-                    hook_key(&port.hook),
-                ],
-            );
-            input_leaves.push(leaf_hash);
-            inputs.push(DockInterfaceArtifactPortInput {
+            inputs.push(InterfacePortInput {
                 port: port_name.clone(),
-                stage_identifier: stage_identifier.clone(),
-                hook_name: hook_name.clone(),
-                hook_id: port.hook.clone(),
-                canonical_input_signal,
-                canonical_input_signal_hash: canonical_hash,
-                source: stage.source.clone(),
-                source_id: source_id_word,
-                signal_id: signal_id_word,
-                leaf_hash,
+                hook: port.hook.clone(),
             });
         }
 
@@ -1223,33 +771,16 @@ pub fn compile_dock_interface(
                 issues.push(DockIssue::new(
                     "D014",
                     format!("{path}.signal"),
-                    format!("signal {signal_name} is not in stage {stage_identifier} sendSignals"),
+                    format!(
+                        "signal {signal_name} is not in stage {stage_identifier} sendSignals"
+                    ),
                 ));
                 continue;
             }
 
-            let canonical_hash = canonical_signal_hash(&port.signal);
-            let source_id_word = keccak_word(source.as_bytes());
-            let signal_id_word =
-                keccak_word(format!("{stage_identifier}.{signal_name}").as_bytes());
-            let leaf_hash = keccak_words(
-                DOMAIN_INTERFACE_OUTPUT,
-                &[
-                    uid_word,
-                    name_word,
-                    port_key(port_name),
-                    canonical_signal_hash(&port.signal),
-                ],
-            );
-            output_leaves.push(leaf_hash);
-            outputs.push(DockInterfaceArtifactPortOutput {
+            outputs.push(InterfacePortOutput {
                 port: port_name.clone(),
-                canonical_output_signal: port.signal.clone(),
-                canonical_output_signal_hash: canonical_hash,
-                source: source.to_string(),
-                source_id: source_id_word,
-                signal_id: signal_id_word,
-                leaf_hash,
+                signal: port.signal.clone(),
             });
         }
 
@@ -1263,21 +794,11 @@ pub fn compile_dock_interface(
             continue;
         }
 
-        let inputs_root = merkle_root(&input_leaves);
-        let outputs_root = merkle_root(&output_leaves);
-        let interface_leaf = keccak_words(
-            DOMAIN_INTERFACE,
-            &[uid_word, name_word, modes_word, inputs_root, outputs_root],
-        );
-        interface_leaves.push(interface_leaf);
-        interfaces.push(InterfaceArtifact {
+        interfaces.push(InterfaceDeclaration {
             name: interface_name.clone(),
             order_modes: spec.order_modes.clone(),
             inputs,
             outputs,
-            inputs_root,
-            outputs_root,
-            interface_leaf,
         });
     }
 
@@ -1286,12 +807,34 @@ pub fn compile_dock_interface(
     }
     // 接口按名排序（BTreeMap 迭代已按名升序，此处显式钉住口径）。
     interfaces.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(DockInterfaceArtifact {
-        uid: uid.to_string(),
-        definition_ref_hash: definition_ref_hash(uid),
-        interfaces,
-        interface_root: merkle_root(&interface_leaves),
-    })
+    Ok(interfaces)
+}
+
+/// 目标定义全部接口的中性声明产物（接口名升序数组）。
+pub fn interface_declarations_json(interfaces: &[InterfaceDeclaration]) -> Value {
+    Value::Array(interfaces.iter().map(InterfaceDeclaration::to_json).collect())
+}
+
+/// 全部 input 端口引用的本地 hook 集合（`<task>.<stage>#<hook>`）：
+/// 这些 mailbox hook 不走普通依赖引用校验。
+pub fn input_port_hook_ids(interfaces: &[InterfaceDeclaration]) -> BTreeSet<String> {
+    interfaces
+        .iter()
+        .flat_map(|interface| interface.inputs.iter())
+        .map(|port| port.hook.clone())
+        .collect()
+}
+
+/// 可作为 new 模式出生锚的 input 端口（orderModes 含 new 的接口的全部
+/// input 端口——new 模式 route 的唯一 input 绑定可落在其中任意一个）
+/// 引用的本地 hook 集合，供 orderTriggerKind=dock 标记使用。
+pub fn entrance_hook_ids(interfaces: &[InterfaceDeclaration]) -> BTreeSet<String> {
+    interfaces
+        .iter()
+        .filter(|interface| interface.order_modes.iter().any(|m| m == ORDER_MODE_NEW))
+        .flat_map(|interface| interface.inputs.iter())
+        .map(|port| port.hook.clone())
+        .collect()
 }
 
 fn parse_hook_reference(reference: &str) -> Option<(String, String)> {
@@ -1319,88 +862,14 @@ fn parse_canonical_signal(signal: &str) -> Option<(String, String, String)> {
     ))
 }
 
-impl DockInterfaceArtifact {
-    pub fn to_json(&self) -> Value {
-        json!({
-            "schemaVersion": DOCK_INTERFACE_ARTIFACT_SCHEMA_VERSION,
-            "definition": {
-                "uid": self.uid,
-                "definitionRefHash": word_hex(&self.definition_ref_hash),
-            },
-            "interfaces": self.interfaces.iter().map(|interface| json!({
-                "name": interface.name,
-                "orderModes": interface.order_modes,
-                "inputs": interface.inputs.iter().map(|port| json!({
-                    "port": port.port,
-                    "stageIdentifier": port.stage_identifier,
-                    "hookName": port.hook_name,
-                    "hookId": port.hook_id,
-                    "canonicalInputSignal": port.canonical_input_signal,
-                    "canonicalInputSignalHash": word_hex(&port.canonical_input_signal_hash),
-                    "source": port.source,
-                    "sourceId": word_hex(&port.source_id),
-                    "signalId": word_hex(&port.signal_id),
-                    "leafHash": word_hex(&port.leaf_hash),
-                })).collect::<Vec<_>>(),
-                "outputs": interface.outputs.iter().map(|port| json!({
-                    "port": port.port,
-                    "canonicalOutputSignal": port.canonical_output_signal,
-                    "canonicalOutputSignalHash": word_hex(&port.canonical_output_signal_hash),
-                    "source": port.source,
-                    "sourceId": word_hex(&port.source_id),
-                    "signalId": word_hex(&port.signal_id),
-                    "leafHash": word_hex(&port.leaf_hash),
-                })).collect::<Vec<_>>(),
-                "inputsRoot": word_hex(&interface.inputs_root),
-                "outputsRoot": word_hex(&interface.outputs_root),
-                "interfaceRoot": word_hex(&interface.interface_leaf),
-            })).collect::<Vec<_>>(),
-            "interfaceRoot": word_hex(&self.interface_root),
-        })
-    }
-
-    /// 全部 input 端口引用的本地 hook 集合（`<task>.<stage>#<hook>`）：
-    /// 这些 mailbox hook 不走普通依赖引用校验。
-    pub fn input_port_hook_ids(&self) -> BTreeSet<String> {
-        self.interfaces
-            .iter()
-            .flat_map(|interface| interface.inputs.iter())
-            .map(|port| port.hook_id.clone())
-            .collect()
-    }
-
-    /// 可作为 new 模式出生锚的 input 端口（orderModes 含 new 的接口的全部
-    /// input 端口——new 模式 route 的唯一 input 绑定可落在其中任意一个）
-    /// 引用的本地 hook 集合，供 orderTriggerKind=dock 标记使用。
-    pub fn entrance_hook_ids(&self) -> BTreeSet<String> {
-        self.interfaces
-            .iter()
-            .filter(|interface| interface.order_modes.iter().any(|m| m == ORDER_MODE_NEW))
-            .flat_map(|interface| interface.inputs.iter())
-            .map(|port| port.hook_id.clone())
-            .collect()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Resolution manifest + linker
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct ResolutionTarget {
-    pub zhixu: String,
-    /// 内嵌目标定义全文（内容寻址，PRD_102 §5）。
-    pub definition_value: Value,
     pub name: String,
-    pub definition_ref_hash: Word,
-    pub artifact_hash: Word,
-    pub published: bool,
-    pub interfaces: Vec<InterfaceArtifact>,
-    /// 由 interfaces[].interfaceRoot 重算的定义级 dockInterfaceRoot。
-    pub dock_interface_root: Word,
-    pub cloud_artifact_id: Option<String>,
-    pub evm_plan_id: Option<Word>,
-    pub dock_edges: Vec<String>,
+    pub interfaces: Vec<InterfaceDeclaration>,
 }
 
 #[derive(Debug, Clone)]
@@ -1409,7 +878,8 @@ pub struct ResolutionManifest {
 }
 
 /// 解析 resolution manifest（Store/发布系统或离线 lock 文件提供）。
-/// manifest 只做形状解析；完整性校验（身份重算、root 重算）在 link 时执行。
+/// manifest 是中性 name→interfaces 目录：manifest 内 name 重名是发布方
+/// 数据错误，响亮拒绝；name 到实体的解析权威在各轨。
 pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest> {
     let mut issues = Vec::new();
     let schema = value
@@ -1425,6 +895,7 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
         return Err(issues);
     }
     let mut targets = Vec::new();
+    let mut names_seen = BTreeSet::new();
     for (index, entry) in value
         .get("definitions")
         .and_then(Value::as_array)
@@ -1433,49 +904,38 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
         .enumerate()
     {
         let path = format!("resolutionManifest.definitions[{index}]");
-        let zhixu = entry
-            .get("zhixu")
+        let name = entry
+            .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default()
+            .trim()
             .to_string();
-        if zhixu.is_empty() {
-            issues.push(DockIssue::new("D008", &path, "zhixu is required"));
-            continue;
-        }
-        let definition_value = entry.get("definition").cloned().unwrap_or(Value::Null);
-        if !definition_value.is_object() {
+        if name.is_empty() {
             issues.push(DockIssue::new(
                 "D008",
-                format!("{path}.definition"),
-                "the full target definition is required (content-addressed identity, PRD_102 §5)",
+                format!("{path}.name"),
+                "name is required (the target definition metadata.name)",
             ));
             continue;
         }
-        let name = definition_value
-            .pointer("/metadata/name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let parse_word = |key: &str| -> Option<Word> {
-            entry
-                .get(key)
-                .and_then(Value::as_str)
-                .and_then(word_from_hex)
-        };
-        let (Some(definition_ref), Some(artifact_hash)) =
-            (parse_word("definitionRefHash"), parse_word("artifactHash"))
-        else {
+        if !crate::is_name_slug(&name) {
+            issues.push(DockIssue::new(
+                "D008",
+                format!("{path}.name"),
+                format!(
+                    "name must be the target definition metadata.name, matching ^[a-z][a-z0-9_-]{{0,99}}$, found {name:?}"
+                ),
+            ));
+            continue;
+        }
+        if !names_seen.insert(name.clone()) {
             issues.push(DockIssue::new(
                 "D008",
                 &path,
-                "definitionRefHash and artifactHash must be 0x-prefixed bytes32",
+                format!("duplicate definition name {name:?}: names are the resolution key and must be unique in the manifest"),
             ));
             continue;
-        };
-        let published = entry
-            .get("published")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        }
         let mut interfaces = Vec::new();
         let mut interfaces_valid = true;
         for (interface_index, interface_value) in entry
@@ -1486,7 +946,7 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
             .enumerate()
         {
             let interface_path = format!("{path}.interfaces[{interface_index}]");
-            match parse_interface_artifact(interface_value) {
+            match parse_interface_declaration(interface_value) {
                 Ok(interface) => interfaces.push(interface),
                 Err(mut interface_issues) => {
                     for issue in &mut interface_issues {
@@ -1508,47 +968,20 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
             ));
             continue;
         }
-        let cloud_artifact_id = entry
-            .get("cloudArtifactId")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let evm_plan_id = entry
-            .get("evmPlanId")
-            .and_then(Value::as_str)
-            .and_then(word_from_hex);
-        let mut dock_edges = Vec::new();
-        for edge in entry
-            .get("dockEdges")
-            .and_then(Value::as_array)
-            .unwrap_or(&Vec::new())
-        {
-            let target_zhixu = edge
-                .get("zhixu")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !target_zhixu.is_empty() {
-                dock_edges.push(target_zhixu.to_string());
+        let mut interface_names = BTreeSet::new();
+        for interface in &interfaces {
+            if !interface_names.insert(interface.name.clone()) {
+                issues.push(DockIssue::new(
+                    "D008",
+                    format!("{path}.interfaces.{}", interface.name),
+                    format!("duplicate interface name {:?}", interface.name),
+                ));
             }
         }
-        let dock_interface_root = merkle_root(
-            &interfaces
-                .iter()
-                .map(|interface| interface.interface_leaf)
-                .collect::<Vec<_>>(),
-        );
-        targets.push(ResolutionTarget {
-            zhixu,
-            definition_value,
-            name,
-            definition_ref_hash: definition_ref,
-            artifact_hash,
-            published,
-            interfaces,
-            dock_interface_root,
-            cloud_artifact_id,
-            evm_plan_id,
-            dock_edges,
-        });
+        if !issues.is_empty() {
+            continue;
+        }
+        targets.push(ResolutionTarget { name, interfaces });
     }
     if !issues.is_empty() {
         return Err(issues);
@@ -1556,9 +989,26 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
     Ok(ResolutionManifest { targets })
 }
 
-fn parse_interface_artifact(value: &Value) -> DockResult<InterfaceArtifact> {
+fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration> {
     let mut issues = Vec::new();
-    let name = value
+    let Some(object) = value.as_object() else {
+        return Err(vec![DockIssue::new(
+            "D008",
+            "",
+            "interface must be an object",
+        )]);
+    };
+    // 键闭集：拼错的字段不得被静默忽略成零值语义。
+    for key in object.keys() {
+        if !matches!(key.as_str(), "name" | "orderModes" | "inputs" | "outputs") {
+            issues.push(DockIssue::new(
+                "D008",
+                "",
+                format!("unknown field {key:?}; allowed: [\"name\", \"orderModes\", \"inputs\", \"outputs\"]"),
+            ));
+        }
+    }
+    let name = object
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or_default()
@@ -1569,9 +1019,8 @@ fn parse_interface_artifact(value: &Value) -> DockResult<InterfaceArtifact> {
             "name",
             format!("interface name must match ^[a-z][a-z0-9_]{{0,31}}$, found {name:?}"),
         ));
-        return Err(issues);
     }
-    let order_modes = value
+    let order_modes = object
         .get("orderModes")
         .and_then(Value::as_array)
         .map(|modes| {
@@ -1582,437 +1031,193 @@ fn parse_interface_artifact(value: &Value) -> DockResult<InterfaceArtifact> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if order_modes_word(&order_modes).is_none() {
+    if !valid_order_modes(&order_modes) {
         issues.push(DockIssue::new(
             "D008",
             "orderModes",
             "orderModes must be a non-empty subset of {new, existing} without duplicates",
         ));
-        return Err(issues);
     }
-    let parse_word = |port: &Value, key: &str| -> Option<Word> {
-        port.get(key)
-            .and_then(Value::as_str)
-            .and_then(word_from_hex)
-    };
+
     let mut inputs = Vec::new();
-    let mut outputs = Vec::new();
-    for port in value
+    for (port_name, port) in object
         .get("inputs")
-        .and_then(Value::as_array)
-        .unwrap_or(&Vec::new())
+        .and_then(Value::as_object)
+        .unwrap_or(&Map::new())
     {
-        let port_path = || {
-            format!(
-                "inputs.{}",
-                port.get("port").and_then(Value::as_str).unwrap_or("?")
-            )
-        };
-        let Some(leaf_hash) = parse_word(port, "leafHash") else {
+        let port_path = format!("inputs.{port_name}");
+        if !valid_port_name(port_name) {
             issues.push(DockIssue::new(
                 "D008",
-                port_path(),
-                "leafHash must be bytes32",
+                &port_path,
+                "port name must match ^[a-z][a-z0-9_]{0,31}$",
+            ));
+            continue;
+        }
+        let Some(port_object) = port.as_object() else {
+            issues.push(DockIssue::new(
+                "D008",
+                &port_path,
+                "input port must be an object {hook: <task>.<stage>#<hookName>}",
             ));
             continue;
         };
-        // 悬空/非法的寻址 word 不得静默落成零 word——零 word 会参与
-        // leafHash/幂等键的重算比对，只能以确定性错误暴露。
-        let (Some(source_id), Some(signal_id)) =
-            (parse_word(port, "sourceId"), parse_word(port, "signalId"))
-        else {
-            issues.push(DockIssue::new(
-                "D008",
-                port_path(),
-                "sourceId/signalId must be 0x-prefixed bytes32 words",
-            ));
-            continue;
-        };
-        inputs.push(DockInterfaceArtifactPortInput {
-            port: port
-                .get("port")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            stage_identifier: port
-                .get("stageIdentifier")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            hook_name: port
-                .get("hookName")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            hook_id: port
-                .get("hookId")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            canonical_input_signal: port
-                .get("canonicalInputSignal")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            canonical_input_signal_hash: parse_word(port, "canonicalInputSignalHash")
-                .unwrap_or([0u8; 32]),
-            source: port
-                .get("source")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            source_id,
-            signal_id,
-            leaf_hash,
-        });
-    }
-    for port in value
-        .get("outputs")
-        .and_then(Value::as_array)
-        .unwrap_or(&Vec::new())
-    {
-        let port_path = || {
-            format!(
-                "outputs.{}",
-                port.get("port").and_then(Value::as_str).unwrap_or("?")
-            )
-        };
-        let Some(leaf_hash) = parse_word(port, "leafHash") else {
-            issues.push(DockIssue::new(
-                "D008",
-                port_path(),
-                "leafHash must be bytes32",
-            ));
-            continue;
-        };
-        let (Some(source_id), Some(signal_id)) =
-            (parse_word(port, "sourceId"), parse_word(port, "signalId"))
-        else {
-            issues.push(DockIssue::new(
-                "D008",
-                port_path(),
-                "sourceId/signalId must be 0x-prefixed bytes32 words",
-            ));
-            continue;
-        };
-        outputs.push(DockInterfaceArtifactPortOutput {
-            port: port
-                .get("port")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            canonical_output_signal: port
-                .get("canonicalOutputSignal")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            canonical_output_signal_hash: parse_word(port, "canonicalOutputSignalHash")
-                .unwrap_or([0u8; 32]),
-            source: port
-                .get("source")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            source_id,
-            signal_id,
-            leaf_hash,
-        });
-    }
-    let root_of = |key: &str| -> Option<Word> {
-        value
-            .get(key)
+        for key in port_object.keys() {
+            if key != "hook" {
+                issues.push(DockIssue::new(
+                    "D008",
+                    format!("{port_path}.{key}"),
+                    format!("unknown field {key:?}; allowed: [\"hook\"]"),
+                ));
+            }
+        }
+        let hook = port_object
+            .get("hook")
             .and_then(Value::as_str)
-            .and_then(word_from_hex)
-    };
-    let (Some(inputs_root), Some(outputs_root), Some(interface_leaf)) = (
-        root_of("inputsRoot"),
-        root_of("outputsRoot"),
-        root_of("interfaceRoot"),
-    ) else {
-        issues.push(DockIssue::new(
-            "D008",
-            "inputsRoot/outputsRoot/interfaceRoot",
-            "must be 0x-prefixed bytes32",
-        ));
-        return Err(issues);
-    };
+            .unwrap_or_default();
+        if parse_hook_reference(hook).is_none() {
+            issues.push(DockIssue::new(
+                "D008",
+                format!("{port_path}.hook"),
+                format!("hook must be <task>.<stage>#<receiveHookName>, found {hook:?}"),
+            ));
+            continue;
+        }
+        inputs.push(InterfacePortInput {
+            port: port_name.clone(),
+            hook: hook.to_string(),
+        });
+    }
+
+    let mut outputs = Vec::new();
+    for (port_name, port) in object
+        .get("outputs")
+        .and_then(Value::as_object)
+        .unwrap_or(&Map::new())
+    {
+        let port_path = format!("outputs.{port_name}");
+        if !valid_port_name(port_name) {
+            issues.push(DockIssue::new(
+                "D008",
+                &port_path,
+                "port name must match ^[a-z][a-z0-9_]{0,31}$",
+            ));
+            continue;
+        }
+        let Some(port_object) = port.as_object() else {
+            issues.push(DockIssue::new(
+                "D008",
+                &port_path,
+                "output port must be an object {signal: <source>::<task>.<stage>.<signal>}",
+            ));
+            continue;
+        };
+        for key in port_object.keys() {
+            if key != "signal" {
+                issues.push(DockIssue::new(
+                    "D008",
+                    format!("{port_path}.{key}"),
+                    format!("unknown field {key:?}; allowed: [\"signal\"]"),
+                ));
+            }
+        }
+        let signal = port_object
+            .get("signal")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if parse_canonical_signal(signal).is_none() {
+            issues.push(DockIssue::new(
+                "D008",
+                format!("{port_path}.signal"),
+                format!(
+                    "signal must be <source>::<task>.<stage>.<signal>, found {signal:?}"
+                ),
+            ));
+            continue;
+        }
+        outputs.push(InterfacePortOutput {
+            port: port_name.clone(),
+            signal: signal.to_string(),
+        });
+    }
+
     if !issues.is_empty() {
         return Err(issues);
     }
-    Ok(InterfaceArtifact {
+    Ok(InterfaceDeclaration {
         name,
         order_modes,
         inputs,
         outputs,
-        inputs_root,
-        outputs_root,
-        interface_leaf,
     })
 }
 
 // ---------------------------------------------------------------------------
-// 已解析 DockRoute v2
+// 已解析 DockRoute（中性产物）
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct DockRouteInput {
-    pub local_hook_name: String,
+    /// `<task>.<stage>#<localHookName>`
+    pub hook_id: String,
     pub target_port: String,
-    pub target_input_signal_hash: Word,
-    pub target_source_id: Word,
-    pub target_signal_id: Word,
-    /// Cloud runtime 可读名称：目标 stage 标识与 canonical signal 名
-    /// （仅写入 JSON，不参与任何哈希 preimage）。
-    pub target_stage_identifier: String,
-    pub target_signal_name: String,
-    pub binding_hash: Word,
 }
 
 #[derive(Debug, Clone)]
 pub struct DockRouteOutput {
-    pub local_signal_name: String,
-    pub local_source_id: Word,
-    pub local_signal_id: Word,
+    /// 本地 sendSignals 信号名。
+    pub signal: String,
     pub target_port: String,
-    pub target_output_signal_hash: Word,
-    pub target_source_id: Word,
-    pub target_signal_id: Word,
-    /// Cloud runtime 可读名称（不参与哈希）。
-    pub target_signal_name: String,
-    pub binding_hash: Word,
 }
 
 #[derive(Debug, Clone)]
 pub struct DockRoute {
-    pub route_id: Word,
-    pub local_definition_ref_hash: Word,
     pub stage_identifier: String,
-    pub stage_key: Word,
-    pub target_definition_ref_hash: Word,
-    pub target_zhixu_uid: String,
-    pub target_zhixu_name: String,
+    pub target_name: String,
     pub target_interface_name: String,
     /// `new` | `existing`。
     pub order_mode: String,
-    pub target_artifact_hash: Word,
-    pub target_cloud_artifact_id: Option<String>,
-    pub target_evm_plan_id: Option<Word>,
-    /// 被绑定接口的 interfaceLeaf（manifest `interfaces[].interfaceRoot`）。
-    pub target_interface_root: Word,
-    /// 目标定义级 dockInterfaceRoot（接口叶 merkle root）。
-    pub target_dock_interface_root: Word,
-    pub source_seam: String,
     pub inputs: Vec<DockRouteInput>,
     pub outputs: Vec<DockRouteOutput>,
-    pub inputs_root: Word,
-    pub outputs_root: Word,
-    pub route_hash: Word,
 }
 
 impl DockRoute {
     pub fn to_json(&self) -> Value {
         json!({
             "schemaVersion": DOCK_ROUTE_SCHEMA_VERSION,
-            "routeId": word_hex(&self.route_id),
             "local": {
-                "definitionRefHash": word_hex(&self.local_definition_ref_hash),
                 "stageIdentifier": self.stage_identifier,
-                "stageKey": word_hex(&self.stage_key),
             },
             "target": {
-                "definitionRefHash": word_hex(&self.target_definition_ref_hash),
-                "zhixuUid": self.target_zhixu_uid,
-                "zhixuName": self.target_zhixu_name,
+                "name": self.target_name,
                 "interfaceName": self.target_interface_name,
-                "interfaceRoot": word_hex(&self.target_interface_root),
-                "dockInterfaceRoot": word_hex(&self.target_dock_interface_root),
-                "artifactHash": word_hex(&self.target_artifact_hash),
-                "cloudArtifactId": self.target_cloud_artifact_id.clone(),
-                "evmPlanId": self.target_evm_plan_id.map(|word| word_hex(&word)),
             },
             "orderMode": self.order_mode,
-            "sourceSeam": self.source_seam,
             "inputBindings": self.inputs.iter().map(|input| json!({
-                "localHookName": input.local_hook_name,
-                "targetPort": input.target_port,
-                "targetInputSignalHash": word_hex(&input.target_input_signal_hash),
-                "targetSourceId": word_hex(&input.target_source_id),
-                "targetSignalId": word_hex(&input.target_signal_id),
-                "targetStageIdentifier": input.target_stage_identifier,
-                "targetSignalName": input.target_signal_name,
-                "bindingHash": word_hex(&input.binding_hash),
+                "hookId": input.hook_id,
+                "port": input.target_port,
             })).collect::<Vec<_>>(),
             "outputBindings": self.outputs.iter().map(|output| json!({
-                "localSignalName": output.local_signal_name,
-                "localSourceId": word_hex(&output.local_source_id),
-                "localSignalId": word_hex(&output.local_signal_id),
-                "targetPort": output.target_port,
-                "targetOutputSignalHash": word_hex(&output.target_output_signal_hash),
-                "targetSourceId": word_hex(&output.target_source_id),
-                "targetSignalId": word_hex(&output.target_signal_id),
-                "targetSignalName": output.target_signal_name,
-                "bindingHash": word_hex(&output.binding_hash),
+                "signal": output.signal,
+                "port": output.target_port,
             })).collect::<Vec<_>>(),
-            "inputBindingsRoot": word_hex(&self.inputs_root),
-            "outputBindingsRoot": word_hex(&self.outputs_root),
-            "routeHash": word_hex(&self.route_hash),
         })
     }
 }
 
-/// 父定义本地身份（link 输入）。
-pub struct LocalLinkIdentity {
-    pub uid: String,
-}
-
 /// Link：本地未链接 routes + resolution manifest → 已解析 DockRoute 列表
 /// （D008-D012、D015-D016、D020）。纯函数，无网络、无 I/O。
+/// 目标按 name 查找；跨定义的内容校验（身份重算/哈希比对）是各轨解析
+/// 面的内务，不在 core。
 pub fn link_dock_routes(
-    local: &LocalLinkIdentity,
-    stages: &[(String, ZhixuStage)],
+    local_name: &str,
     unlinked: &[UnlinkedDockRoute],
     manifest: &ResolutionManifest,
 ) -> DockResult<Vec<DockRoute>> {
     let mut issues = Vec::new();
-    let local_definition_ref = definition_ref_hash(&local.uid);
-    let stages_by_identifier: BTreeMap<&str, &ZhixuStage> = stages
-        .iter()
-        .map(|(identifier, stage)| (identifier.as_str(), stage))
-        .collect();
 
-    // D008：内容寻址三方一致（entry.zhixu == 内嵌定义派生 uid == route 引用），
-    // 且全部叶子/root 由 manifest 数据逐 word 重算——自不一致的 manifest 在
-    // link 即拒绝，不推迟到运行期才失败。
-    for target in &manifest.targets {
-        let entry_path = format!("resolutionManifest.definitions[{}]", target.zhixu);
-        let derived_uid = match crate::definition_uid(&target.definition_value) {
-            Ok(uid) => uid,
-            Err(err) => {
-                issues.push(DockIssue::new(
-                    "D008",
-                    format!("{entry_path}.definition"),
-                    format!("cannot derive the definition uid: {err}"),
-                ));
-                continue;
-            }
-        };
-        if derived_uid != target.zhixu {
-            issues.push(DockIssue::new(
-                "D008",
-                format!("{entry_path}.zhixu"),
-                format!(
-                    "entry declares {} but the embedded definition derives {} — the manifest is not content-addressed",
-                    target.zhixu,
-                    display_identity(&target.name, &derived_uid),
-                ),
-            ));
-            continue;
-        }
-        if definition_ref_hash(&derived_uid) != target.definition_ref_hash {
-            issues.push(DockIssue::new(
-                "D008",
-                format!("{entry_path}.definitionRefHash"),
-                "does not match H(UVP_DEFINITION_REF_V1, keccak(uid)) over the embedded definition",
-            ));
-            continue;
-        }
-        let uid_word = keccak_word(target.zhixu.as_bytes());
-        let mut interface_leaves = Vec::new();
-        for interface in &target.interfaces {
-            let interface_path = format!("{entry_path}.interfaces.{}", interface.name);
-            let Some(modes_word) = order_modes_word(&interface.order_modes) else {
-                issues.push(DockIssue::new(
-                    "D008",
-                    format!("{interface_path}.orderModes"),
-                    "orderModes must be a non-empty subset of {new, existing} without duplicates",
-                ));
-                continue;
-            };
-            let name_word = interface_name_key(&interface.name);
-            let mut input_leaves = Vec::new();
-            for port in &interface.inputs {
-                let leaf = keccak_words(
-                    DOMAIN_INTERFACE_INPUT,
-                    &[
-                        uid_word,
-                        name_word,
-                        port_key(&port.port),
-                        hook_key(&port.hook_id),
-                    ],
-                );
-                if leaf != port.leaf_hash {
-                    issues.push(DockIssue::new(
-                        "D008",
-                        format!("{interface_path}.inputs.{}", port.port),
-                        "leafHash does not match the recomputed input-port preimage",
-                    ));
-                }
-                input_leaves.push(port.leaf_hash);
-            }
-            let mut output_leaves = Vec::new();
-            for port in &interface.outputs {
-                let leaf = keccak_words(
-                    DOMAIN_INTERFACE_OUTPUT,
-                    &[
-                        uid_word,
-                        name_word,
-                        port_key(&port.port),
-                        canonical_signal_hash(&port.canonical_output_signal),
-                    ],
-                );
-                if leaf != port.leaf_hash {
-                    issues.push(DockIssue::new(
-                        "D008",
-                        format!("{interface_path}.outputs.{}", port.port),
-                        "leafHash does not match the recomputed output-port preimage",
-                    ));
-                }
-                output_leaves.push(port.leaf_hash);
-            }
-            if merkle_root(&input_leaves) != interface.inputs_root {
-                issues.push(DockIssue::new(
-                    "D008",
-                    format!("{interface_path}.inputsRoot"),
-                    "does not match the recomputed root over input-port leaves",
-                ));
-            }
-            if merkle_root(&output_leaves) != interface.outputs_root {
-                issues.push(DockIssue::new(
-                    "D008",
-                    format!("{interface_path}.outputsRoot"),
-                    "does not match the recomputed root over output-port leaves",
-                ));
-            }
-            let interface_leaf = keccak_words(
-                DOMAIN_INTERFACE,
-                &[
-                    uid_word,
-                    name_word,
-                    modes_word,
-                    interface.inputs_root,
-                    interface.outputs_root,
-                ],
-            );
-            if interface_leaf != interface.interface_leaf {
-                issues.push(DockIssue::new(
-                    "D008",
-                    format!("{interface_path}.interfaceRoot"),
-                    "does not match the recomputed interface-leaf preimage",
-                ));
-            }
-            interface_leaves.push(interface.interface_leaf);
-        }
-        if merkle_root(&interface_leaves) != target.dock_interface_root {
-            issues.push(DockIssue::new(
-                "D008",
-                format!("{entry_path}.interfaces"),
-                "the definition-level dockInterfaceRoot does not match the recomputed root over interface leaves",
-            ));
-        }
-    }
-
-    let find_target = |zhixu: &str| -> Option<&ResolutionTarget> {
-        manifest.targets.iter().find(|target| target.zhixu == zhixu)
+    let find_target = |name: &str| -> Option<&ResolutionTarget> {
+        manifest.targets.iter().find(|target| target.name == name)
     };
 
     let mut routes = Vec::new();
@@ -2022,7 +1227,7 @@ pub fn link_dock_routes(
         let mut route_issues = Vec::new();
         let config = &route.config;
         let path = format!("{}.executor.zhixuExecutorConfig", route.stage_identifier);
-        let Some(target_zhixu) = &config.target_zhixu else {
+        let Some(target_name) = &config.target_name else {
             route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
@@ -2031,27 +1236,15 @@ pub fn link_dock_routes(
             issues.extend(route_issues);
             continue;
         };
-        let Some(target) = find_target(target_zhixu) else {
+        let Some(target) = find_target(target_name) else {
             route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
-                format!("resolution manifest has no published artifact for {target_zhixu}"),
+                format!("resolution manifest has no definition named {target_name:?}"),
             ));
             issues.extend(route_issues);
             continue;
         };
-        if !target.published || target.artifact_hash == [0u8; 32] {
-            route_issues.push(DockIssue::new(
-                "D008",
-                format!("{path}.target"),
-                format!(
-                    "target artifact {} is not published/immutable",
-                    display_identity(&target.name, &target.zhixu)
-                ),
-            ));
-            issues.extend(route_issues);
-            continue;
-        }
 
         // D009：接口按名解析。
         let Some(interface) = target
@@ -2063,8 +1256,7 @@ pub fn link_dock_routes(
                 "D009",
                 format!("{path}.interface"),
                 format!(
-                    "target {} has no interface {:?}",
-                    display_identity(&target.name, &target.zhixu),
+                    "target {target_name:?} has no interface {:?}",
                     config.interface_name
                 ),
             ));
@@ -2081,138 +1273,89 @@ pub fn link_dock_routes(
                 "D020",
                 format!("{path}.order.mode"),
                 format!(
-                    "interface {:?} of target {} allows orderModes {:?}, found {:?}",
+                    "interface {:?} of target {target_name:?} allows orderModes {:?}, found {:?}",
                     config.interface_name,
-                    display_identity(&target.name, &target.zhixu),
                     interface.order_modes,
                     config.order_mode
                 ),
             ));
             issues.extend(route_issues);
             continue;
-        }
-        let name_word = interface_name_key(&interface.name);
-        let route_id_word = route_id(&local_definition_ref, &route.stage_key);
+        };
 
         // D009（端口存在 + 方向）。
         let mut resolved_inputs = Vec::new();
         for (local_hook, port_name) in &config.input_map {
-            let Some(port) = interface.inputs.iter().find(|port| &port.port == port_name) else {
+            if interface
+                .inputs
+                .iter()
+                .all(|port| &port.port != port_name)
+            {
                 route_issues.push(DockIssue::new(
                     "D009",
                     format!("{path}.inputMap.{local_hook}"),
                     format!(
-                        "interface {:?} of target {} has no input port {port_name:?}",
-                        config.interface_name, target.zhixu
+                        "interface {:?} of target {target_name:?} has no input port {port_name:?}",
+                        config.interface_name
                     ),
                 ));
                 continue;
-            };
-            let hook_key_word = hook_key(&format!("{}#{local_hook}", route.stage_identifier));
-            let binding = keccak_words(
-                DOMAIN_INPUT_BINDING,
-                &[
-                    route_id_word,
-                    name_word,
-                    hook_key_word,
-                    port_key(port_name),
-                    port.source_id,
-                    port.signal_id,
-                ],
-            );
+            }
             resolved_inputs.push(DockRouteInput {
-                local_hook_name: local_hook.clone(),
+                hook_id: format!("{}#{local_hook}", route.stage_identifier),
                 target_port: port_name.clone(),
-                target_input_signal_hash: port.canonical_input_signal_hash,
-                target_source_id: port.source_id,
-                target_signal_id: port.signal_id,
-                target_stage_identifier: port.stage_identifier.clone(),
-                target_signal_name: port.canonical_input_signal.clone(),
-                binding_hash: binding,
             });
         }
 
         let mut resolved_outputs = Vec::new();
-        let stage = stages_by_identifier
-            .get(route.stage_identifier.as_str())
-            .copied()
-            .expect("unlinked route stage exists");
         for (local_signal, port_name) in &config.signal_map {
-            let Some(port) = interface
+            if interface
                 .outputs
                 .iter()
-                .find(|port| &port.port == port_name)
-            else {
+                .all(|port| &port.port != port_name)
+            {
                 route_issues.push(DockIssue::new(
                     "D009",
                     format!("{path}.signalMap.{local_signal}"),
                     format!(
-                        "interface {:?} of target {} has no output port {port_name:?}",
-                        config.interface_name, target.zhixu
+                        "interface {:?} of target {target_name:?} has no output port {port_name:?}",
+                        config.interface_name
                     ),
                 ));
                 continue;
-            };
-            let local_source_id = keccak_word(stage.source.as_bytes());
-            let local_signal_id =
-                keccak_word(format!("{}.{}", route.stage_identifier, local_signal).as_bytes());
-            let binding = keccak_words(
-                DOMAIN_OUTPUT_BINDING,
-                &[
-                    route_id_word,
-                    name_word,
-                    local_source_id,
-                    local_signal_id,
-                    port_key(port_name),
-                    port.source_id,
-                    port.signal_id,
-                ],
-            );
+            }
             resolved_outputs.push(DockRouteOutput {
-                local_signal_name: local_signal.clone(),
-                local_source_id,
-                local_signal_id,
+                signal: local_signal.clone(),
                 target_port: port_name.clone(),
-                target_output_signal_hash: port.canonical_output_signal_hash,
-                target_source_id: port.source_id,
-                target_signal_id: port.signal_id,
-                target_signal_name: port.canonical_output_signal.clone(),
-                binding_hash: binding,
             });
         }
 
-        // D012：被绑定端口同一 source seam。
+        // D012：被绑定端口同一 source seam。input 端口的 hook 引用不含
+        // source 维度（声明面就无此信息），seam 只能从 output 端口的
+        // canonical signal 前缀观测：绑定 output 时必须全部落在同一 seam。
         let mut seams = BTreeSet::new();
-        for input in &resolved_inputs {
-            if let Some(port) = interface
-                .inputs
-                .iter()
-                .find(|port| port.port == input.target_port)
-            {
-                seams.insert(port.source.clone());
-            }
-        }
         for output in &resolved_outputs {
             if let Some(port) = interface
                 .outputs
                 .iter()
                 .find(|port| port.port == output.target_port)
             {
-                seams.insert(port.source.clone());
+                if let Some((source, _)) = port.signal.split_once("::") {
+                    seams.insert(source.to_string());
+                }
             }
         }
-        if seams.len() != 1 {
+        if seams.len() > 1 {
             route_issues.push(DockIssue::new(
                 "D012",
                 &path,
                 format!(
-                    "all ports bound by one route must share a single target source seam, found {seams:?}"
+                    "all output ports bound by one route must share a single target source seam, found {seams:?}"
                 ),
             ));
             issues.extend(route_issues);
             continue;
         }
-        let source_seam = seams.iter().next().cloned().unwrap_or_default();
 
         // D016：binding 数量上限。
         if resolved_inputs.len() > MAX_DOCK_INPUTS {
@@ -2236,59 +1379,19 @@ pub fn link_dock_routes(
             ));
         }
         // 收尾闸只看本 route 的 issues：route_issues 为空则照常产 route，
-        // 前序 route 的失败不得让后续干净 route 的哈希/根计算被跳过。
+        // 前序 route 的失败不得让后续干净 route 被跳过。
         if !route_issues.is_empty() {
             issues.append(&mut route_issues);
             continue;
         }
 
-        resolved_inputs.sort_by_key(|input| input.binding_hash);
-        resolved_outputs.sort_by_key(|output| output.binding_hash);
-        let inputs_root = merkle_root(
-            &resolved_inputs
-                .iter()
-                .map(|input| input.binding_hash)
-                .collect::<Vec<_>>(),
-        );
-        let outputs_root = merkle_root(
-            &resolved_outputs
-                .iter()
-                .map(|output| output.binding_hash)
-                .collect::<Vec<_>>(),
-        );
-        let mode_word_value = mode_word(&config.order_mode).expect("mode validated (D004)");
-        let route_hash = keccak_words(
-            DOMAIN_ROUTE,
-            &[
-                local_definition_ref,
-                target.definition_ref_hash,
-                name_word,
-                mode_word_value,
-                inputs_root,
-                outputs_root,
-            ],
-        );
         routes.push(DockRoute {
-            route_id: route_id_word,
-            local_definition_ref_hash: local_definition_ref,
             stage_identifier: route.stage_identifier.clone(),
-            stage_key: route.stage_key,
-            target_definition_ref_hash: target.definition_ref_hash,
-            target_zhixu_uid: target.zhixu.clone(),
-            target_zhixu_name: target.name.clone(),
+            target_name: target_name.clone(),
             target_interface_name: interface.name.clone(),
             order_mode: config.order_mode.clone(),
-            target_artifact_hash: target.artifact_hash,
-            target_cloud_artifact_id: target.cloud_artifact_id.clone(),
-            target_evm_plan_id: target.evm_plan_id,
-            target_interface_root: interface.interface_leaf,
-            target_dock_interface_root: target.dock_interface_root,
-            source_seam,
             inputs: resolved_inputs,
             outputs: resolved_outputs,
-            inputs_root,
-            outputs_root,
-            route_hash,
         });
     }
 
@@ -2296,21 +1399,16 @@ pub fn link_dock_routes(
         return Err(issues);
     }
 
-    // D015：route 启动图无环且深度受限。节点为 zhixu 派生 uid（内容寻址
-    // 身份），边为 resolved route 与 manifest 提供的目标自身 dockEdges。
+    // D015：route 启动图无环且深度受限。linker 只观测得到本地定义的出边
+    //（manifest 不携带目标的下游边），跨定义环检测由持有完整图的各轨
+    // 解析面承担；本地可见的自环（name 解析键回指自身）在此拒绝。
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let local_node = local.uid.clone();
-    for target in &manifest.targets {
-        let node = target.zhixu.clone();
-        for zhixu in &target.dock_edges {
-            edges.entry(node.clone()).or_default().insert(zhixu.clone());
-        }
-    }
+    let local_node = local_name.to_string();
     for route in &routes {
         edges
             .entry(local_node.clone())
             .or_default()
-            .insert(route.target_zhixu_uid.clone());
+            .insert(route.target_name.clone());
     }
     if let Some(cycle) = find_route_cycle(&edges) {
         issues.push(DockIssue::new(
@@ -2337,7 +1435,7 @@ pub fn link_dock_routes(
     if !issues.is_empty() {
         return Err(issues);
     }
-    routes.sort_by_key(|route| route.route_id);
+    routes.sort_by(|left, right| left.stage_identifier.cmp(&right.stage_identifier));
     Ok(routes)
 }
 
@@ -2398,250 +1496,64 @@ fn max_reachable_route_depth(edges: &BTreeMap<String, BTreeSet<String>>, root: &
     maximum
 }
 
-/// `dockRoutesRoot`：一个定义全部已解析 route 的 routeHash Merkle root。
-pub fn dock_routes_root(routes: &[DockRoute]) -> Word {
-    merkle_root(
-        &routes
-            .iter()
-            .map(|route| route.route_hash)
-            .collect::<Vec<_>>(),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// EIP-712 entrance permit digest（golden vector 与 TS/Solidity 对齐用）
-// ---------------------------------------------------------------------------
-
-pub const PERMIT_TYPEHASH_SUFFIX: &str = "UVPDockEntrancePermitV2(bytes32 targetPlanId,bytes32 targetEntrancePortId,bytes32 interfaceNameId,bytes32 localPlanId,bytes32 routeHash,bytes32 dockInstanceId,bytes32 linkedOrderId,uint256 feeLimit,uint256 nonce,uint256 deadline)";
-
-/// 域 version 由调用方传入（链侧随 docking module abiVersion 演进）。
-pub fn eip712_permit_domain_separator(
-    chain_id: u64,
-    verifying_contract: &str,
-    version: &str,
-) -> Option<Word> {
-    let address = address_word(verifying_contract)?;
-    Some(keccak_words(
-        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
-        &[
-            keccak_word(b"UVPDockingModule"),
-            keccak_word(version.as_bytes()),
-            u64_word(chain_id),
-            address,
-        ],
-    ))
-}
-
-/// 注意：EIP-712 structHash/typehash 与 domain 的编码是
-/// `keccak256(concat(...))`（无 domain word 前缀），与 keccak_words 不同；
-/// 这里按 EIP-712 规范逐字实现，Solidity 端用 abi.encode 得到相同结果。
-#[allow(clippy::too_many_arguments)]
-pub fn eip712_permit_struct_hash(
-    target_plan_id: &Word,
-    target_entrance_port_id: &Word,
-    interface_name_id: &Word,
-    local_plan_id: &Word,
-    route_hash: &Word,
-    dock_instance: &Word,
-    linked_order: &Word,
-    nonce: u64,
-    deadline: u64,
-) -> Option<Word> {
-    let fee_limit = 0u64; // 无费用机制，feeLimit 固定 0（与合约一致）
-    let mut buf = Vec::with_capacity(32 * 10);
-    buf.extend_from_slice(&keccak_word(PERMIT_TYPEHASH_SUFFIX.as_bytes()));
-    for word in [
-        target_plan_id,
-        target_entrance_port_id,
-        interface_name_id,
-        local_plan_id,
-        route_hash,
-        dock_instance,
-        linked_order,
-    ] {
-        buf.extend_from_slice(word);
-    }
-    buf.extend_from_slice(&u64_word(fee_limit));
-    buf.extend_from_slice(&u64_word(nonce));
-    buf.extend_from_slice(&u64_word(deadline));
-    Some(keccak_word(&buf))
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn eip712_permit_digest(
-    chain_id: u64,
-    verifying_contract: &str,
-    version: &str,
-    target_plan_id: &Word,
-    target_entrance_port_id: &Word,
-    interface_name_id: &Word,
-    local_plan_id: &Word,
-    route_hash: &Word,
-    dock_instance: &Word,
-    linked_order: &Word,
-    nonce: u64,
-    deadline: u64,
-) -> Option<Word> {
-    let domain_separator = eip712_permit_domain_separator(chain_id, verifying_contract, version)?;
-    let struct_hash = eip712_permit_struct_hash(
-        target_plan_id,
-        target_entrance_port_id,
-        interface_name_id,
-        local_plan_id,
-        route_hash,
-        dock_instance,
-        linked_order,
-        nonce,
-        deadline,
-    )?;
-    let mut buf = Vec::with_capacity(2 + 64);
-    buf.extend_from_slice(b"\x19\x01");
-    buf.extend_from_slice(&domain_separator);
-    buf.extend_from_slice(&struct_hash);
-    Some(keccak_word(&buf))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn mode_and_order_modes_words_are_pinned() {
-        assert_eq!(mode_word("new").unwrap(), u8_word(0));
-        assert_eq!(mode_word("existing").unwrap(), u8_word(1));
-        assert!(mode_word("derived-v1").is_none());
-        assert_eq!(
-            order_modes_word(&["new".to_string()]).unwrap(),
-            u8_word(0b01)
-        );
-        assert_eq!(
-            order_modes_word(&["existing".to_string()]).unwrap(),
-            u8_word(0b10)
-        );
-        assert_eq!(
-            order_modes_word(&["existing".to_string(), "new".to_string()]).unwrap(),
-            u8_word(0b11)
-        );
-        assert!(order_modes_word(&[]).is_none());
-        assert!(order_modes_word(&["new".to_string(), "new".to_string()]).is_none());
-        assert!(order_modes_word(&["bogus".to_string()]).is_none());
-    }
-
-    #[test]
-    fn derived_uid_shape_is_enforced_on_targets() {
-        assert!(valid_derived_uid("zx-0123456789abcdef0123456789abcdef"));
-        assert!(!valid_derived_uid("zx-payment-execution"));
-        assert!(!valid_derived_uid("0123456789abcdef0123456789abcdef"));
-        assert!(!valid_derived_uid("zx-0123456789ABCDEF0123456789ABCDEF"));
-        assert!(!valid_derived_uid("zx-0123456789abcdef0123456789abcde"));
-    }
-
-    #[test]
-    fn dock_instance_id_separates_modes_and_order_refs() {
-        let domain = [1u8; 32];
-        let plan = [2u8; 32];
-        let def_ref = [3u8; 32];
-        let order = [4u8; 32];
-        let route_id = [5u8; 32];
-        let route_hash = [6u8; 32];
-        let new_mode = mode_word("new").unwrap();
-        let existing_mode = mode_word("existing").unwrap();
-        let name = interface_name_key("production_service");
-        let order_ref = target_order_ref_key("factory-a/P001");
-        let new_instance = dock_instance_id(
-            &domain,
-            &plan,
-            &def_ref,
-            &order,
-            &route_id,
-            &route_hash,
-            &new_mode,
-            &name,
-            None,
-        );
-        let existing_same_ref = dock_instance_id(
-            &domain,
-            &plan,
-            &def_ref,
-            &order,
-            &route_id,
-            &route_hash,
-            &existing_mode,
-            &name,
-            Some(&order_ref),
-        );
-        let existing_other_ref = dock_instance_id(
-            &domain,
-            &plan,
-            &def_ref,
-            &order,
-            &route_id,
-            &route_hash,
-            &existing_mode,
-            &name,
-            Some(&target_order_ref_key("factory-a/P002")),
-        );
-        assert_ne!(new_instance, existing_same_ref);
-        assert_ne!(existing_same_ref, existing_other_ref);
-    }
-
-    #[test]
-    fn manifest_output_ports_with_missing_identity_words_are_rejected() {
-        // output 端口 sourceId/signalId 缺失/非法不得静默落成零 word——
-        // 与 input 端口同口径的 D008 确定性错误。
-        let interface = json!({
-            "name": "production_evidence",
-            "orderModes": ["existing"],
-            "inputs": [],
-            "outputs": [{
-                "port": "scrap_declared",
-                "canonicalOutputSignal": "factory::manufacturing.produce.scrap_created",
-                "canonicalOutputSignalHash": word_hex(&[0xaa; 32]),
-                "source": "factory",
-                "sourceId": word_hex(&[0xab; 32]),
-                "signalId": word_hex(&[0xbb; 32]),
-                "leafHash": word_hex(&[0xcc; 32])
-            }],
-            "inputsRoot": word_hex(&EMPTY_MERKLE_ROOT),
-            "outputsRoot": word_hex(&[0x01; 32]),
-            "interfaceRoot": word_hex(&[0xdd; 32])
+    fn manifest_rejects_duplicate_definition_names() {
+        // name 是 linker 的解析键：manifest 内重名会让同名查找二义，
+        // 必须在解析期响亮拒绝而不是静默取第一条。
+        let manifest = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [
+                { "name": "payment_execution", "interfaces": [minimal_interface("svc")] },
+                { "name": "payment_execution", "interfaces": [minimal_interface("svc")] },
+            ]
         });
-        let manifest = |interface: Value| {
-            json!({
-                "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-                "definitions": [{
-                    "zhixu": "zx-0123456789abcdef0123456789abcdef",
-                    "definition": { "apiVersion": "uvp/v0" },
-                    "definitionRefHash": word_hex(&[0xee; 32]),
-                    "artifactHash": word_hex(&[0xef; 32]),
-                    "published": true,
-                    "interfaces": [interface]
-                }]
-            })
-        };
-        for (field, removal) in [("sourceId", true), ("signalId", false)] {
-            let mut poisoned = interface.clone();
-            if removal {
-                poisoned["outputs"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove(field);
-            } else {
-                poisoned["outputs"][0][field] = json!("not-a-word");
-            }
-            let issues = parse_resolution_manifest(&manifest(poisoned)).unwrap_err();
-            assert!(
-                issues.iter().any(|issue| {
-                    issue.message.contains(field) && issue.message.contains("must be")
-                }),
-                "{field}: {issues:?}"
-            );
-        }
+        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "D008" && issue.message.contains("duplicate")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_interface_fields() {
+        let interface = json!({
+            "name": "svc",
+            "orderModes": ["new"],
+            "inputs": { "execute": { "hook": "main.work#DOCK_ENTER" } },
+            "outputs": {},
+            "artifactHash": "0x00",
+        });
+        let manifest = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{ "name": "payment_execution", "interfaces": [interface] }],
+        });
+        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "D008" && issue.message.contains("artifactHash")),
+            "{issues:?}"
+        );
+    }
+
+    fn minimal_interface(name: &str) -> Value {
+        json!({
+            "name": name,
+            "orderModes": ["new"],
+            "inputs": { "execute": { "hook": "main.work#DOCK_ENTER" } },
+            "outputs": {},
+        })
     }
 
     #[test]
     fn route_depth_counts_local_definition_and_targets() {
-        let root = "zx-0";
+        let root = "local-def";
         let mut edges = BTreeMap::new();
         for index in 0..7 {
             edges

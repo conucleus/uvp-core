@@ -5,13 +5,10 @@ use thiserror::Error;
 use uvp_hook_dsl::{
     parse_hook, Compatibility, DependencyKind, ParseHookOutput, ParseHookRequest, Profile,
 };
-use uvp_ir::hash_canonical;
 use uvp_model::{ZhixuDefinition, ZhixuExecutor, ZhixuStage};
 
 pub mod dock;
 
-const COMPILER_NAME: &str = "uvp-eth-compiler";
-const COMPILER_VERSION: &str = "0.1.0";
 /// HookPlan 产物信封版本（TS 权威 uvp-protocol compiler types 的
 /// HOOK_PLAN_SCHEMA_VERSION 镜像）。pub 供 uvp-node NAPI 导出
 /// hookPlanSchemaVersion：TS 侧兼容门逐字比对两侧常量，防漂移。
@@ -87,77 +84,9 @@ fn issues_from_dock(issues: &[dock::DockIssue]) -> CompilerError {
     )
 }
 
-/// 定义身份派生域（PRD_102 §5）。TS 只在测试/工具对拍，宿主消费产物，
-/// 不复刻第二份派生。
-pub const DEFINITION_UID_DOMAIN: &str = "uvp:definition-uid:v1";
-
-/// 剔除 `metadata.annotations`：注解永不参与任何身份/哈希（PRD_101/
-/// PRD_102），身份派生与 planHash 的 source 快照共用同一剔除口径。
-pub fn strip_annotations(definition_value: &Value) -> Value {
-    let mut stripped = definition_value.clone();
-    if let Some(metadata) = stripped.get_mut("metadata").and_then(Value::as_object_mut) {
-        metadata.remove("annotations");
-    }
-    stripped
-}
-
-/// 定义身份（PRD_102 §5）：内容派生，唯一路径，无兜底。
-/// 输入 = 定义 JSON 剔除 `metadata.annotations` → canonical JSON →
-/// `keccak256("uvp:definition-uid:v1:" + canonical_json)` →
-/// `"zx-" + hex 前 32 字符`。内容任一变更（含 name）即新身份。
-pub fn definition_uid(definition_value: &Value) -> Result<String> {
-    let digest =
-        uvp_ir::hash_canonical(DEFINITION_UID_DOMAIN, &strip_annotations(definition_value))
-            .map_err(|err| CompilerError::Message(err.to_string()))?;
-    // digest 形如 "0x" + 64 hex；uid = "zx-" + 前 32 字符。
-    Ok(format!("zx-{}", &digest[2..2 + 32]))
-}
-
-/// Compute the stable plan identity shared by hook-plan and cloud artifacts.
-/// Dock routes carry this value as their local plan namespace so that two
-/// otherwise identical orders from different plan revisions cannot alias.
-fn plan_id(definition: &ZhixuDefinition, platform: &Value, zhixu_id: &str) -> Result<String> {
-    hash_canonical(
-        "uvp:hook-plan-id:v1",
-        &json!({
-            "compiler": { "name": COMPILER_NAME, "version": COMPILER_VERSION },
-            "platform": platform,
-            "zhixuId": zhixu_id,
-            "zhixuName": definition.metadata.name,
-        }),
-    )
-    .map_err(|err| CompilerError::Message(err.to_string()))
-}
-
-/// Add the local plan namespace to every resolved route.  This is metadata
-/// only: route hashes/roots intentionally remain unchanged, while runtime
-/// dockInstanceId derivation consumes the plan id explicitly.
-fn with_local_plan_id(mut routes: Vec<Value>, local_plan_id: &str) -> Vec<Value> {
-    for route in &mut routes {
-        if let Some(local) = route.get_mut("local").and_then(Value::as_object_mut) {
-            local.insert(
-                "planId".to_string(),
-                Value::String(local_plan_id.to_string()),
-            );
-        }
-    }
-    routes
-}
-
-/// 未解析 route 的同款 planId 注入（§8.8）：dockInstanceId 推导消费
-/// localPlanId，运行时在选择记录补齐目标后按 v2 公式重算身份。
-fn with_unresolved_plan_id(mut routes: Vec<Value>, local_plan_id: &str) -> Vec<Value> {
-    for route in &mut routes {
-        if let Some(object) = route.as_object_mut() {
-            object.insert(
-                "localPlanId".to_string(),
-                Value::String(local_plan_id.to_string()),
-            );
-        }
-    }
-    routes
-}
-
+/// hook_plan 产物：中性 plan 壳（模型/校验/编译结果 + dock 声明面）。
+/// 哈希承诺（planHash/roots/派生身份）由链轨 TS 在此壳上计算；云轨
+/// 身份归 DB——core 不产出任何身份字段。
 pub fn compile_zhixu_hook_plan(
     definition_value: &Value,
     resolution_manifest: Option<&Value>,
@@ -180,17 +109,9 @@ pub fn compile_zhixu_hook_plan(
         .map(|entry| entry.stage_identifier.clone())
         .collect::<BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-    let zhixu_id = definition_uid(definition_value)?;
 
     // Dock：目标接口编译 + 调用方 route 收集 + link。
-    let dock_state = compile_dock_state(
-        &definition,
-        &zhixu_id,
-        &stage_pairs,
-        resolution_manifest,
-        allow_unresolved,
-        DockProfile::Evm,
-    )?;
+    let dock_state = compile_dock_state(&definition, &stage_pairs, resolution_manifest, allow_unresolved)?;
 
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_stage_executors(
@@ -228,55 +149,24 @@ pub fn compile_zhixu_hook_plan(
     let dependency_index = build_dependency_index(&compiled_hooks);
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
     let executor_routes = build_executor_routes(&stage_entries);
-    let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
-    let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
-    let unresolved_routes = with_unresolved_plan_id(dock_state.unresolved_json.clone(), &plan_id);
 
-    let mut payload = json!({
+    let mut artifact = json!({
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
-        "planId": plan_id,
-        "zhixuId": zhixu_id,
         "zhixuName": definition.metadata.name,
         "platform": platform,
         "compiledHooks": compiled_hooks,
         "dependencyIndex": dependency_index,
         "executorRoutes": executor_routes,
-        "dockInterface": dock_state.interface_json,
-        "dockRoutes": dock_routes,
-        "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
-        "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
+        "dockRoutes": Value::Array(dock_state.routes_json),
         "selectedStageBindings": selected_stage_bindings,
         "signalCapabilities": signal_capabilities,
-        // source 快照剔除 metadata.annotations：注解永不参与任何身份，
-        // planHash 随业务内容变化、不随文档注解变化。
-        "source": uvp_ir::canonicalize(&strip_annotations(definition_value)).map_err(|err| CompilerError::Message(err.to_string()))?,
     });
-    // 空清单不落字段：既有定义的 planHash 不因新增可选字段漂移。
-    if !unresolved_routes.is_empty() {
-        payload["unresolvedDockRoutes"] = Value::Array(unresolved_routes.clone());
+    if let Some(interface_json) = dock_state.interface_json {
+        artifact["dockInterface"] = interface_json;
     }
-    let plan_hash = hash_canonical("uvp:hook-plan-artifact:v1", &payload)
-        .map_err(|err| CompilerError::Message(err.to_string()))?;
-
-    let mut artifact = json!({
-        "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
-        "planId": payload["planId"].clone(),
-        "zhixuId": payload["zhixuId"].clone(),
-        "zhixuName": payload["zhixuName"].clone(),
-        "platform": payload["platform"].clone(),
-        "compiledHooks": payload["compiledHooks"].clone(),
-        "dependencyIndex": payload["dependencyIndex"].clone(),
-        "executorRoutes": payload["executorRoutes"].clone(),
-        "dockInterface": payload["dockInterface"].clone(),
-        "dockRoutes": payload["dockRoutes"].clone(),
-        "dockRoutesRoot": payload["dockRoutesRoot"].clone(),
-        "dockInterfaceRoot": payload["dockInterfaceRoot"].clone(),
-        "selectedStageBindings": payload["selectedStageBindings"].clone(),
-        "signalCapabilities": payload["signalCapabilities"].clone(),
-        "planHash": plan_hash,
-    });
-    if !unresolved_routes.is_empty() {
-        artifact["unresolvedDockRoutes"] = Value::Array(unresolved_routes);
+    // 空清单不落字段：未解析 route 是动态选择的声明面，目标空缺。
+    if !dock_state.unresolved_json.is_empty() {
+        artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
     }
     Ok(artifact)
 }
@@ -303,15 +193,8 @@ pub fn compile_cloud_artifact(
         .map(|entry| entry.stage_identifier.clone())
         .collect::<BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-    let zhixu_id = definition_uid(definition_value)?;
-    let dock_state = compile_dock_state(
-        &definition,
-        &zhixu_id,
-        &stage_pairs,
-        resolution_manifest,
-        allow_unresolved,
-        DockProfile::Cloud,
-    )?;
+    let dock_state =
+        compile_dock_state(&definition, &stage_pairs, resolution_manifest, allow_unresolved)?;
 
     let mut validation_issues = Vec::new();
     // Cloud and hook_plan are two artifact profiles over the same definition;
@@ -338,9 +221,6 @@ pub fn compile_cloud_artifact(
         return Err(CompilerError::Issues(validation_issues.join("; ")));
     }
     let platform = normalize_platform_value(&definition.spec.platform)?;
-    let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
-    let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
-    let unresolved_routes = with_unresolved_plan_id(dock_state.unresolved_json.clone(), &plan_id);
     let mut stages = Vec::new();
     let mut hooks = Vec::new();
 
@@ -359,27 +239,25 @@ pub fn compile_cloud_artifact(
 
     let mut artifact = json!({
         "schemaVersion": CLOUD_ARTIFACT_SCHEMA_VERSION,
-        "planId": plan_id,
-        "zhixuId": zhixu_id,
         "zhixuName": definition.metadata.name,
         "platform": platform,
         "stages": stages,
         "hooks": hooks,
         "orderStageDefaults": stages,
-        "dockInterface": dock_state.interface_json,
-        "dockRoutes": dock_routes,
-        "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
-        "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
+        "dockRoutes": Value::Array(dock_state.routes_json),
     });
-    // 空清单不落字段：未解析 route 是动态选择的声明面（§8.8），无目标
-    // 身份可承诺，也不参与 dockRoutesRoot。
-    if !unresolved_routes.is_empty() {
-        artifact["unresolvedDockRoutes"] = Value::Array(unresolved_routes);
+    if let Some(interface_json) = dock_state.interface_json {
+        artifact["dockInterface"] = interface_json;
+    }
+    // 空清单不落字段：未解析 route 是动态选择的声明面，目标空缺。
+    if !dock_state.unresolved_json.is_empty() {
+        artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
     }
     Ok(artifact)
 }
 
-/// dock_link：只做 link，输出已解析 route 与根（dock_link API 边界）。
+/// dock_link：只做 link 的 API 边界——校验父定义的 dock 声明能按 manifest
+/// 全量解析，输出中性 route 与接口声明（不编译 hooks）。
 fn compile_dock_link(
     definition_value: &Value,
     resolution_manifest: Option<&Value>,
@@ -395,47 +273,27 @@ fn compile_dock_link(
         .iter()
         .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
         .collect::<Vec<_>>();
-    let zhixu_id = definition_uid(definition_value)?;
-    let dock_state = compile_dock_state(
-        &definition,
-        &zhixu_id,
-        &stage_pairs,
-        resolution_manifest,
-        false,
-        DockProfile::Evm,
-    )?;
-    // 与 hook_plan/cloud 同款 planId 注入：dockInstanceId 推导消费 route 的
-    // local.planId（见 with_local_plan_id 契约），dock_link 产物漏注会使同
-    // 一 route 经不同产物路径推导出不一致的实例身份。
-    let platform = normalize_platform_value(&definition.spec.platform)?;
-    let plan_id = plan_id(&definition, &platform, &zhixu_id)?;
-    let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
-    Ok(json!({
+    let dock_state = compile_dock_state(&definition, &stage_pairs, resolution_manifest, false)?;
+    let mut artifact = json!({
         "schemaVersion": "uvp.dockLink.v1",
-        "dockInterface": dock_state.interface_json,
-        "dockRoutes": dock_routes,
-        "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
-        "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
-    }))
+        "dockRoutes": Value::Array(dock_state.routes_json),
+    });
+    if let Some(interface_json) = dock_state.interface_json {
+        artifact["dockInterface"] = interface_json;
+    }
+    if !dock_state.unresolved_json.is_empty() {
+        artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
+    }
+    Ok(artifact)
 }
 
-/// D018（运行期目标身份硬门槛）：可运行产物必须能解析 runtime target identity——
-/// EVM 轨要求 manifest 提供 target evmPlanId，Cloud 轨要求 cloudArtifactId。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DockProfile {
-    Evm,
-    Cloud,
-}
-
-/// 一次编译中的 dock 状态：接口产物、未链接/已链接 route、hook 标记输入。
+/// 一次编译中的 dock 状态：接口声明、未链接/已链接 route、hook 标记输入。
 struct DockState {
     interface_json: Option<Value>,
     routes_json: Vec<Value>,
-    /// target:null 动态选择 route 的声明面产物（§8.8）：不进 link、不进
-    /// dockRoutesRoot——目标身份空缺的 route 没有可承诺的 routeHash。
+    /// target:null 动态选择 route 的声明面产物：不进 link——目标空缺的
+    /// route 没有可解析的绑定面。
     unresolved_json: Vec<Value>,
-    dock_routes_root: dock::Word,
-    dock_interface_root: dock::Word,
     /// dockInterface input port 引用的本地 hook（`<task>.<stage>#<hook>`），
     /// 这些 mailbox hook 不走普通依赖引用校验（dock 模块按端口约束校验）。
     input_port_hook_ids: BTreeSet<String>,
@@ -446,46 +304,39 @@ struct DockState {
 
 fn compile_dock_state(
     definition: &ZhixuDefinition,
-    zhixu_id: &str,
     stage_pairs: &[(String, ZhixuStage)],
     resolution_manifest: Option<&Value>,
     allow_unresolved: bool,
-    profile: DockProfile,
 ) -> Result<DockState> {
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
 
-    // target:null 的动态选择 route 不进 link（目标身份空缺，无 D008 可言），
+    // target:null 的动态选择 route 不进 link（目标空缺，无 D008 可言），
     // 改入未解析清单随产物携带（PRD_100 §10.3：云轨运行时由选择记录补齐）。
-    let local_definition_ref = dock::definition_ref_hash(zhixu_id);
     let mut static_routes = Vec::new();
     let mut unresolved_json = Vec::new();
     for route in unlinked {
-        match route.config.target_zhixu.as_ref() {
+        match route.config.target_name.as_ref() {
             Some(_) => static_routes.push(route),
-            None => unresolved_json.push(route.unresolved_json(&local_definition_ref)),
+            None => unresolved_json.push(route.unresolved_json()),
         }
     }
 
-    let interface_artifact = if definition.spec.dock_interface.is_empty() {
+    let interfaces = if definition.spec.dock_interface.is_empty() {
         None
     } else {
         Some(
-            dock::compile_dock_interface(&definition.spec.dock_interface, zhixu_id, stage_pairs)
+            dock::compile_dock_interface(&definition.spec.dock_interface, stage_pairs)
                 .map_err(|issues| issues_from_dock(&issues))?,
         )
     };
-    let interface_root = interface_artifact
-        .as_ref()
-        .map(|artifact| artifact.interface_root)
-        .unwrap_or(dock::EMPTY_MERKLE_ROOT);
-    let input_port_hook_ids = interface_artifact
-        .as_ref()
-        .map(|artifact| artifact.input_port_hook_ids())
+    let input_port_hook_ids = interfaces
+        .as_deref()
+        .map(dock::input_port_hook_ids)
         .unwrap_or_default();
-    let entrance_hook_ids = interface_artifact
-        .as_ref()
-        .map(|artifact| artifact.entrance_hook_ids())
+    let entrance_hook_ids = interfaces
+        .as_deref()
+        .map(dock::entrance_hook_ids)
         .unwrap_or_default();
 
     let routes = if static_routes.is_empty() {
@@ -495,10 +346,7 @@ fn compile_dock_state(
             Some(manifest_value) => {
                 let manifest = dock::parse_resolution_manifest(manifest_value)
                     .map_err(|issues| issues_from_dock(&issues))?;
-                let identity = dock::LocalLinkIdentity {
-                    uid: zhixu_id.to_string(),
-                };
-                dock::link_dock_routes(&identity, stage_pairs, &static_routes, &manifest)
+                dock::link_dock_routes(&definition.metadata.name, &static_routes, &manifest)
                     .map_err(|issues| issues_from_dock(&issues))?
             }
             None if allow_unresolved => Vec::new(),
@@ -509,42 +357,16 @@ fn compile_dock_state(
             }
         }
     };
-    // D018：runtime target identity 必须完整可解析（profile 编译硬门槛）。
-    if !allow_unresolved {
-        for route in &routes {
-            let resolvable = match profile {
-                DockProfile::Evm => route.target_evm_plan_id.is_some(),
-                DockProfile::Cloud => route.target_cloud_artifact_id.is_some(),
-            };
-            if !resolvable {
-                return Err(CompilerError::Message(format!(
-                    "D018 {}.executor.zhixuExecutorConfig: resolved target {} has no {} in the resolution manifest; the {} profile cannot resolve the runtime target identity",
-                    route.stage_identifier,
-                    dock::display_identity(&route.target_zhixu_name, &route.target_zhixu_uid),
-                    match profile {
-                        DockProfile::Evm => "evmPlanId",
-                        DockProfile::Cloud => "cloudArtifactId",
-                    },
-                    match profile {
-                        DockProfile::Evm => "evm",
-                        DockProfile::Cloud => "cloud",
-                    }
-                )));
-            }
-        }
-    }
     let routes_json = routes
         .iter()
         .map(|route| route.to_json())
         .collect::<Vec<_>>();
     Ok(DockState {
-        interface_json: interface_artifact
-            .as_ref()
-            .map(|artifact| artifact.to_json()),
+        interface_json: interfaces
+            .as_deref()
+            .map(dock::interface_declarations_json),
         routes_json,
         unresolved_json,
-        dock_routes_root: dock::dock_routes_root(&routes),
-        dock_interface_root: interface_root,
         input_port_hook_ids,
         entrance_hook_ids,
     })
@@ -589,9 +411,8 @@ struct StageEntry {
     stage_identifier: String,
 }
 
-/// 全局 stage.source 上限：source 既是路由键也是 sourceId=keccak(source)
-/// 的哈希输入，落库列（订阅路由维度）宽 36——与订阅 target source 同值
-/// （Go 镜像 zhixu_schema.go 的 ≤36 同款）。
+/// 全局 stage.source 上限：source 是路由键，落库列（订阅路由维度）宽
+/// 36——与订阅 target source 同值（Go 镜像 zhixu_schema.go 的 ≤36 同款）。
 const MAX_STAGE_SOURCE_BYTES: usize = 36;
 /// DDL 维度镜像：global_zhixu.name / global_stage.stage_identifier
 /// VARCHAR(100)。
@@ -658,8 +479,8 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
             }
             // stage.source：非空、plain identifier 字符集、≤36（与订阅
             // target source 同值）。空串会以空键混进 mintedSources；含
-            // 空格/Unicode 的 source 是路由键与 keccak 输入，两侧必须逐字节
-            // 一致（Go 镜像 zhixu_schema.go 同款）。
+            // 空格/Unicode 的 source 是路由键，两侧必须逐字节一致
+            // （Go 镜像 zhixu_schema.go 同款）。
             if stage.source.trim().is_empty() {
                 issues.push(format!(
                     "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be non-empty"
@@ -1655,8 +1476,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// 任意 32 hex 形态的 uid 占位（link 不可达目标，仅形态合法）。
-    const UNKNOWN_TARGET: &str = "zx-00000000000000000000000000000001";
+    /// 任意 name 形态的未发布目标占位（link 不可达目标，仅形态合法）。
+    const UNKNOWN_TARGET: &str = "unpublished-zhixu";
 
     // ------------------------------------------------------------------
     // 目标示例（payment_execution）：两个具名接口
@@ -1725,14 +1546,12 @@ mod tests {
         })
     }
 
-    fn target_uid() -> String {
-        definition_uid(&target_payment_definition()).expect("target uid derives")
-    }
+    const TARGET_NAME: &str = "payment_execution";
 
     // ------------------------------------------------------------------
     // 调用方示例（settlement）：new 模式静态指定生产委托。
     // ------------------------------------------------------------------
-    fn parent_settlement_definition(target_uid: &str) -> Value {
+    fn parent_settlement_definition(target_name: &str) -> Value {
         json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
@@ -1771,7 +1590,7 @@ mod tests {
                             "executor": {
                                 "supplierType": "zhixu",
                                 "zhixuExecutorConfig": {
-                                    "target": { "zhixu": target_uid },
+                                    "target": { "zhixu": target_name },
                                     "interface": "payment_service",
                                     "order": { "mode": "new" },
                                     "inputMap": { "EXECUTE": "execute" },
@@ -1788,7 +1607,7 @@ mod tests {
     // ------------------------------------------------------------------
     // 调用方示例（recycling）：existing 模式动态引用已有事实。
     // ------------------------------------------------------------------
-    fn parent_recycling_definition(target_uid: &str) -> Value {
+    fn parent_recycling_definition(target_name: &str) -> Value {
         json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
@@ -1806,7 +1625,7 @@ mod tests {
                             "executor": {
                                 "supplierType": "zhixu",
                                 "zhixuExecutorConfig": {
-                                    "target": { "zhixu": target_uid },
+                                    "target": { "zhixu": target_name },
                                     "interface": "payment_evidence",
                                     "order": { "mode": "existing" },
                                     "signalMap": { "cmp": "cancelled" }
@@ -1819,48 +1638,21 @@ mod tests {
         })
     }
 
-    /// 构造 resolution manifest v2：真实流程由 Store/发布系统在目标发布后
-    /// 生成；测试中直接编译目标定义取其产物（内嵌定义全文）。
-    fn manifest_for(target: &Value, extra_edges: Option<Value>) -> Value {
+    /// 构造 resolution manifest：真实流程由 Store/发布系统在目标发布后
+    /// 生成；测试中直接编译目标定义取其中性接口声明。
+    fn manifest_entry(target: &Value) -> Value {
         let plan = compile_zhixu_hook_plan(target, None, true).expect("target compiles");
-        let interface = plan["dockInterface"].clone();
-        let mut entry = json!({
-            "zhixu": definition_uid(target).expect("uid derives"),
-            "definition": target,
-            "definitionRefHash": interface["definition"]["definitionRefHash"].clone(),
-            "artifactHash": plan["planHash"].clone(),
-            "published": true,
-            "interfaces": interface["interfaces"].clone(),
-            "evmPlanId": plan["planId"].clone(),
-            "cloudArtifactId": format!("artifact://{}", plan["planHash"].as_str().unwrap_or(""))
-        });
-        if let Some(edges) = extra_edges {
-            entry["dockEdges"] = edges;
-        }
         json!({
-            "schemaVersion": "uvp.dock.resolution.v2",
-            "definitions": [entry]
+            "name": plan["zhixuName"].clone(),
+            "interfaces": plan["dockInterface"].clone(),
         })
     }
 
-    #[test]
-    fn definition_uid_is_content_derived_and_annotation_free() {
-        // PRD_102 §5：uid 从内容派生；annotations 永不参与；name/labels 是
-        // 内容，变更即新身份。
-        let mut annotated = target_payment_definition();
-        annotated["metadata"]["annotations"] = json!({ "team": "payments", "version": "9.9.9" });
-        assert_eq!(
-            definition_uid(&annotated).unwrap(),
-            target_uid(),
-            "annotations must not participate in the derived uid"
-        );
-        let mut labeled = target_payment_definition();
-        labeled["metadata"]["labels"] = json!({ "tier": "gold" });
-        assert_ne!(definition_uid(&labeled).unwrap(), target_uid());
-        let mut renamed = target_payment_definition();
-        renamed["metadata"]["name"] = json!("payment_execution_v2");
-        assert_ne!(definition_uid(&renamed).unwrap(), target_uid());
-        assert!(dock::valid_derived_uid(&target_uid()));
+    fn manifest_for(target: &Value) -> Value {
+        json!({
+            "schemaVersion": dock::DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [manifest_entry(target)]
+        })
     }
 
     #[test]
@@ -1912,37 +1704,69 @@ mod tests {
     }
 
     #[test]
-    fn route_hash_v2_commits_interface_and_mode_not_runtime_plan() {
-        // routeHash_v2 preimage = (localRef, targetRef, interfaceName, mode,
-        // inputBindingsRoot, outputBindingsRoot)：运行期 plan 身份（evmPlanId）
-        // 不在其中——target plan 绑定由 manifest/artifact 承担，route 哈希只
-        // 承诺绑定语义。
+    fn resolved_routes_carry_the_neutral_name_keyed_shape() {
+        // 壳上无身份：route 只携带本地声明与目标 name/接口名/端口绑定，
+        // 不携带任何派生字段（哈希承诺由各轨在此形状上自行计算）。
         let target = target_payment_definition();
-        let manifest = manifest_for(&target, None);
-        let mut no_plan = manifest.clone();
-        no_plan["definitions"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("evmPlanId");
-        let uid = target_uid();
-        let with_plan =
-            compile_cloud_artifact(&parent_settlement_definition(&uid), Some(&manifest), false)
-                .expect("cloud link with evmPlanId compiles");
-        let without_plan =
-            compile_cloud_artifact(&parent_settlement_definition(&uid), Some(&no_plan), false)
-                .expect("cloud link tolerates a missing evmPlanId");
+        let manifest = manifest_for(&target);
+        let plan = compile_zhixu_hook_plan(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&manifest),
+            false,
+        )
+        .expect("new-mode route links");
+        let route = &plan["dockRoutes"][0];
+        assert_eq!(route["schemaVersion"], "uvp.dockRoute.v2");
         assert_eq!(
-            with_plan["dockRoutes"][0]["routeHash"], without_plan["dockRoutes"][0]["routeHash"],
-            "evmPlanId must not participate in the routeHash_v2 preimage"
+            route["local"]["stageIdentifier"],
+            "settlement.execute_payment"
+        );
+        assert_eq!(route["target"]["name"], json!(TARGET_NAME));
+        assert_eq!(route["target"]["interfaceName"], json!("payment_service"));
+        assert_eq!(route["orderMode"], "new");
+        assert_eq!(
+            route["inputBindings"],
+            json!([{ "hookId": "settlement.execute_payment#EXECUTE", "port": "execute" }])
+        );
+        assert_eq!(
+            route["outputBindings"],
+            json!([
+                { "signal": "cmp", "port": "completed" },
+                { "signal": "err", "port": "failed" },
+                { "signal": "str", "port": "started" }
+            ])
+        );
+        for absent in [
+            "routeId",
+            "routeHash",
+            "sourceSeam",
+            "inputBindingsRoot",
+            "outputBindingsRoot",
+            "localDefinitionRefHash",
+            "stageKey",
+        ] {
+            assert!(
+                route.get(absent).is_none()
+                    && route["local"].get(absent).is_none()
+                    && route["target"].get(absent).is_none(),
+                "resolved route must not carry {absent}"
+            );
+        }
+        assert!(
+            route["target"].get("zhixuUid").is_none()
+                && route["target"].get("definitionRefHash").is_none(),
+            "route target must not carry derived identity fields"
         );
 
-        // 接口名与 mode 是 preimage 维度：existing/evidence 路由必须得到不同
-        // 的 routeHash。
-        let recycling =
-            compile_cloud_artifact(&parent_recycling_definition(&uid), Some(&manifest), false)
-                .expect("existing-mode output-only route links");
+        // existing/output-only route 同一中性形状。
+        let recycling = compile_cloud_artifact(
+            &parent_recycling_definition(TARGET_NAME),
+            Some(&manifest),
+            false,
+        )
+        .expect("existing-mode output-only route links");
         let recycling_route = &recycling["dockRoutes"][0];
-        assert_eq!(recycling_route["orderMode"], json!("existing"));
+        assert_eq!(recycling_route["orderMode"], "existing");
         assert_eq!(
             recycling_route["target"]["interfaceName"],
             json!("payment_evidence")
@@ -1952,39 +1776,8 @@ mod tests {
             Some(0)
         );
         assert_eq!(
-            recycling_route["outputBindings"].as_array().map(Vec::len),
-            Some(1)
-        );
-        assert_ne!(
-            recycling_route["routeHash"], with_plan["dockRoutes"][0]["routeHash"],
-            "interfaceName and mode must participate in the routeHash_v2 preimage"
-        );
-    }
-
-    #[test]
-    fn dock_link_routes_carry_the_local_plan_id() {
-        // with_local_plan_id 契约覆盖全部产 route 的产物面：dock_link 与
-        // hook_plan/cloud 同款注入 local.planId，否则 dockInstanceId 推导
-        // 在不同产物路径上不一致。
-        let target = target_payment_definition();
-        let manifest = manifest_for(&target, None);
-        let parent = parent_settlement_definition(&target_uid());
-        let request = |target_name: &str| {
-            serde_json::from_value::<CompileRequest>(json!({
-                "target": target_name,
-                "definition": parent,
-                "resolutionManifest": manifest,
-            }))
-            .expect("request decodes")
-        };
-        let link = compile_request(&request("dock_link")).expect("dock_link compiles");
-        let plan = compile_request(&request("hook_plan")).expect("hook_plan compiles");
-        let plan_id = plan["planId"].as_str().expect("planId").to_string();
-        let link_route = &link["dockRoutes"][0];
-        assert_eq!(link_route["local"]["planId"], json!(plan_id));
-        assert_eq!(
-            link_route["routeHash"], plan["dockRoutes"][0]["routeHash"],
-            "planId 注入是元数据，不得改动 routeHash"
+            recycling_route["outputBindings"],
+            json!([{ "signal": "cmp", "port": "cancelled" }])
         );
     }
 
@@ -1993,8 +1786,7 @@ mod tests {
         // issues 按 route 独立收集：任意 route 的失败不得吞掉其他 route 的
         // 报错——错误一次报全，调用方不需要逐个修复再重编来发现下一个。
         let target = target_payment_definition();
-        let uid = target_uid();
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         let second_dock = json!({
             "name": "second_dock",
             "source": "buyer",
@@ -2016,7 +1808,7 @@ mod tests {
             .unwrap()
             .push(second_dock);
         // 同一 manifest：settlement 的目标存在，second_dock 的目标缺失。
-        let manifest = manifest_for(&target, None);
+        let manifest = manifest_for(&target);
         let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
             .expect_err("unresolvable second route must fail");
         let message = error.to_string();
@@ -2031,14 +1823,12 @@ mod tests {
     #[test]
     fn compiles_linked_parent_with_dock_route() {
         let target = target_payment_definition();
-        let uid = target_uid();
-        let parent = parent_settlement_definition(&uid);
-        let parent_uid = definition_uid(&parent).unwrap();
-        let manifest = manifest_for(&target, None);
+        let parent = parent_settlement_definition(TARGET_NAME);
+        let manifest = manifest_for(&target);
         let plan = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
             .expect("linked parent compiles");
         assert_eq!(plan["schemaVersion"], "uvp.hookPlan.v2");
-        assert_eq!(plan["zhixuId"], json!(parent_uid));
+        assert_eq!(plan["zhixuName"], json!("settlement"));
 
         // hooks：无 signalMap 伪 hook；flags 拆分。
         let hooks = plan["compiledHooks"].as_array().unwrap();
@@ -2064,19 +1854,16 @@ mod tests {
             "settlement.execute_payment"
         );
         assert_eq!(route["orderMode"], "new");
-        assert_eq!(route["target"]["interfaceName"], "payment_service");
-        assert_eq!(route["target"]["zhixuUid"], json!(uid));
-        assert_eq!(route["target"]["zhixuName"], json!("payment_execution"));
+        assert_eq!(route["target"]["name"], json!(TARGET_NAME));
+        assert_eq!(route["target"]["interfaceName"], json!("payment_service"));
         assert!(route.get("orderIdPolicy").is_none());
-        assert_eq!(route["sourceSeam"], "payment");
         assert_eq!(route["inputBindings"].as_array().unwrap().len(), 1);
-        assert_eq!(route["inputBindings"][0]["localHookName"], "EXECUTE");
-        assert_eq!(route["inputBindings"][0]["targetPort"], "execute");
-        assert_eq!(route["outputBindings"].as_array().unwrap().len(), 3);
-        assert_ne!(
-            route["routeHash"],
-            "0x0000000000000000000000000000000000000000000000000000000000000000"
+        assert_eq!(
+            route["inputBindings"][0]["hookId"],
+            "settlement.execute_payment#EXECUTE"
         );
+        assert_eq!(route["inputBindings"][0]["port"], "execute");
+        assert_eq!(route["outputBindings"].as_array().unwrap().len(), 3);
         // zhixu stage 不在静态 executorRoutes 中（权威形态是 dockRoutes）。
         assert!(plan["executorRoutes"]
             .as_object()
@@ -2090,31 +1877,34 @@ mod tests {
         let plan = compile_zhixu_hook_plan(&target_payment_definition(), None, true)
             .expect("target compiles standalone");
         let interface = &plan["dockInterface"];
-        assert_eq!(interface["schemaVersion"], "uvp.dockInterfaceArtifact.v2");
-        let interfaces = interface["interfaces"].as_array().unwrap();
+        let interfaces = interface.as_array().unwrap();
         assert_eq!(interfaces.len(), 2);
         // 接口按名排序。
         assert_eq!(interfaces[0]["name"], json!("payment_evidence"));
         assert_eq!(interfaces[1]["name"], json!("payment_service"));
         assert_eq!(interfaces[0]["orderModes"], json!(["existing"]));
         assert_eq!(interfaces[1]["orderModes"], json!(["new"]));
-        // 端口按名排序。
-        let input_ports: Vec<&str> = interfaces[1]["inputs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|port| port["port"].as_str().unwrap())
-            .collect();
-        assert_eq!(input_ports, vec!["cancel", "execute"]);
-        // 定义级 root = 接口叶 merkle。
-        let interface_leaves = [
-            parse_hex_word(&interfaces[0]["interfaceRoot"]),
-            parse_hex_word(&interfaces[1]["interfaceRoot"]),
-        ];
+        // 中性声明：inputs/outputs 是端口→{hook}/{signal} 原文。
         assert_eq!(
-            interface["interfaceRoot"],
-            json!(dock::word_hex(&dock::merkle_root(&interface_leaves))),
-            "definition-level interfaceRoot is the merkle root over interface leaves"
+            interfaces[1]["inputs"],
+            json!({
+                "cancel": { "hook": "payment_flow.control#DOCK_CANCEL" },
+                "execute": { "hook": "payment_flow.init#DOCK_EXECUTE" }
+            })
+        );
+        assert_eq!(
+            interfaces[1]["outputs"],
+            json!({
+                "completed": { "signal": "payment::payment_flow.settle.cmp" },
+                "failed": { "signal": "payment::payment_flow.settle.err" },
+                "started": { "signal": "payment::payment_flow.init.str" }
+            })
+        );
+        assert!(
+            interfaces[0].get("interfaceRoot").is_none()
+                && interfaces[0].get("inputsRoot").is_none()
+                && interface.get("interfaceRoot").is_none(),
+            "neutral interface declaration must not carry roots"
         );
 
         let hooks = plan["compiledHooks"].as_array().unwrap();
@@ -2133,23 +1923,10 @@ mod tests {
         assert_eq!(cancel["emitReady"], true);
     }
 
-    fn parse_hex_word(value: &Value) -> dock::Word {
-        let text = value.as_str().expect("hex word");
-        let body = text.strip_prefix("0x").expect("0x prefix");
-        let mut out = [0u8; 32];
-        for (index, chunk) in body.as_bytes().chunks(2).enumerate() {
-            let high = (chunk[0] as char).to_digit(16).expect("hex") as u8;
-            let low = (chunk[1] as char).to_digit(16).expect("hex") as u8;
-            out[index] = (high << 4) | low;
-        }
-        out
-    }
-
     #[test]
     fn rejects_parent_without_manifest() {
-        let error =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&target_uid()), None, false)
-                .expect_err("unresolved dock target must fail");
+        let error = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, false)
+            .expect_err("unresolved dock target must fail");
         assert!(
             error.to_string().contains("UNRESOLVED_DOCK_TARGET"),
             "unexpected error: {error}"
@@ -2159,16 +1936,15 @@ mod tests {
     #[test]
     fn parse_target_allows_unresolved() {
         let value =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&target_uid()), None, true)
+            compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, true)
                 .expect("parse target allows unresolved routes");
         assert_eq!(value["dockRoutes"].as_array().unwrap().len(), 0);
     }
 
     #[test]
     fn rejects_unsupported_executor_config_shapes() {
-        let uid = target_uid();
         // triggerEntrance：不受支持的调用方字段，D002 未知字段硬错误。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()
@@ -2183,7 +1959,7 @@ mod tests {
         assert!(message.contains("unknown field"), "{message}");
 
         // schemaVersion 残留键：作者面没有 schemaVersion，按未知字段硬拒绝。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()
@@ -2197,7 +1973,7 @@ mod tests {
         );
 
         // signalMap value 是 Hook DSL：只接受端口名。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["signalMap"]["str"] = json!("payment::payment_flow.init.str");
@@ -2206,7 +1982,7 @@ mod tests {
         assert!(error.to_string().contains("D006"), "{}", error.to_string());
 
         // supplierID + zhixu：D001。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["supplierID"] =
             json!("payment-zhixu");
         let error = compile_zhixu_hook_plan(&parent, None, false)
@@ -2217,8 +1993,7 @@ mod tests {
     #[test]
     fn rejects_signal_map_keys_outside_hook_name_budget() {
         // D006：key 超 26 字节（hook_name = "signalMap." + key 落 VARCHAR(36)）。
-        let uid = target_uid();
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["signalMap"]["x".repeat(27)] = json!("started");
@@ -2231,7 +2006,7 @@ mod tests {
         );
 
         // D006：key 携带信号名分隔符 '.'。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["signalMap"]
@@ -2248,7 +2023,7 @@ mod tests {
         );
 
         // 组合维度：stage 标识符 + key 超 signal_name 列宽（100）。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         let long_stage = "s".repeat(90);
         parent["spec"]["taskPatterns"][1]["stages"][0]["name"] = json!(long_stage);
         let error = compile_zhixu_hook_plan(&parent, None, false)
@@ -2262,9 +2037,9 @@ mod tests {
 
     #[test]
     fn rejects_leftover_target_version_field() {
-        // target 只携带 zhixu（派生 uid 即完整定义身份）。残留 version
-        // 键按 D002 未知字段硬拒绝——静默忽略会让调用方误以为版本钉扎仍生效。
-        let mut parent = parent_settlement_definition(&target_uid());
+        // target 只携带 zhixu（name 即完整目标引用）。残留 version 键按
+        // D002 未知字段硬拒绝——静默忽略会让调用方误以为版本钉扎仍生效。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["target"]["version"] = json!("1.2.0");
@@ -2282,70 +2057,49 @@ mod tests {
     }
 
     #[test]
-    fn annotations_do_not_participate_in_any_plan_identity() {
-        // PRD_102：注解永不参与任何身份——uid/planId/planHash 全部对
-        // annotations 取值不敏感（planHash 内嵌 source 快照同样剔除注解）。
-        let mut annotated = target_payment_definition();
-        annotated["metadata"]["annotations"] = json!({
-            "team": "payments",
-            "version": "9.9.9"
-        });
-        let mut bare = target_payment_definition();
-        bare["metadata"]["annotations"] = json!({});
-        let annotated_plan = compile_zhixu_hook_plan(&annotated, None, true)
-            .expect("annotations (incl. version key) compile");
-        let bare_plan = compile_zhixu_hook_plan(&bare, None, true).expect("no annotations compile");
-        assert_eq!(
-            annotated_plan["planId"], bare_plan["planId"],
-            "annotations must not participate in planId"
-        );
-        assert_eq!(
-            annotated_plan["planHash"], bare_plan["planHash"],
-            "the planHash source snapshot must strip metadata.annotations"
-        );
-        assert_eq!(annotated_plan["zhixuId"], bare_plan["zhixuId"]);
-        assert!(
-            bare_plan.get("version").is_none(),
-            "hook plan artifact must not carry a zhixu business version field"
-        );
-    }
-
-    #[test]
-    fn manifest_identity_is_recomputed_from_embedded_definitions() {
-        // 内容寻址（PRD_102 §5）：linker 重算内嵌定义的派生 uid，三方
-        //（entry.zhixu == 派生 == route.target.zhixu）不一致即 D008。
+    fn manifest_name_is_the_resolution_key() {
+        // name 是 linker 的唯一解析键：manifest 缺该 name 即 D008；
+        // manifest 内重名是发布方数据错误，响亮拒绝。
         let target = target_payment_definition();
-        let uid = target_uid();
-        let manifest = manifest_for(&target, None);
-        let plan =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&uid), Some(&manifest), false)
-                .expect("honest manifest links");
-        let route = &plan["dockRoutes"][0];
-        assert_eq!(route["target"]["zhixuUid"], json!(uid));
-        assert!(
-            route["target"].get("version").is_none(),
-            "resolved route target must not carry version"
-        );
+        let manifest = manifest_for(&target);
+        let plan = compile_zhixu_hook_plan(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&manifest),
+            false,
+        )
+        .expect("honest manifest links");
+        assert_eq!(plan["dockRoutes"][0]["target"]["name"], json!(TARGET_NAME));
 
-        let mut tampered = manifest_for(&target, None);
-        tampered["definitions"][0]["definition"]["spec"]["nucleation"]["id"] =
-            json!("tampered-core");
-        let error =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&uid), Some(&tampered), false)
-                .expect_err("tampered embedded definition must fail");
+        let mut renamed = manifest_for(&target);
+        renamed["definitions"][0]["name"] = json!(UNKNOWN_TARGET);
+        let error = compile_zhixu_hook_plan(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&renamed),
+            false,
+        )
+        .expect_err("manifest without the referenced name must fail");
         let message = error.to_string();
         assert!(
-            message.contains("D008") && message.contains("content-addressed"),
+            message.contains("D008")
+                && message.contains("no definition named")
+                && message.contains(TARGET_NAME),
             "{message}"
         );
 
-        // 声称的 zhixu 与内嵌定义不符：同样按内容寻址拒绝。
-        let mut swapped = manifest_for(&target, None);
-        swapped["definitions"][0]["zhixu"] = json!(UNKNOWN_TARGET);
-        let error =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&uid), Some(&swapped), false)
-                .expect_err("swapped entry uid must fail");
-        assert!(error.to_string().contains("D008"), "{}", error.to_string());
+        let mut duplicated = manifest_for(&target);
+        let entry = duplicated["definitions"][0].clone();
+        duplicated["definitions"]
+            .as_array_mut()
+            .unwrap()
+            .push(entry);
+        let error = dock::parse_resolution_manifest(&duplicated)
+            .expect_err("duplicate manifest names must fail");
+        assert!(
+            error
+                .iter()
+                .any(|issue| issue.code == "D008" && issue.message.contains("duplicate")),
+            "{error:?}"
+        );
     }
 
     /// 无锚扇入订阅 + zhixu 委托执行器（UVP-01）：编译期拒绝；本类存在
@@ -2433,7 +2187,6 @@ mod tests {
 
     #[test]
     fn rejects_invalid_stage_sources() {
-        let uid = target_uid();
         for (label, source) in [
             ("empty", String::new()),
             ("whitespace", "  ".to_string()),
@@ -2441,7 +2194,7 @@ mod tests {
             ("unicode", "卖家".to_string()),
             ("oversized", "s".repeat(37)),
         ] {
-            let mut parent = parent_settlement_definition(&uid);
+            let mut parent = parent_settlement_definition(TARGET_NAME);
             parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!(source);
             let error = compile_zhixu_hook_plan(&parent, None, false)
                 .expect_err("invalid stage source must be rejected");
@@ -2451,7 +2204,7 @@ mod tests {
             );
         }
         // 36 字节边界恰好放行。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(36));
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("boundary source must pass shape checks and fail later on linking");
@@ -2463,10 +2216,9 @@ mod tests {
 
     #[test]
     fn rejects_unknown_spec_and_executor_fields() {
-        let uid = target_uid();
         // spec 顶层未知字段（含不受支持的 trigger/externalSignals）不被静默
         // 忽略/透传（对齐 Go 入口 decodeObjectStrict）。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["trigger"] = json!([]);
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("unsupported spec-level trigger key must fail");
@@ -2475,7 +2227,7 @@ mod tests {
             "{error}"
         );
 
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["externalSignals"] = json!({});
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("unsupported spec-level externalSignals key must fail");
@@ -2487,7 +2239,7 @@ mod tests {
         );
 
         // executor 内未知字段。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["handlerType"] = json!("http");
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("unknown executor field must fail");
@@ -2497,7 +2249,7 @@ mod tests {
         );
 
         // metadata 层未知字段（如 description）同样拒绝。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["metadata"]["description"] = json!("demo");
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("metadata-level unknown field must fail");
@@ -2507,7 +2259,7 @@ mod tests {
         );
 
         // PRD_102 N2：metadata.uid 不是作者可写字段，出现即未知字段响亮拒绝。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["metadata"]["uid"] = json!("zx-hand-written");
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("metadata.uid must be rejected as an unknown field");
@@ -2586,9 +2338,8 @@ mod tests {
 
     #[test]
     fn rejects_config_mapping_violations() {
-        let uid = target_uid();
         // D004：order.mode 闭集。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["order"]["mode"] = json!("reused");
@@ -2604,7 +2355,7 @@ mod tests {
         );
 
         // D019：无任何映射。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         let config = parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]
             ["zhixuExecutorConfig"]
             .as_object_mut()
@@ -2623,7 +2374,7 @@ mod tests {
         );
 
         // D010：new 模式多条 input 绑定。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["inputMap"]["CANCEL"] = json!("cancel");
@@ -2637,7 +2388,7 @@ mod tests {
         );
 
         // D010：new 模式零条 input 绑定（只有 signalMap）。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()
@@ -2646,15 +2397,16 @@ mod tests {
             .expect_err("new mode without an input binding must fail");
         assert!(error.to_string().contains("D010"), "{}", error.to_string());
 
-        // D003：target.zhixu 非派生身份形态。
-        let mut parent = parent_settlement_definition(&uid);
+        // D003：target.zhixu 非 name slug 形态。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
-            .unwrap()["target"]["zhixu"] = json!("payment_execution");
+            .unwrap()["target"]["zhixu"] = json!("Payment_Execution");
         let error = compile_zhixu_hook_plan(&parent, None, false)
-            .expect_err("hand-written target uid must fail");
+            .expect_err("non-slug target name must fail");
         assert!(
-            error.to_string().contains("D003") && error.to_string().contains("zx-<32hex>"),
+            error.to_string().contains("D003")
+                && error.to_string().contains("metadata.name"),
             "{}",
             error.to_string()
         );
@@ -2665,7 +2417,7 @@ mod tests {
         // target:null 表示运行时选择补齐（PRD_100 §10.3）：本地校验通过，
         // 无 manifest 的 parse 编译可过；静态目标缺失 manifest 才是
         // UNRESOLVED_DOCK_TARGET（见 rejects_parent_without_manifest）。
-        let mut parent = parent_settlement_definition(&target_uid());
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["target"] = json!(null);
@@ -2678,7 +2430,7 @@ mod tests {
     /// 可运行 target 都放行——链轨拒绝在 TS onchain 边界（UNRESOLVED_DOCK_
     /// TARGET 口径），云轨运行时由选择记录补齐。
     fn null_target_parent() -> Value {
-        let mut parent = parent_settlement_definition(&target_uid());
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["target"] = json!(null);
@@ -2691,24 +2443,11 @@ mod tests {
         let artifact =
             compile_cloud_artifact(&parent, None, false).expect("cloud compiles a null target");
         assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 0);
-        // 未解析 route 不参与 dockRoutesRoot（无 routeHash 可承诺）。
-        assert_eq!(
-            artifact["dockRoutesRoot"],
-            json!(dock::word_hex(&dock::EMPTY_MERKLE_ROOT))
-        );
         let unresolved = artifact["unresolvedDockRoutes"].as_array().unwrap();
         assert_eq!(unresolved.len(), 1);
         let route = &unresolved[0];
         assert_eq!(route["schemaVersion"], "uvp.dockRoute.unresolved.v1");
         assert_eq!(route["stageIdentifier"], "settlement.execute_payment");
-        assert_ne!(
-            route["stageId"],
-            "0x0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        assert_ne!(
-            route["localDefinitionRefHash"],
-            "0x0000000000000000000000000000000000000000000000000000000000000000"
-        );
         assert_eq!(route["localSource"], "buyer");
         assert_eq!(route["interfaceName"], "payment_service");
         assert_eq!(route["orderMode"], "new");
@@ -2724,10 +2463,16 @@ mod tests {
                 { "signal": "str", "port": "started" }
             ])
         );
-        // localPlanId 与产物 planId 同源（dockInstanceId 推导消费）。
-        assert_eq!(route["localPlanId"], artifact["planId"]);
-        // 未解析元素没有目标身份与哈希承诺字段。
-        for absent in ["routeId", "routeHash", "target", "sourceSeam"] {
+        // 未解析元素没有任何派生字段与目标引用。
+        for absent in [
+            "routeId",
+            "routeHash",
+            "target",
+            "sourceSeam",
+            "stageId",
+            "localDefinitionRefHash",
+            "localPlanId",
+        ] {
             assert!(
                 route.get(absent).is_none(),
                 "unresolved route must not carry {absent}"
@@ -2747,11 +2492,11 @@ mod tests {
 
     #[test]
     fn unresolved_routes_absent_when_all_targets_static() {
-        // 无未解析 route 的产物不落字段：既有 planHash 不因新增可选字段漂移。
+        // 无未解析 route 的产物不落字段。
         let target = target_payment_definition();
-        let manifest = manifest_for(&target, None);
+        let manifest = manifest_for(&target);
         let artifact = compile_cloud_artifact(
-            &parent_settlement_definition(&target_uid()),
+            &parent_settlement_definition(TARGET_NAME),
             Some(&manifest),
             false,
         )
@@ -2764,7 +2509,7 @@ mod tests {
         // manifest 在场时 null-target route 不进 link（不报 D008），静态
         // route 照常解析：两类 route 各归其位。
         let target = target_payment_definition();
-        let manifest = manifest_for(&target, None);
+        let manifest = manifest_for(&target);
         let mut parent = null_target_parent();
         parent["spec"]["taskPatterns"][1]["stages"]
             .as_array_mut()
@@ -2777,7 +2522,7 @@ mod tests {
                 "executor": {
                     "supplierType": "zhixu",
                     "zhixuExecutorConfig": {
-                        "target": { "zhixu": target_uid() },
+                        "target": { "zhixu": TARGET_NAME },
                         "interface": "payment_service",
                         "order": { "mode": "new" },
                         "inputMap": { "START": "execute" },
@@ -2832,35 +2577,24 @@ mod tests {
     #[test]
     fn rejects_link_violations() {
         let target = target_payment_definition();
-        let uid = target_uid();
 
-        // D008：目标不在 manifest。
-        let mut manifest = manifest_for(&target, None);
-        manifest["definitions"][0]["zhixu"] = json!(UNKNOWN_TARGET);
-        let error =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&uid), Some(&manifest), false)
-                .expect_err("missing target must fail");
+        // D008：目标不在 manifest（name 缺失）。
+        let mut manifest = manifest_for(&target);
+        manifest["definitions"][0]["name"] = json!(UNKNOWN_TARGET);
+        let error = compile_zhixu_hook_plan(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&manifest),
+            false,
+        )
+        .expect_err("missing target must fail");
         assert!(error.to_string().contains("D008"), "{}", error.to_string());
 
-        // D008：接口 interfaceRoot 与叶子不一致。
-        let mut manifest = manifest_for(&target, None);
-        manifest["definitions"][0]["interfaces"][1]["interfaceRoot"] =
-            json!("0x0000000000000000000000000000000000000000000000000000000000000001");
-        let error =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&uid), Some(&manifest), false)
-                .expect_err("tampered interfaceRoot must fail");
-        assert!(
-            error.to_string().contains("interfaceRoot"),
-            "{}",
-            error.to_string()
-        );
-
         // D009：引用不在所选接口上的输出端口（cancelled 只在 evidence 上）。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["signalMap"]["cxl"] = json!("cancelled");
-        let manifest = manifest_for(&target, None);
+        let manifest = manifest_for(&target);
         let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
             .expect_err("unknown output port must fail");
         assert!(
@@ -2870,7 +2604,7 @@ mod tests {
         );
 
         // D009：接口不存在。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["interface"] = json!("payment_archive");
@@ -2883,7 +2617,7 @@ mod tests {
         );
 
         // D020：mode 不在接口 orderModes 内（payment_service 只允许 new）。
-        let mut parent = parent_settlement_definition(&uid);
+        let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap()["order"]["mode"] = json!("existing");
@@ -2895,52 +2629,27 @@ mod tests {
             error.to_string()
         );
 
-        // D015：目标边回指父定义（经 manifest dockEdges）。
-        let parent_uid = definition_uid(&parent_settlement_definition(&uid)).unwrap();
-        let edges = json!([{ "zhixu": parent_uid }]);
-        let manifest = manifest_for(&target, Some(edges));
-        let error =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&uid), Some(&manifest), false)
-                .expect_err("route cycle must fail");
+        // D015：route 目标 name 回指父定义（自环）。
+        let interfaces = manifest["definitions"][0]["interfaces"].clone();
+        let self_manifest = json!({
+            "schemaVersion": dock::DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{ "name": "settlement", "interfaces": interfaces }]
+        });
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap()["target"]["zhixu"] = json!("settlement");
+        let error = compile_zhixu_hook_plan(&parent, Some(&self_manifest), false)
+            .expect_err("self-referencing route must fail");
         assert!(error.to_string().contains("D015"), "{}", error.to_string());
-    }
-
-    #[test]
-    fn rejects_evm_routes_without_plan_identity_and_cloud_without_artifact_id() {
-        // D018：可运行产物必须能解析 runtime target identity。
-        let target = target_payment_definition();
-        let uid = target_uid();
-        let manifest = manifest_for(&target, None);
-        let mut no_plan = manifest.clone();
-        no_plan["definitions"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("evmPlanId");
-        let error =
-            compile_zhixu_hook_plan(&parent_settlement_definition(&uid), Some(&no_plan), false)
-                .expect_err("evm profile without evmPlanId must fail");
-        assert!(error.to_string().contains("D018"), "{}", error.to_string());
-
-        let mut no_artifact = manifest;
-        no_artifact["definitions"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("cloudArtifactId");
-        let error = compile_cloud_artifact(
-            &parent_settlement_definition(&uid),
-            Some(&no_artifact),
-            false,
-        )
-        .expect_err("cloud profile without cloudArtifactId must fail");
-        assert!(error.to_string().contains("D018"), "{}", error.to_string());
     }
 
     #[test]
     fn cloud_artifact_uses_resolved_routes() {
         let target = target_payment_definition();
-        let manifest = manifest_for(&target, None);
+        let manifest = manifest_for(&target);
         let artifact = compile_cloud_artifact(
-            &parent_settlement_definition(&target_uid()),
+            &parent_settlement_definition(TARGET_NAME),
             Some(&manifest),
             false,
         )
@@ -2951,6 +2660,7 @@ mod tests {
             .iter()
             .all(|hook| hook["sourceZhixuRef"] == json!("self")));
         assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 1);
+        assert_eq!(artifact["zhixuName"], json!("settlement"));
     }
 
     #[test]
