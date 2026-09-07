@@ -21,7 +21,7 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
 ///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "43893292abcf61b3ab316afc4104cbadc0af8deed61d2ae0211fcf454ec5a826";
+const PINNED_SHA256: &str = "d5d9088bdca481a142b89494dce4d1384b51b4b80c86874a57e4535ea13a9354";
 
 fn default_constraints_path() -> std::path::PathBuf {
     // 测试进程 cwd = crates/uvp-compiler。
@@ -526,7 +526,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
-        "dock-target-uid-required".into(),
+        "dock-target-name-slug".into(),
         (
             || probe_compile(dock_definition()),
             || {
