@@ -84,7 +84,7 @@
 ### 2.4 跨域：委托 dock + 接口映射
 
 - 委托是一个秩序 dock 另一个秩序：目标定义在 `spec.dockInterface` 发布**具名接口 map**（接口名 → {orderModes, inputs, outputs}），调用方 stage 在 `executor.zhixuExecutorConfig` 按接口名引用，`inputMap`/`signalMap` 是接缝上的对译表；A 的委托 stage 与 B 被绑定的端口在接缝处视为**同一个 source** 的两半（单源 seam，被绑定端口范围）。
-- `target` 携带目标定义的**内容派生身份**（`zx-<32hex>`，由 canonical JSON 剔除 `metadata.annotations` 后 keccak 派生；`metadata.uid` 不是作者可写字段）或显式 `null`（云轨运行时按选择记录补齐）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）。链上轨道只承接 `new`，`existing` 与未解析 target 在 on-chain 编译期显式拒绝。
+- `target.zhixu` 填目标定义的 `metadata.name`（slug）或显式 `null`（云轨运行时按选择记录补齐）。DSL 壳不携带任何派生身份（`metadata.uid` 不是作者可写字段）；身份权威分治——链轨由 uvp-protocol TS 从内容派生 `zx-<32hex>`（内幕），云轨由 DB 唯一 name + 主键承载，共享 core 产物为中性形状（`zhixuName` 键，无 uid/hash/root 字段）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚，云轨幂等=建立自然唯一键、链轨幂等=链上确定性承诺），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）。链上轨道只承接 `new`，`existing` 与未解析 target 在 on-chain 编译期显式拒绝。
 - 委托声明至少一项输入或输出映射（无需虚构 str/cmp 映射满足格式）；接口输出不自动置任何一方为终态，终态只由本地阶段/订单结束驱动。
 - 委托共享订单上下文（现有 zhixu 执行器 `NewSource=false` 通道不变）；事实经 signalMap 逐条映射回父阶段。
 - 委托关系一次性绑定、禁 patch（现有门禁不变）。
@@ -161,7 +161,7 @@ Stage 字段总表（目标态）：
 | `mint` | 新增，可选，仅 `per-fact`；由出生阶段声明，是该类铸单的唯一声明点 |
 | `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
 | `sendSignals` | 保留 |
-| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(派生uid|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
+| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(目标定义name|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
 | `trigger` | **删除**（原必填入口表） |
 | `externalSignals` | **删除** |
 | `fileResources`、`selectedStages` | 保留 |
