@@ -62,7 +62,7 @@
 | 表达式 | 语义 | 求值 |
 |---|---|---|
 | `{source}::{condition}` | 同单 hook（布尔/延时），现有语义不变 | 在订阅方自己的订单上下文内求值，判决一次（init/wait/ready/cxl） |
-| `ANCHOR(@{source}::{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
+| `::ANCHOR(@{source}::{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
 
 旧 `::OUTSIDE@` / `::MERGE@` / `::ANCHOR@` 标头、OUTSOURCE、k≥2 表达式下限、旧空标头白名单规则退役（新订阅必须空标头）。
 
@@ -122,7 +122,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   mint: per-fact
   executor: { supplierType: organization, supplierID: journey-executor }
   receiveSignals:
-    JOURNEY_START: "ANCHOR(@fruit_merchant::stall_retail.retail.sold)"
+    JOURNEY_START: "::ANCHOR(@fruit_merchant::stall_retail.retail.sold)"
   sendSignals: [str, cmp, err]
 
 # 无锚监听：通道扇入（原撮合）
@@ -130,8 +130,8 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   source: match
   executor: { supplierType: organization, supplierID: juice-market-executor }
   receiveSignals:
-    SURPLUS_EVENT: "ANCHOR(@fruit_merchant::stall_retail.retail.surplus)"
-    DEMAND_EVENT: "ANCHOR(@buyer::juice_demand.entry.requested)"
+    SURPLUS_EVENT: "::ANCHOR(@fruit_merchant::stall_retail.retail.surplus)"
+    DEMAND_EVENT: "::ANCHOR(@buyer::juice_demand.entry.requested)"
   sendSignals: [str, frozen, cmp, deal, err]
 
 # 有锚阶段：按单路由（原收购回流；同 source 类存在 mint 声明即有锚）
@@ -139,7 +139,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   source: seller
   executor: { supplierType: organization, supplierID: fruit-merchant-executor }
   receiveSignals:
-    FARMER_FRUIT_SETTLED: "ANCHOR(@farmer::farmer_orchard.packing.settled)"
+    FARMER_FRUIT_SETTLED: "::ANCHOR(@farmer::farmer_orchard.packing.settled)"
   sendSignals: [str, frozen, cmp, err]
 
 # 同单推进：普通 hook（原语义）
@@ -171,9 +171,9 @@ Stage 字段总表（目标态）：
 | 场景 | 旧写法 | 新写法 |
 |---|---|---|
 | 分馏（汽油/顾客路线） | `::OUTSIDE@(源::t.s.sig)` | 订阅 + `mint: per-fact` |
-| 撮合（k≥2 配对） | `::MERGE@(a::…, b::…)` | 无锚监听 + 多条 `ANCHOR(@…)`；配对后执行器 str 多父 |
-| 收购回流 | `::ANCHOR@(裸三段)` | 有锚阶段 + `ANCHOR(@…)`（按单路由） |
-| 观察入口（k=1） | k=1 MERGE | 无锚监听 + 单条 `ANCHOR(@…)` |
+| 撮合（k≥2 配对） | `::MERGE@(a::…, b::…)` | 无锚监听 + 多条 `::ANCHOR(@…)`；配对后执行器 str 多父 |
+| 收购回流 | `::ANCHOR@(裸三段)` | 有锚阶段 + `::ANCHOR(@…)`（按单路由） |
+| 观察入口（k=1） | k=1 MERGE | 无锚监听 + 单条 `::ANCHOR(@…)` |
 | 交易所开门/关门 | 无（外部 trigger + 载体单） | match source 上一个发开门/关门事实的 stage，通道锚定 |
 | 委托 | 目标 dockInterface 端口 + inputMap/signalMap，独立子订单 | 支持 |
 
@@ -184,6 +184,7 @@ Stage 字段总表（目标态）：
 - 回放基线：全部事实（订单锚定 + 通道锚定）+ 不可变定义 + 对接记录。
 - 代铸订单：事实重放 → 纯函数派生 ID → 同一订单集合，不漂移。
 - hook 判决（普通表达式）：维持现有 hook_state 语义层（init/wait/ready/cxl，终态不可变）；订阅通道不经判决层，事实→路由→投递直通。
+- MERGE（op 5）豁免：冻结合约仍接受手工 plan 提交的 Merge 指令（编码门未摘除），因此回放 oracle 必须能求值 op 5——工具链不再产出/校验该指令（§0）指生产侧，不约束回放侧的指令集覆盖。
 - 投递层（重试/退避/dead/复活）机制原样，适用于订阅通道投递。
 
 ## 7. 兼容与退役
@@ -243,7 +244,7 @@ Stage 字段总表（目标态）：
 
 | 裁决 | 结论 | 落地 |
 |---|---|---|
-| 商店=框架，不=内容 | 商店（zhixu-store）类比 Shopify 只提供框架：任务字段集、证据要求、提交流程由**凝结核**（zhixu 的发布者/所有者）自己配置，作为**数据**随 zhixu 带进来；商店核心代码不得出现任何具体业务的字段名、中文标签匹配表或文件格式特判。此前商店把某个具体 zhixu 的特例（报关）当成了示例写进核心，属于写多了 | protocol 新增 `ProductTaskDTO.evidenceSpec` 加性可选字段（`{key, label, inputKind?, accept?, required?, description?}`，schema 保持 `uvp.productDto.v1`）；store workbench 改为 schema 驱动渲染，spec 缺失时降级为通用上传槽位（文件+可选文本说明），未知声明不上传前拒绝、也不静默丢弃 |
+| 商店=框架，不=内容 | 商店（zhixu-store）类比 Shopify 只提供框架：任务字段集、证据要求、提交流程由**凝结核**（zhixu 的发布者/所有者）自己配置，作为**数据**随 zhixu 带进来；商店核心代码不得出现任何具体业务的字段名、中文标签匹配表或文件格式特判。此前商店把某个具体 zhixu 的特例（报关）当成了示例写进核心，属于写多了 | protocol 新增 `ProductTaskDTO.evidenceSpec` 加性可选字段（`{key, label, inputKind?, accept?, required?, description?}`，schema 保持 `store-product-schema.v1`，即 protocol `ProductTaskDTO` 的 `StoreProductSchemaVersion` 字面量）；store workbench 改为 schema 驱动渲染，spec 缺失时降级为通用上传槽位（文件+可选文本说明），未知声明不上传前拒绝、也不静默丢弃 |
 | 报关特例降级为演示配置 | 共享 demo 任务里的"报关单 PDF、报关单号、出口港口、完成时间"等特例内容从商店核心代码移除，降级为一份显式的演示配置数据（形态上等同"某凝结核自带配置"），只经通用渲染路径生效；商店核心代码 grep 不到这些业务字符串（演示配置文件与其测试除外）。MVP 不内置报关示例 | store `src/product/demo/customs-demo-config.ts`；protocol fixture `demoCustomsEvidenceSpec` 同形示例 |
 | 证据文件格式校验归属 | accept 约束来自凝结核配置（`spec.accept`）；前端按 accept 校验并在 accept=pdf 时读取文件首字节做 %PDF- 快速拦截（防伪造 MIME/扩展名），服务端魔数校验仍是权威 | store workbenchSupport `validateEvidenceFileForSlot` |
 | DTO 兼容口径 | `evidenceSpec` 为加性可选字段：不改变 `requiredEvidence` 开放字符串数组的既有语义，不破坏既有消费方；消费方在字段缺失时必须走降级路径而不是报错。2026-09-06 单轨收口：`requiredEvidence` 已从任务 DTO 拆除，缺失 spec 即无凭证槽位（不臆造通用槽位、不报错） | protocol freeze 校验（product signal map gate + verify-stack-compatibility）exit 0 |

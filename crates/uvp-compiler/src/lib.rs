@@ -12,7 +12,10 @@ pub mod dock;
 
 const COMPILER_NAME: &str = "uvp-eth-compiler";
 const COMPILER_VERSION: &str = "0.1.0";
-const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
+/// HookPlan 产物信封版本（TS 权威 uvp-protocol compiler types 的
+/// HOOK_PLAN_SCHEMA_VERSION 镜像）。pub 供 uvp-node NAPI 导出
+/// hookPlanSchemaVersion：TS 侧兼容门逐字比对两侧常量，防漂移。
+pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
 /// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
 /// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
 pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
@@ -377,10 +380,18 @@ fn compile_dock_link(
         false,
         DockProfile::Evm,
     )?;
+    // 与 hook_plan/cloud 同款 planId 注入：dockInstanceId 推导消费 route 的
+    // local.planId（见 with_local_plan_id 契约），dock_link 产物漏注会使同
+    // 一 route 经不同产物路径推导出不一致的实例身份。
+    let zhixu_id = definition_uid(&definition, dock_state.requires_uid)?;
+    let version = definition_version(&definition)?;
+    let platform = normalize_platform_value(&definition.spec.platform)?;
+    let plan_id = plan_id(&definition, &platform, &version, &zhixu_id)?;
+    let dock_routes = with_local_plan_id(dock_state.routes_json.clone(), &plan_id);
     Ok(json!({
         "schemaVersion": "uvp.dockLink.v1",
         "dockInterface": dock_state.interface_json,
-        "dockRoutes": dock_state.routes_json,
+        "dockRoutes": dock_routes,
         "dockRoutesRoot": dock::word_hex(&dock_state.dock_routes_root),
         "dockInterfaceRoot": dock::word_hex(&dock_state.dock_interface_root),
     }))
@@ -1437,6 +1448,12 @@ fn cloud_hook_artifact(
             Value::String(source_zhixu_id.to_string()),
         );
     }
+    // dependencies 此处只投 signalName/dependencyKind 两维：Go 主链路按
+    // (signalName, kind) 消费该结构（uvp.cloudArtifact.v2 冻结面），source
+    // 维度不在其中——依赖的真实 source 由 astJson 恢复（普通 hook = 产物
+    // sourceZhixuRef/self，ANCHOR 订阅 = subscriptionTarget.source 或 root
+    // 订阅节点）。补 source 需改产物 schema 并同步 Go 消费方，属两轨变更，
+    // 未裁决前不做单侧扩列。
     hook.insert(
         "dependencies".to_string(),
         Value::Array(
@@ -1815,6 +1832,101 @@ mod tests {
         assert!(
             message.contains("signal capabilities 257 exceed the documented limit 256"),
             "message: {message}"
+        );
+    }
+
+    #[test]
+    fn route_hash_defaults_missing_evm_plan_id_to_the_zero_word() {
+        // Cloud 轨 manifest 可只有 cloudArtifactId（D018 对 Evm 才要求
+        // evmPlanId）；此时 routeHash preimage 的 targetPlan 位是 32 字节
+        // 零 word（dock.rs PRD95 §5.2），不是 keccak256("")。Rust 是权威
+        // 口径，本向量钉死缺省哈希，TS 平价测试必须按零 word 对齐。
+        let mut manifest = manifest_for(&target_payment_definition(), None);
+        manifest["definitions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("evmPlanId");
+        let cloud = compile_cloud_artifact(&parent_settlement_definition(), Some(&manifest), false)
+            .expect("cloud link tolerates a missing evmPlanId");
+        let route = &cloud["dockRoutes"][0];
+        assert_eq!(route["target"]["evmPlanId"], Value::Null);
+        assert_eq!(
+            route["routeHash"],
+            "0xb398030882051fa73cbc4a9992a837864b2287586dd2edad36a3c8fd2b859e06",
+            "zero-word default routeHash vector changed"
+        );
+
+        // 对照：携带 evmPlanId 的同一 route 哈希必须不同（target plan
+        // 参与 preimage，keeper 无法换目标 plan）。
+        let with_plan = manifest_for(&target_payment_definition(), None);
+        let evm = compile_cloud_artifact(&parent_settlement_definition(), Some(&with_plan), false)
+            .expect("cloud link with evmPlanId compiles");
+        assert_ne!(
+            evm["dockRoutes"][0]["routeHash"], route["routeHash"],
+            "evmPlanId must participate in the routeHash preimage"
+        );
+    }
+
+    #[test]
+    fn dock_link_routes_carry_the_local_plan_id() {
+        // with_local_plan_id 契约覆盖全部产 route 的产物面：dock_link 与
+        // hook_plan/cloud 同款注入 local.planId，否则 dockInstanceId 推导
+        // 在不同产物路径上不一致。
+        let manifest = manifest_for(&target_payment_definition(), None);
+        let request = |target: &str| {
+            serde_json::from_value::<CompileRequest>(json!({
+                "target": target,
+                "definition": parent_settlement_definition(),
+                "resolutionManifest": manifest,
+            }))
+            .expect("request decodes")
+        };
+        let link = compile_request(&request("dock_link")).expect("dock_link compiles");
+        let plan = compile_request(&request("hook_plan")).expect("hook_plan compiles");
+        let plan_id = plan["planId"].as_str().expect("planId").to_string();
+        let link_route = &link["dockRoutes"][0];
+        assert_eq!(link_route["local"]["planId"], json!(plan_id));
+        assert_eq!(
+            link_route["routeHash"], plan["dockRoutes"][0]["routeHash"],
+            "planId 注入是元数据，不得改动 routeHash"
+        );
+    }
+
+    #[test]
+    fn link_reports_every_routes_issues_in_one_pass() {
+        // issues 按 route 独立收集：任意 route 的失败不得吞掉其他 route 的
+        // 报错——错误一次报全，调用方不需要逐个修复再重编来发现下一个。
+        let mut parent = parent_settlement_definition();
+        let second_dock = json!({
+            "name": "second_dock",
+            "source": "buyer",
+            "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
+            "sendSignals": ["str", "cmp", "err"],
+            "executor": {
+                "supplierType": "zhixu",
+                "zhixuExecutorConfig": {
+                    "schemaVersion": "uvp.dock.v1",
+                    "target": { "zhixu": "zx-unknown-target", "version": "9.9.9" },
+                    "order": { "idPolicy": "derived-v1" },
+                    "inputMap": { "START": "execute" },
+                    "signalMap": { "str": "started", "cmp": "completed" }
+                }
+            }
+        });
+        parent["spec"]["taskPatterns"][1]["stages"]
+            .as_array_mut()
+            .unwrap()
+            .push(second_dock);
+        // 同一 manifest：settlement 的目标存在，second_dock 的目标缺失。
+        let manifest = manifest_for(&target_payment_definition(), None);
+        let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+            .expect_err("unresolvable second route must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("D008")
+                && message.contains("settlement.second_dock")
+                && message.contains("zx-unknown-target@9.9.9"),
+            "failing route must be reported: {message}"
         );
     }
 

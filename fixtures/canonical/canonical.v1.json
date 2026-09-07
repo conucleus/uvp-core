@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "uvp.canonicalJsonCorpus.v1",
+  "authority": "uvp-core uvp-ir::canonical_stringify (serde_json number identity, ryu shortest round-trip formatting)",
+  "consumers": [
+    "uvp-protocol packages/compiler canonical.ts must reproduce expectCanonical byte-for-byte"
+  ],
+  "rules": [
+    "Number identity is type-preserving: tokens without '.' or 'e' stay integers (u64/i64) and serialize bare; float tokens always serialize with a fraction or exponent.",
+    "An integral float keeps a trailing '.0' (100.0, never 100).",
+    "Negative zero keeps its sign (-0.0).",
+    "Floats render via ryu shortest round-trip: decimal form while the decimal exponent stays in [-5, 15] (1e-5 -> 0.00001, 1e15 -> 1000000000000000.0), otherwise scientific with lowercase 'e' and an explicit '+' for positive exponents (1e-7, 1e+16, 1e+300).",
+    "Object keys sort by code point; arrays keep order."
+  ],
+  "cases": [
+    {
+      "name": "integer token stays a bare integer",
+      "input": { "a": 100 },
+      "expectCanonical": "{\"a\":100}"
+    },
+    {
+      "name": "integral float keeps trailing point zero",
+      "input": { "a": 100.0 },
+      "expectCanonical": "{\"a\":100.0}"
+    },
+    {
+      "name": "exponent input spelling is erased to the canonical float form",
+      "input": { "a": 1e2 },
+      "expectCanonical": "{\"a\":100.0}"
+    },
+    {
+      "name": "negative zero keeps its sign",
+      "input": { "a": -0.0 },
+      "expectCanonical": "{\"a\":-0.0}"
+    },
+    {
+      "name": "small scientific float",
+      "input": { "a": 2.5e-8 },
+      "expectCanonical": "{\"a\":2.5e-8}"
+    },
+    {
+      "name": "large scientific float uses explicit plus exponent",
+      "input": { "a": 1e300 },
+      "expectCanonical": "{\"a\":1e+300}"
+    },
+    {
+      "name": "decimal form at the lower edge",
+      "input": { "a": 1e-5 },
+      "expectCanonical": "{\"a\":0.00001}"
+    },
+    {
+      "name": "decimal form at the upper edge",
+      "input": { "a": 1e15 },
+      "expectCanonical": "{\"a\":1000000000000000.0}"
+    },
+    {
+      "name": "scientific form past the upper edge",
+      "input": { "a": 1e16 },
+      "expectCanonical": "{\"a\":1e+16}"
+    },
+    {
+      "name": "shortest round-trip digits",
+      "input": { "a": 123456789012345680.0 },
+      "expectCanonical": "{\"a\":1.2345678901234568e+17}"
+    },
+    {
+      "name": "u64 beyond double precision stays an integer",
+      "input": { "a": 9007199254740993 },
+      "expectCanonical": "{\"a\":9007199254740993}"
+    },
+    {
+      "name": "keys sort by code point across number kinds",
+      "input": { "b": [1.5, 1e2], "a": { "x": -0.0, "w": 2 } },
+      "expectCanonical": "{\"a\":{\"w\":2,\"x\":-0.0},\"b\":[1.5,100.0]}"
+    }
+  ]
+}

@@ -1867,10 +1867,13 @@ pub fn link_dock_routes(
 
     let mut routes = Vec::new();
     for route in unlinked {
+        // issues 按 route 独立收集再合并：若共享一个累积 vec，首个出错
+        // route 的残留会让后续 route 在收尾闸处被整体跳过，错误一次报不全。
+        let mut route_issues = Vec::new();
         let config = &route.config;
         let path = format!("{}.executor.zhixuExecutorConfig", route.stage_identifier);
         let Some(target) = find_target(&config.target_zhixu, &config.target_version) else {
-            issues.push(DockIssue::new(
+            route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
                 format!(
@@ -1878,10 +1881,11 @@ pub fn link_dock_routes(
                     config.target_zhixu, config.target_version
                 ),
             ));
+            issues.extend(route_issues);
             continue;
         };
         if !target.published || target.artifact_hash == [0u8; 32] {
-            issues.push(DockIssue::new(
+            route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
                 format!(
@@ -1889,6 +1893,7 @@ pub fn link_dock_routes(
                     config.target_zhixu, config.target_version
                 ),
             ));
+            issues.extend(route_issues);
             continue;
         }
 
@@ -1902,7 +1907,7 @@ pub fn link_dock_routes(
                 .iter()
                 .find(|port| &port.port == port_name)
             else {
-                issues.push(DockIssue::new(
+                route_issues.push(DockIssue::new(
                     "D009",
                     format!("{path}.inputMap.{local_hook}"),
                     format!(
@@ -1941,7 +1946,7 @@ pub fn link_dock_routes(
             }
         }
         if entrances.len() != 1 {
-            issues.push(DockIssue::new(
+            route_issues.push(DockIssue::new(
                 "D010",
                 format!("{path}.inputMap"),
                 format!(
@@ -1949,11 +1954,12 @@ pub fn link_dock_routes(
                     entrances.len()
                 ),
             ));
+            issues.extend(route_issues);
             continue;
         }
         for input in &resolved_inputs {
             if input.kind != "entrance" && input.kind != "signal" {
-                issues.push(DockIssue::new(
+                route_issues.push(DockIssue::new(
                     "D011",
                     format!("{path}.inputMap.{}", input.local_hook_name),
                     format!("target input port {:?} has unknown kind", input.target_port),
@@ -1974,7 +1980,7 @@ pub fn link_dock_routes(
                 .iter()
                 .find(|port| &port.port == port_name)
             else {
-                issues.push(DockIssue::new(
+                route_issues.push(DockIssue::new(
                     "D009",
                     format!("{path}.signalMap.{local_signal}"),
                     format!(
@@ -2042,20 +2048,21 @@ pub fn link_dock_routes(
             }
         }
         if seams.len() != 1 {
-            issues.push(DockIssue::new(
+            route_issues.push(DockIssue::new(
                 "D012",
                 &path,
                 format!(
                     "all ports referenced by one route must share a single target source seam, found {seams:?}"
                 ),
             ));
+            issues.extend(route_issues);
             continue;
         }
         let source_seam = seams.iter().next().cloned().unwrap_or_default();
 
         // D016：binding 数量上限。
         if resolved_inputs.len() > MAX_DOCK_INPUTS {
-            issues.push(DockIssue::new(
+            route_issues.push(DockIssue::new(
                 "D016",
                 &path,
                 format!(
@@ -2065,7 +2072,7 @@ pub fn link_dock_routes(
             ));
         }
         if resolved_outputs.len() > MAX_DOCK_OUTPUTS {
-            issues.push(DockIssue::new(
+            route_issues.push(DockIssue::new(
                 "D016",
                 &path,
                 format!(
@@ -2074,7 +2081,10 @@ pub fn link_dock_routes(
                 ),
             ));
         }
-        if !issues.is_empty() {
+        // 收尾闸只看本 route 的 issues：route_issues 为空则照常产 route，
+        // 前序 route 的失败不得让后续干净 route 的哈希/根计算被跳过。
+        if !route_issues.is_empty() {
+            issues.append(&mut route_issues);
             continue;
         }
 

@@ -51,6 +51,14 @@ pub fn keccak256_hex(data: &[u8]) -> String {
     out
 }
 
+// 数字的 canonical 规则（Rust 是跨语言权威，TS canonical.ts 必须逐字节
+// 对齐；钉死向量见 fixtures/canonical/canonical.v1.json）：
+// - 身份保持：无 '.'/'e' 的 token 是整数（u64/i64），序列化不带小数点；
+//   浮点 token 恒带小数部或指数（100.0 永不写成 100）。
+// - 负零保号：-0.0 序列化为 "-0.0"。
+// - 浮点经 ryu 最短往返：十进制指数在 [-5,15] 内用小数形（1e-5 →
+//   0.00001、1e15 → 1000000000000000.0），否则科学计数，正指数显式
+//   '+'（1e-7、1e+16、1e+300）。
 fn canonicalize_number(number: &Number) -> Result<Value> {
     if number.as_f64().is_some_and(|value| !value.is_finite()) {
         return Err(CanonicalError::NonFiniteNumber);

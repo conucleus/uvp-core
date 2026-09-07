@@ -165,7 +165,10 @@ pub struct EvalCompiledHookRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// 事实键未知字段确定性拒绝：拼错的 source（如 sourse）不得被静默吞成
+// 空 source 的"无归属事实"（那会把不匹配伪装成 ok:true needs_more）。
+// 缺失 source 仍合法——空 source 是语义语料钉住的负例形态。
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SignalFact {
     #[serde(default)]
     pub source: String,
@@ -394,10 +397,23 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             }
             String::new()
         }
-        _ => raw_source
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| HookError::Message("compiled hook AST is missing source".to_string()))?,
+        _ => {
+            let source = raw_source
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    HookError::Message("compiled hook AST is missing source".to_string())
+                })?;
+            // 与解析期标头校验同口径（plain identifier ≤36，落 VARCHAR(36)）：
+            // 毒 source 解码期确定性拒绝，而不是成为永不匹配任何事实键的
+            // source 维度。
+            if !is_plain_identifier(&source) || source.len() > 36 {
+                return Err(HookError::Message(format!(
+                    "compiled hook AST source must be a plain identifier of at most 36 characters: {source:?}"
+                )));
+            }
+            source
+        }
     };
     let root = req
         .ast
@@ -470,10 +486,7 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
                 signal.source
             )));
         }
-        if !is_strict_signal_ref(&signal.signal_name)
-            || signal.signal_name.len() > 100
-            || !signal.signal_name.split('.').all(is_plain_identifier)
-        {
+        if !valid_signal_identity(&signal.signal_name) {
             return Err(HookError::Message(format!(
                 "signal fact name must use task.stage.signal and be at most 100 characters: {:?}",
                 signal.signal_name
@@ -581,14 +594,22 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                 &["type", "signal"],
                 "compiled signal AST node",
             )?;
-            value
+            let signal = value
                 .get("signal")
                 .and_then(Value::as_str)
                 .filter(|signal| !signal.trim().is_empty())
-                .map(|signal| Expr::Signal(signal.to_string()))
                 .ok_or_else(|| {
                     HookError::Message("compiled signal AST node is missing signal".to_string())
-                })
+                })?;
+            // 解码层身份闸与解析期 read_identifier + task.stage.signal 同口径：
+            // 毒原子（拼错段数、超长、内嵌空格）确定性拒绝，而不是解码成
+            // 永不匹配事实集的 Signal（那会把不匹配伪装成 ok:true needs_more）。
+            if !valid_signal_identity(signal) {
+                return Err(HookError::Message(format!(
+                    "compiled signal AST node must use task.stage.signal and be at most 100 characters: {signal:?}"
+                )));
+            }
+            Ok(Expr::Signal(signal.to_string()))
         }
         "subscription" => {
             reject_unknown_keys(
@@ -618,6 +639,18 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                         "compiled subscription AST node is missing signal".to_string(),
                     )
                 })?;
+            // 与解析期 parse_subscription 的目标校验同口径（source：plain
+            // identifier ≤36；signal：三段式、每段 plain identifier、≤100）。
+            if !is_plain_identifier(source) || source.len() > 36 {
+                return Err(HookError::Message(format!(
+                    "compiled subscription AST node source must be a plain identifier of at most 36 characters: {source:?}"
+                )));
+            }
+            if !valid_signal_identity(signal) {
+                return Err(HookError::Message(format!(
+                    "compiled subscription AST node signal must use task.stage.signal and be at most 100 characters: {signal:?}"
+                )));
+            }
             Ok(Expr::Subscription {
                 source: source.to_string(),
                 target: signal.to_string(),
@@ -936,22 +969,14 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
         Expr::Subscription { source, target } => {
             format!("ANCHOR(@{source}::{target})")
         }
-        Expr::Not(inner) => {
-            let mut child = normalize_cloud(inner, precedence);
-            if matches!(inner.as_ref(), Expr::And(_) | Expr::Or(_)) {
-                child = format!("({child})");
-            }
-            format!("~{child}")
-        }
+        // 一元包裹（~ 与延时）的子表达式括号由递归调用的优先级闸统一
+        // 产生（And/Or 低优先级、Delay 在 parent>0 时各自成组），这里不得
+        // 再补一层——否则 Cloud 面产出 `~((A & B))` / `((A & B)) +5s` 的
+        // 双重括号，与 Tight 面外观系统性分叉。
+        Expr::Not(inner) => format!("~{}", normalize_cloud(inner, precedence)),
         Expr::Delay {
             expr, raw_duration, ..
-        } => {
-            let mut child = normalize_cloud(expr, precedence);
-            if matches!(expr.as_ref(), Expr::And(_) | Expr::Or(_)) {
-                child = format!("({child})");
-            }
-            format!("{child} + {raw_duration}")
-        }
+        } => format!("{} + {raw_duration}", normalize_cloud(expr, precedence)),
         Expr::And(terms) => terms
             .iter()
             .map(|term| normalize_cloud(term, precedence))
@@ -1822,6 +1847,14 @@ fn duration_to_seconds(duration: &str) -> Result<i64> {
 fn is_strict_signal_ref(value: &str) -> bool {
     let parts = value.split('.').collect::<Vec<_>>();
     parts.len() == 3 && parts.iter().all(|part| !part.is_empty())
+}
+
+/// 信号身份的单一闸：三段式 task.stage.signal、每段 plain identifier、
+/// 全名 ≤100（individual_record.signal_name VARCHAR(100)）。解析期标识符
+/// 扫描、事实键校验（signal_map）与 cloud AST 解码共用，保证三处口径
+/// 收敛——任一入口放行的身份另两处必然接受。
+fn valid_signal_identity(value: &str) -> bool {
+    is_strict_signal_ref(value) && value.len() <= 100 && value.split('.').all(is_plain_identifier)
 }
 
 /// 普通标识符扫描规则：非空，且仅 ASCII 字母/数字/下划线/中划线。
@@ -2788,6 +2821,41 @@ mod tests {
     }
 
     #[test]
+    fn cloud_normalization_emits_single_parentheses_for_grouped_delay_operands() {
+        // Cloud 面与 Tight 面共用"一层分组括号"外观：延时操作数为 And/Or
+        // 组时只保留优先级闸产生的那一层括号，不得出现 `((A & B)) +5s`
+        // 式双重括号（两输出面被语料/产物钉住，外观必须系统一致）。
+        let cases = [
+            (
+                "buyer::(task.pay.cmp & task.ship.cmp)+5s",
+                "(task.pay.cmp & task.ship.cmp) + 5s",
+            ),
+            (
+                "buyer::(task.pay.cmp | task.ship.cmp)+5s",
+                "(task.pay.cmp | task.ship.cmp) + 5s",
+            ),
+            // 嵌套延时与普通项的组合括号不受影响。
+            (
+                "buyer::(task.pay.cmp +5s) & task.ship.cmp",
+                "(task.pay.cmp + 5s) & task.ship.cmp",
+            ),
+            (
+                "buyer::task.pay.cmp & (task.ship.cmp | task.refund.cmp)",
+                "task.pay.cmp & (task.ship.cmp | task.refund.cmp)",
+            ),
+        ];
+        for (hook, expected) in cases {
+            let out = parse_hook(ParseHookRequest {
+                profile: Profile::CloudCompat,
+                hook_name: "TIMEOUT".to_string(),
+                hook: hook.to_string(),
+            })
+            .unwrap();
+            assert_eq!(out.runtime_condition, expected, "hook: {hook}");
+        }
+    }
+
+    #[test]
     fn rejects_duration_overflow() {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
@@ -2977,6 +3045,130 @@ mod tests {
             hook: format!("{boundary}::task.main.cmp"),
         })
         .unwrap();
+    }
+
+    #[test]
+    fn signal_facts_with_unknown_keys_are_rejected() {
+        // 拼错的事实键（sourse）不得被静默吞成空 source 的无归属事实——
+        // 那会把"事实不匹配"伪装成 ok:true needs_more。serde 层确定性拒绝。
+        let request = json!({
+            "profile": "cloud_compat",
+            "ast": {
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "buyer",
+                "mode": "normal",
+                "root": { "type": "signal", "signal": "task.main.cmp" }
+            },
+            "signals": [{
+                "sourse": "buyer",
+                "signalName": "task.main.cmp",
+                "receivedAt": "2026-04-27T00:00:00Z"
+            }],
+            "now": "2026-04-27T00:00:00Z"
+        });
+        let output = eval_compiled_hook_json(&request.to_string());
+        assert!(
+            output.contains("\"ok\":false") && output.contains("unknown field"),
+            "misspelled fact key must be rejected: {output}"
+        );
+
+        // 缺失 source 仍是合法的无归属事实（needs_more，非错误）。
+        let legal = json!({
+            "profile": "cloud_compat",
+            "ast": {
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "buyer",
+                "mode": "normal",
+                "root": { "type": "signal", "signal": "task.main.cmp" }
+            },
+            "signals": [{
+                "signalName": "task.main.cmp",
+                "receivedAt": "2026-04-27T00:00:00Z"
+            }],
+            "now": "2026-04-27T00:00:00Z"
+        });
+        let output = eval_compiled_hook_json(&legal.to_string());
+        assert!(
+            output.contains("\"ok\":true"),
+            "missing source stays legal: {output}"
+        );
+    }
+
+    #[test]
+    fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
+        // 解码层身份闸与解析期同口径：毒原子确定性拒绝，而不是解码成
+        // 永不匹配事实集的合法形态（那会把不匹配伪装成 ok:true needs_more）。
+        let ast_with_root = |root: Value, source: &str| {
+            json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": source,
+                "mode": "normal",
+                "root": root
+            })
+        };
+        let poisoned_atoms = [
+            // signal 节点：两段式 / 内嵌空格 / 超 100 字节。
+            ast_with_root(json!({ "type": "signal", "signal": "main.cmp" }), "buyer"),
+            ast_with_root(json!({ "type": "signal", "signal": "ta sk.a.b" }), "buyer"),
+            ast_with_root(
+                json!({ "type": "signal", "signal": format!("{}.{}.{}", "a".repeat(40), "b".repeat(30), "c".repeat(31)) }),
+                "buyer",
+            ),
+            // 顶层 source：非法字符集 / 超 36 字节。
+            ast_with_root(
+                json!({ "type": "signal", "signal": "task.main.cmp" }),
+                "has space",
+            ),
+            ast_with_root(
+                json!({ "type": "signal", "signal": "task.main.cmp" }),
+                "s".repeat(37).as_str(),
+            ),
+        ];
+        for ast in poisoned_atoms {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast,
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("task.stage.signal")
+                    || message.contains("plain identifier of at most 36"),
+                "unexpected error: {message}"
+            );
+        }
+
+        // subscription 节点：source 字符集 / source 长度 / signal 段数。
+        let subscription_ast = |source: &str, signal: &str| {
+            json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "",
+                "mode": "subscription",
+                "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+                "root": { "type": "subscription", "source": source, "signal": signal }
+            })
+        };
+        for ast in [
+            subscription_ast("has space", "trade.listing.cmp"),
+            subscription_ast(&"s".repeat(37), "trade.listing.cmp"),
+            subscription_ast("seller", "listing.cmp"),
+        ] {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast,
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("plain identifier of at most 36")
+                    || message.contains("task.stage.signal"),
+                "unexpected error: {message}"
+            );
+        }
     }
 
     #[test]

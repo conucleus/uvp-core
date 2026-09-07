@@ -123,6 +123,42 @@
       }
     },
     {
+      "name": "cloud delay over grouped operands keeps single parentheses",
+      "profile": "cloud_compat",
+      "hookName": "TIMEOUT",
+      "hook": "buyer::(task.pay.cmp & task.ship.cmp)+5s",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "(task.pay.cmp & task.ship.cmp) + 5s",
+        "normalizedExpression": "buyer::(task.pay.cmp&task.ship.cmp)+5s",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.pay.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.pay.cmp",
+            "delaySeconds": 5
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.ship.cmp",
+            "delaySeconds": 5
+          }
+        ]
+      }
+    },
+    {
       "name": "36-byte subscription target source boundary",
       "profile": "cloud_compat",
       "hookName": "HOOK",
