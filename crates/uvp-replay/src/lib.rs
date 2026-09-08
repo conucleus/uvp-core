@@ -482,7 +482,7 @@ fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Result<Vec<Val
 }
 
 /// hook-plan v2 把单一 `isTrigger` 拆成 `orderTriggerKind`(mint|dock|none)
-/// 加 `emitReady`（PRD94 §3.4）。oracle 只认 v2 字段，缺失即结构性错误
+/// 加 `emitReady`。oracle 只认 v2 字段，缺失即结构性错误
 /// （fail-closed，不做隐式回退）。
 fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
     let kind = hook
@@ -1248,11 +1248,10 @@ mod tests {
 
     #[test]
     fn retired_fan_in_instruction_is_rejected_as_unknown() {
-        // PRD_104 指令集收敛：旧撮合扇入指令（semantic 0.6 引入、无官方
-        // 生产者，仅手工 plan 可触达）随解冻窗口移除。求值器不再有专属
-        // 分支——携带该指令的 plan 与任意未知指令同口径，在 unsupported
-        // 错误上响亮失败。指令字面按字节拼装，使仓内对退役词的全文检索
-        // （PRD_104 验收口径）保持零命中。
+        // 指令集收敛：撮合扇入指令无官方生产者，仅手工 plan 可触达，
+        // 不在指令集内。求值器没有专属分支——携带该指令的 plan 与任意
+        // 未知指令同口径，在 unsupported 错误上响亮失败。指令字面按字节
+        // 拼装，使仓内对该词的全文检索保持零命中。
         let retired_op = String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
         let instructions = vec![
             json!({"op": "SIGNAL", "signalKey": "0x50"}),

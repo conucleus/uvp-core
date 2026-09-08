@@ -1,4 +1,4 @@
-//! Zhixu Dock 委托协议（PRD_100/PRD_102）DSL 壳的结构性语义。
+//! Zhixu Dock 委托协议 DSL 壳的结构性语义。
 //!
 //! 本模块固定：
 //! - 调用方 `executor.zhixuExecutorConfig`（键闭集 {target, interface,
@@ -25,7 +25,7 @@ use uvp_model::{DockInterfaceSpec, ZhixuStage};
 
 pub const DOCK_ROUTE_SCHEMA_VERSION: &str = "uvp.dockRoute.v2";
 /// 未解析 route（target:null 动态选择）的声明面产物形态：本地声明完整、
-/// 目标空缺，云轨运行时由选择记录补齐（PRD_100 §10.3）。
+/// 目标空缺，云轨运行时由选择记录补齐。
 pub const DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION: &str = "uvp.dockRoute.unresolved.v1";
 pub const DOCK_RESOLUTION_SCHEMA_VERSION: &str = "uvp.dock.resolution.v2";
 
@@ -35,7 +35,7 @@ pub const MAX_DOCK_OUTPUTS: usize = 16;
 /// adapters must enforce the same limit against the actual parent instance
 /// depth as well; this linker check cannot observe runtime-created orders.
 pub const MAX_DOCK_DEPTH: u8 = 8;
-/// `^[a-z][a-z0-9_]{0,31}$`：端口名与接口名同规则（PRD_100 §9.3）。
+/// `^[a-z][a-z0-9_]{0,31}$`：端口名与接口名同规则。
 pub const MAX_PORT_NAME_BYTES: usize = 32;
 
 /// signalMap key 上限：运行期 hook 命名空间 = "signalMap." + key（10 字节
@@ -48,7 +48,7 @@ pub const MAX_SIGNAL_MAP_KEY_LENGTH: usize = 26;
 /// stage 标识符 + "." + signalMap key 的组合长度按同值钉死。
 pub const MAX_SIGNAL_NAME_BYTES: usize = 100;
 
-/// order.mode 与接口 orderModes 的闭集取值（PRD_100 §11）。
+/// order.mode 与接口 orderModes 的闭集取值。
 pub const ORDER_MODE_NEW: &str = "new";
 pub const ORDER_MODE_EXISTING: &str = "existing";
 pub const ORDER_MODES: [&str; 2] = [ORDER_MODE_NEW, ORDER_MODE_EXISTING];
@@ -396,7 +396,7 @@ pub fn parse_zhixu_executor_config(
         }
     }
 
-    // D019：至少声明一项输入或输出映射（PRD_100 §10.1）。
+    // D019：至少声明一项输入或输出映射。
     if parsed_input.is_empty() && parsed_signal.is_empty() {
         issues.push(DockIssue::new(
             "D019",
@@ -524,7 +524,7 @@ pub fn collect_unlinked_routes(
 
 impl UnlinkedDockRoute {
     /// 未解析 route（target:null）的声明面产物：本地声明完整、目标空缺
-    /// （PRD_100 §10.3）。不携带任何派生字段——目标身份/承诺由各轨在
+    /// 不携带任何派生字段——目标身份/承诺由各轨在
     /// 选择记录补齐目标后自行计算。
     pub fn unresolved_json(&self) -> Value {
         json!({
@@ -1316,7 +1316,7 @@ pub fn link_dock_routes(
             route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
-                "target is null (dynamic selection): a statically linked compilation cannot resolve this route — cloud runtimes fill dynamic targets from selection records (PRD_100 §10.3)",
+                "target is null (dynamic selection): a statically linked compilation cannot resolve this route — cloud runtimes fill dynamic targets from selection records",
             ));
             issues.extend(route_issues);
             continue;

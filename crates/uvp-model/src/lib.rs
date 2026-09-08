@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ObjectMeta {
-    /// 作者技术标签（PRD_102）：无唯一性/关系语义；跨轨引用一律走 name，
+    /// 作者技术标签：无唯一性/关系语义；跨轨引用一律走 name，
     /// 名字到实体的解析是各轨权威的事。uid 不是作者可写字段——出现即
     /// 未知字段。
     pub name: String,
@@ -34,7 +34,7 @@ pub struct ZhixuSpec {
     pub nucleation: Nucleation,
     #[serde(default)]
     pub task_patterns: Vec<ZhixuTaskPattern>,
-    /// 目标侧公开的具名对接接口 map（PRD_100 §9）：键为接口名。调用方
+    /// 目标侧公开的具名对接接口 map：键为接口名。调用方
     /// 只能引用接口名与端口名，不能看到目标内部 stage/signal。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dock_interface: BTreeMap<String, DockInterfaceSpec>,
@@ -92,7 +92,7 @@ pub struct ZhixuStage {
     pub file_resources: BTreeMap<String, Value>,
 }
 
-/// typed executor（PRD94 §2/§12.1）。
+/// typed executor。
 /// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）。
 /// 未知字段直接拒绝：flatten 透传会静默吞掉拼错字段，
 /// 与 Go 入口的 DisallowUnknownFields 等值；`zhixuExecutorConfig` 内容
@@ -125,7 +125,7 @@ pub fn is_known_supplier_type(value: &str) -> bool {
     SUPPLIER_TYPES.contains(&value.trim())
 }
 
-/// `spec.dockInterface` 下的具名接口（PRD_100 §9.1-§9.4）。
+/// `spec.dockInterface` 下的具名接口。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockInterfaceSpec {

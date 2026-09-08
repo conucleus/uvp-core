@@ -15,7 +15,7 @@
 - 订单怎么出生：str 自报（免声明）或 `mint: per-fact` 代铸（唯一声明点）。
 - 阶段种类：编译期定死、终生不可变。
 
-旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。指令集收敛为 SIGNAL / NOT / AND / OR / DELAY（PRD_104）：旧扇入指令随枚举与编码门一并移除，携带集外指令的 plan 在 `commitPlan` 注册边界响亮拒绝。
+旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。指令集收敛为 SIGNAL / NOT / AND / OR / DELAY：扇入类旧指令不在枚举与编码门内，携带集外指令的 plan 在 `commitPlan` 注册边界响亮拒绝。
 
 ---
 
@@ -237,7 +237,7 @@ Stage 字段总表（目标态）：
 | nonce 防重放 | 接受现状（first-win 幂等吸收），nonce 查重/升级 JWT 随商店身份落地一并做 | 决策记录 |
 | DLQ 通知可靠性 | 告警语义走指标（stmDLQTotal 告警规则），持久化重投等运维真消费 DLQ 时再建 | 决策记录 |
 | chain-services 暴露面 | 模-5 修正"暂不整改"的前提：CORS 默认关闭（UVP_API_CORS_ALLOWED_ORIGINS 白名单回显）；notification-profile 挂 store.supplier.notification_profile.update；管理员白名单（GOVERNANCE_ADMIN_REVIEWER_IDS）真接入鉴权。身份归商店的裁决不变 | chain-services 本批次 |
-| 合约解冻批次（窗口已开） | #1 派生信号 capability 对称：跨订单派生要求目标（origin）订单 plan 声明同一 capability（审计修复方向 a）；#31 同 hook 输入内 dependencyKeys 去重；#30 README 口径改为"patch 即时接管、不可回滚恢复执行者"。#10 (planId, orderId) 复合键涉及全部模块/periphery 的订单寻址迁移，作为解冻窗口的下一个独立批次 | contracts 本批次 + forge 86/86 |
+| 合约解冻批次（窗口已开） | #1 派生信号 capability 对称：跨订单派生要求目标（origin）订单 plan 声明同一 capability；#31 同 hook 输入内 dependencyKeys 去重；#30 README 口径改为"patch 即时接管、不可回滚恢复执行者"。#10 (planId, orderId) 复合键涉及全部模块/periphery 的订单寻址迁移，作为解冻窗口的下一个独立批次 | contracts 本批次 + forge 86/86 |
 
 #10 残余风险说明：capability 对称后，攻击者理论上仍可镜像目标 plan 的 capability 声明（plan 公开可读）；该残余与 #10 的订单寻址迁移一并在解冻窗口下一批次处置（选项：origin 侧 link 授权）。
 

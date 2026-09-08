@@ -42,7 +42,7 @@ pub struct CompileRequest {
     pub target: String,
     #[serde(alias = "zhixu")]
     pub definition: Value,
-    /// Dock resolution manifest（PRD_100 §10）：由 Store/发布系统或离线
+    /// Dock resolution manifest：由 Store/发布系统或离线
     /// lock 文件提供；含 zhixu executor 的可运行编译必须提供，否则返回
     /// `UNRESOLVED_DOCK_TARGET`。
     #[serde(default)]
@@ -65,7 +65,7 @@ pub fn compile_request(req: &CompileRequest) -> Result<Value> {
     match req.target.as_str() {
         "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, manifest, false),
         "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, manifest, false),
-        // parse-only：允许 unresolved route（PRD_100 §10.3）。
+        // parse-only：允许 unresolved route。
         "parse" => compile_zhixu_hook_plan(&req.definition, manifest, true),
         "dock_link" => compile_dock_link(&req.definition, manifest),
         other => Err(CompilerError::Message(format!(
@@ -312,7 +312,7 @@ fn compile_dock_state(
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
 
     // target:null 的动态选择 route 不进 link（目标空缺，无 D008 可言），
-    // 改入未解析清单随产物携带（PRD_100 §10.3：云轨运行时由选择记录补齐）。
+    // 改入未解析清单随产物携带（云轨运行时由选择记录补齐）。
     let mut static_routes = Vec::new();
     let mut unresolved_json = Vec::new();
     for route in unlinked {
@@ -352,7 +352,7 @@ fn compile_dock_state(
             None if allow_unresolved => Vec::new(),
             None => {
                 return Err(CompilerError::Message(
-                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes with static targets but no resolutionManifest was provided; runnable compilation requires linking against published target interfaces (PRD_100 §10)".to_string(),
+                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes with static targets but no resolutionManifest was provided; runnable compilation requires linking against published target interfaces".to_string(),
                 ));
             }
         }
@@ -420,7 +420,7 @@ const MAX_IDENTIFIER_BYTES: usize = 100;
 /// DDL 维度镜像：canonical 三段式 task.stage.signal 落
 /// individual_record.signal_name / hook_dependency.signal_name VARCHAR(100)。
 const MAX_SIGNAL_NAME_BYTES: usize = 100;
-/// metadata.name 的 slug 形态（PRD_102 N7）：技术名风格，仅限形态校验，
+/// metadata.name 的 slug 形态：技术名风格，仅限形态校验，
 /// 不承担任何语义判断（非唯一、不参与关系推断）。
 const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
 
@@ -1147,7 +1147,7 @@ fn dock_entrance_hook_ids(dock_state: &DockState) -> BTreeSet<String> {
 fn compile_stage_hooks(entry: &StageEntry, dock_state: &DockState) -> Result<Vec<Value>> {
     let mut hooks = Vec::new();
     let is_mint_stage = entry.stage.mint.is_some();
-    // entrance 端口引用的目标侧 hook 是 dock 出生入口（PRD_100 §11.3）。
+    // entrance 端口引用的目标侧 hook 是 dock 出生入口。
     let entrance_hook_ids = dock_entrance_hook_ids(dock_state);
     let is_zhixu_stage = is_zhixu_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
@@ -1494,7 +1494,7 @@ mod tests {
 
     // ------------------------------------------------------------------
     // 目标示例（payment_execution）：两个具名接口
-    // payment_service[new] 与 payment_evidence[existing]（PRD_100 §9.1）。
+    // payment_service[new] 与 payment_evidence[existing]。
     // ------------------------------------------------------------------
     fn target_payment_definition() -> Value {
         json!({
@@ -2271,7 +2271,7 @@ mod tests {
             "{error}"
         );
 
-        // PRD_102 N2：metadata.uid 不是作者可写字段，出现即未知字段响亮拒绝。
+        // metadata.uid 不是作者可写字段，出现即未知字段响亮拒绝。
         let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["metadata"]["uid"] = json!("zx-hand-written");
         let error = compile_zhixu_hook_plan(&parent, None, false)
@@ -2472,7 +2472,7 @@ mod tests {
 
     #[test]
     fn accepts_dynamic_target_null_for_parse_only_compilation() {
-        // target:null 表示运行时选择补齐（PRD_100 §10.3）：本地校验通过，
+        // target:null 表示运行时选择补齐：本地校验通过，
         // 无 manifest 的 parse 编译可过；静态目标缺失 manifest 才是
         // UNRESOLVED_DOCK_TARGET（见 rejects_parent_without_manifest）。
         let mut parent = parent_settlement_definition(TARGET_NAME);

@@ -17,7 +17,7 @@ struct ProfileFixture {
     #[allow(dead_code)]
     portable: bool,
     input: Value,
-    /// 可选 dock resolution manifest（PRD94 §5.2）：含 zhixu executor 的
+    /// 可选 dock resolution manifest：含 zhixu executor 的
     /// 可运行 fixture 必须内嵌 manifest。
     #[serde(default)]
     resolution_manifest: Option<Value>,
