@@ -411,9 +411,10 @@ struct StageEntry {
     stage_identifier: String,
 }
 
-/// 全局 stage.source 上限：source 是路由键，落库列（订阅路由维度）宽
-/// 36——与订阅 target source 同值（Go 镜像 zhixu_schema.go 的 ≤36 同款）。
-const MAX_STAGE_SOURCE_BYTES: usize = 36;
+/// 全局 stage.source 上限：DSL 壳字段统一 100 字节（与 metadata.name
+/// 同宽，bug_audit #14）。hook_name 的 36 字节上限是链轨落库内幕
+/// （global_hook.hook_name 列宽），不反向约束 DSL 壳字段。
+const MAX_STAGE_SOURCE_BYTES: usize = 100;
 /// DDL 维度镜像：global_zhixu.name / global_stage.stage_identifier
 /// VARCHAR(100)。
 const MAX_IDENTIFIER_BYTES: usize = 100;
@@ -490,10 +491,12 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
                     ));
                 }
             }
-            // stage.source：非空、plain identifier 字符集、≤36（与订阅
-            // target source 同值）。空串会以空键混进 mintedSources；含
-            // 空格/Unicode 的 source 是路由键，两侧必须逐字节一致
-            // （Go 镜像 zhixu_schema.go 同款）。
+            // stage.source：非空、plain identifier 字符集、≤100（DSL 壳
+            // 字段统一 100 字节，与 metadata.name 同宽，bug_audit #14）。
+            // 空串会以空键混进 mintedSources；含空格/Unicode 的 source
+            // 是路由键，两侧必须逐字节一致（Go 镜像 zhixu_schema.go 同款
+            // 字符集校验；36 字节的 hook_name 上限是链轨落库内幕，不约束
+            // 本 DSL 壳字段）。
             if stage.source.trim().is_empty() {
                 issues.push(format!(
                     "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be non-empty"
@@ -2206,7 +2209,7 @@ mod tests {
             ("whitespace", "  ".to_string()),
             ("space inside", "sell er".to_string()),
             ("unicode", "卖家".to_string()),
-            ("oversized", "s".repeat(37)),
+            ("oversized", "s".repeat(101)),
         ] {
             let mut parent = parent_settlement_definition(TARGET_NAME);
             parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!(source);
@@ -2217,14 +2220,15 @@ mod tests {
                 "source {label:?}: {error}"
             );
         }
-        // 36 字节边界恰好放行。
+        // 100 字节边界恰好放行（DSL 壳字段统一 100，bug_audit #14）。
         let mut parent = parent_settlement_definition(TARGET_NAME);
-        parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(36));
+        parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(100));
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("boundary source must pass shape checks and fail later on linking");
         assert!(
-            !error.to_string().contains("exceeds 36 bytes"),
-            "36-byte source is legal: {error}"
+            !error.to_string().contains("exceeds 100 bytes")
+                && !error.to_string().contains("exceeds 36 bytes"),
+            "100-byte source is legal: {error}"
         );
     }
 

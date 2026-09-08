@@ -22,7 +22,7 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
 ///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "6983fd8d6ed6637e5cc8d93c6012af823cd6ca852adab0ec0dbc561289031f8f";
+const PINNED_SHA256: &str = "f81239b230a04c43d11ef758ab586fd6d8cb9471b4d5b56cda2a25d07bd6b4d4";
 
 const CONSTRAINTS_RELATIVE_PATH: &str = "uvp-protocol/protocol/uvp-constraints.v1.json";
 
@@ -387,11 +387,11 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    stage_mut(&mut d)["source"] = json!(oversize_ascii(37, b'b'));
+                    stage_mut(&mut d)["source"] = json!(oversize_ascii(101, b'b'));
                     d
                 })
             },
-            "exceeds 36 bytes",
+            "exceeds 100 bytes",
         ),
     ));
     probes.push((
