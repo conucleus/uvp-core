@@ -108,12 +108,21 @@ pub struct ZhixuExecutor {
         skip_serializing_if = "Option::is_none"
     )]
     pub supplier_id: Option<String>,
-    /// 保持 Value 以便编译器产出带 JSON path / 错误码（D001-D007）的
-    /// 结构化错误，而不是裸 serde 报错。语义权威在 uvp-compiler::dock。
+    /// 保持 Value 以便编译器产出带 JSON path / 错误码（D001-D006、D010、
+    /// D019）的结构化错误，而不是裸 serde 报错。语义权威在 uvp-compiler::dock。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zhixu_executor_config: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selectable_resource: Option<Value>,
+}
+
+/// `supplierType` 闭集：与 Go `api/core/v0` supplier.go 的常量、TS compiler
+/// types 的字面量联合同源。executor 经 executorRoutes 进链上承诺，闭集外
+/// 的任意字符串必须在编译期拒绝，而不是烧进承诺后才在消费侧炸开。
+pub const SUPPLIER_TYPES: [&str; 3] = ["individual", "organization", "zhixu"];
+
+pub fn is_known_supplier_type(value: &str) -> bool {
+    SUPPLIER_TYPES.contains(&value.trim())
 }
 
 /// `spec.dockInterface` 下的具名接口（PRD_100 §9.1-§9.4）。

@@ -477,6 +477,19 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
                     stage.name
                 ));
             }
+            if let Some(executor) = &stage.executor {
+                // supplierType 闭集（uvp_model::SUPPLIER_TYPES）：拼错的类型
+                // 会经 executorRoutes 进链上承诺，闭集外的字符串在此拒绝。
+                if !uvp_model::is_known_supplier_type(&executor.supplier_type) {
+                    issues.push(format!(
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}].executor.supplierType must be one of {} (trim-sensitive), found {:?}",
+                        uvp_model::SUPPLIER_TYPES
+                            .map(|value| format!("{value:?}"))
+                            .join(", "),
+                        executor.supplier_type
+                    ));
+                }
+            }
             // stage.source：非空、plain identifier 字符集、≤36（与订阅
             // target source 同值）。空串会以空键混进 mintedSources；含
             // 空格/Unicode 的 source 是路由键，两侧必须逐字节一致
@@ -2276,6 +2289,38 @@ mod tests {
             .expect_err("composite input port hook must fail");
         assert!(error.to_string().contains("D013"), "{}", error.to_string());
 
+        // 同 atom 的组合式（A&A / A|A）：依赖去重后只剩一项，计数判定会被
+        // 伪装成"单 atom"——判定必须看去重前的语法结构。
+        for expression in [
+            "payment::payment_flow.init.execute & payment::payment_flow.init.execute",
+            "payment::payment_flow.init.execute | payment::payment_flow.init.execute",
+        ] {
+            let mut target = target_payment_definition();
+            target["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_EXECUTE"] =
+                json!(expression);
+            let error = compile_zhixu_hook_plan(&target, None, true)
+                .expect_err("same-atom composition must fail");
+            assert!(
+                error.to_string().contains("D013"),
+                "{expression}: {}",
+                error.to_string()
+            );
+        }
+
+        // input atom 的 (task, stage) 必须落在所属 stage 上：mailbox 地址
+        // 指向别处（同 source 的另一 stage）同样是 D013。
+        let mut target = target_payment_definition();
+        target["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_EXECUTE"] =
+            json!("payment::payment_flow.control.cxl");
+        let error = compile_zhixu_hook_plan(&target, None, true)
+            .expect_err("input atom addressing another stage must fail");
+        assert!(
+            error.to_string().contains("D013")
+                && error.to_string().contains("must address the owning stage"),
+            "{}",
+            error.to_string()
+        );
+
         // 输出端口引用非 sendSignals 信号。
         let mut target = target_payment_definition();
         target["spec"]["dockInterface"]["payment_service"]["outputs"]["started"]["signal"] =
@@ -2350,6 +2395,19 @@ mod tests {
                 && error
                     .to_string()
                     .contains("must be \"new\" or \"existing\""),
+            "{}",
+            error.to_string()
+        );
+
+        // D001：supplierID 键出现即违规——空串是"看似生效"的零值占位，
+        // 不因空值豁免（目标身份必须住在 zhixuExecutorConfig.target）。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["supplierID"] = json!("  ");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("empty supplierID on a zhixu executor must fail");
+        assert!(
+            error.to_string().contains("D001")
+                && error.to_string().contains("supplierID is forbidden"),
             "{}",
             error.to_string()
         );
@@ -2572,6 +2630,121 @@ mod tests {
         let error = compile_cloud_artifact(&parent, None, false)
             .expect_err("empty mappings must fail without a target");
         assert!(error.to_string().contains("D019"), "{}", error);
+    }
+
+    #[test]
+    fn unresolved_routes_enforce_d016_binding_caps() {
+        // D016 上限必须在声明面（parse 期）钉死：target:null 的 route 不进
+        // link，上限若只放在 link 期会被未解析 route 绕过。
+        let channels = (0..9).map(|index| format!("CH{index}")).collect::<Vec<_>>();
+        let receive_signals: Map<String, Value> = channels
+            .iter()
+            .map(|channel| {
+                (
+                    channel.clone(),
+                    Value::String("buyer::main.work.seed".to_string()),
+                )
+            })
+            .collect();
+        let input_map: Map<String, Value> = channels
+            .iter()
+            .enumerate()
+            .map(|(index, channel)| {
+                (
+                    channel.clone(),
+                    Value::String(format!("p{index}")),
+                )
+            })
+            .collect();
+        let parent = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "cap_parent" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "cap-core" },
+                "taskPatterns": [
+                    { "name": "main", "stages": [
+                        {
+                            "name": "work",
+                            "source": "buyer",
+                            "receiveSignals": { "START": "buyer::main.work.seed" },
+                            "sendSignals": ["seed"],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                        },
+                        { "name": "dock", "source": "buyer",
+                          "receiveSignals": receive_signals,
+                          "sendSignals": ["out"],
+                          "executor": {
+                            "supplierType": "zhixu",
+                            "zhixuExecutorConfig": {
+                                "target": null,
+                                "interface": "bulk_service",
+                                "order": { "mode": "existing" },
+                                "inputMap": input_map,
+                                "signalMap": { "out": "done" }
+                            }
+                        }}
+                    ]}
+                ]
+            }
+        });
+        let error = compile_cloud_artifact(&parent, None, false)
+            .expect_err("nine input bindings must fail the D016 cap");
+        assert!(
+            error.to_string().contains("D016")
+                && error.to_string().contains("9 input ports, limit is 8"),
+            "{}",
+            error
+        );
+
+        // 上限内（8 条）照常进未解析清单。
+        let mut parent = parent;
+        let config = parent["spec"]["taskPatterns"][0]["stages"][1]["executor"]
+            ["zhixuExecutorConfig"]
+            .as_object_mut()
+            .unwrap();
+        config["inputMap"]
+            .as_object_mut()
+            .unwrap()
+            .remove("CH8");
+        parent["spec"]["taskPatterns"][0]["stages"][1]["receiveSignals"]
+            .as_object_mut()
+            .unwrap()
+            .remove("CH8");
+        let artifact = compile_cloud_artifact(&parent, None, false)
+            .expect("eight input bindings compile as an unresolved route");
+        assert_eq!(
+            artifact["unresolvedDockRoutes"][0]["inputBindings"]
+                .as_array()
+                .map(Vec::len),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_executor_supplier_types() {
+        // supplierType 闭集 {individual, organization, zhixu}：拼错的类型
+        // 会经 executorRoutes 进链上承诺，编译期拒绝。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] =
+            json!("org");
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("unknown supplierType must fail before entering executorRoutes");
+        assert!(
+            error.to_string().contains("supplierType must be one of"),
+            "{}",
+            error
+        );
+
+        // 闭集内取值（zhixu 形态由 dock 系列测试覆盖）照常编译。
+        for supplier_type in ["individual", "organization", " organization "] {
+            let mut parent = parent_settlement_definition(TARGET_NAME);
+            parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] =
+                json!(supplier_type);
+            compile_zhixu_hook_plan(&parent, None, true)
+                .unwrap_or_else(|err| panic!("{supplier_type} must pass the closed set: {err}"));
+        }
     }
 
     #[test]

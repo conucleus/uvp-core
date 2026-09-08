@@ -16,7 +16,7 @@
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use uvp_hook_dsl::{parse_hook, DependencyKind, HookMode, ParseHookRequest, Profile};
+use uvp_hook_dsl::{parse_hook, ParseHookRequest, Profile};
 use uvp_model::{DockInterfaceSpec, ZhixuStage};
 
 // ---------------------------------------------------------------------------
@@ -113,12 +113,9 @@ pub fn parse_zhixu_executor_config(
     let path = format!("{stage_identifier}.executor.zhixuExecutorConfig");
     let mut issues = Vec::new();
 
-    // D001：zhixu executor 禁止 supplierID。
-    if executor_value
-        .get("supplierID")
-        .and_then(Value::as_str)
-        .is_some_and(|id| !id.trim().is_empty())
-    {
+    // D001：zhixu executor 禁止 supplierID——键出现即违规（空串/纯空白是
+    // "看似生效"的零值占位，与拼错字段同罪，不因空值豁免）。
+    if executor_value.get("supplierID").is_some() {
         issues.push(DockIssue::new(
             "D001",
             format!("{stage_identifier}.executor.supplierID"),
@@ -420,6 +417,29 @@ pub fn parse_zhixu_executor_config(
         ));
     }
 
+    // D016：binding 数量上限在声明面（parse 期）钉死——target:null 的动态
+    // 选择 route 不进 link，上限若只放在 link 期会被未解析 route 绕过。
+    if parsed_input.len() > MAX_DOCK_INPUTS {
+        issues.push(DockIssue::new(
+            "D016",
+            format!("{path}.inputMap"),
+            format!(
+                "route binds {} input ports, limit is {MAX_DOCK_INPUTS}",
+                parsed_input.len()
+            ),
+        ));
+    }
+    if parsed_signal.len() > MAX_DOCK_OUTPUTS {
+        issues.push(DockIssue::new(
+            "D016",
+            format!("{path}.signalMap"),
+            format!(
+                "route binds {} output ports, limit is {MAX_DOCK_OUTPUTS}",
+                parsed_signal.len()
+            ),
+        ));
+    }
+
     if !issues.is_empty() {
         return Err(issues);
     }
@@ -678,10 +698,14 @@ pub fn compile_dock_interface(
             };
             // D013：恰好一个正向 canonical signal atom；禁止组合/否定/计时/订阅。
             // atom 信号不要求 ∈ sendSignals——它是 dock 注入的输入事实。
-            let single_atom = parsed.mode == HookMode::Normal
-                && parsed.dependencies.len() == 1
-                && parsed.dependencies[0].kind == DependencyKind::Positive
-                && parsed.dependencies[0].delay_seconds.is_none();
+            // 判定看去重前的语法结构（AST 根即 Signal 节点）：依赖列表是
+            // 去重后的产物，A&A / A|A 会把组合式伪装成"单依赖"绕过本闸。
+            let single_atom = parsed
+                .ast
+                .get("condition")
+                .and_then(|condition| condition.get("kind"))
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind == "signal");
             if !single_atom {
                 issues.push(DockIssue::new(
                     "D013",
@@ -1266,9 +1290,10 @@ impl DockRoute {
 }
 
 /// Link：本地未链接 routes + resolution manifest → 已解析 DockRoute 列表
-/// （D008-D012、D015-D016、D020）。纯函数，无网络、无 I/O。
+/// （D008-D012、D015、D020）。纯函数，无网络、无 I/O。
 /// 目标按 name 查找；跨定义的内容校验（身份重算/哈希比对）是各轨解析
-/// 面的内务，不在 core。
+/// 面的内务，不在 core。binding 数量上限（D016）在 parse 期钉死——
+/// target:null 的 route 不经此处，link 期不重复设闸。
 pub fn link_dock_routes(
     local_name: &str,
     unlinked: &[UnlinkedDockRoute],
@@ -1417,27 +1442,6 @@ pub fn link_dock_routes(
             continue;
         }
 
-        // D016：binding 数量上限。
-        if resolved_inputs.len() > MAX_DOCK_INPUTS {
-            route_issues.push(DockIssue::new(
-                "D016",
-                &path,
-                format!(
-                    "route references {} input bindings, limit is {MAX_DOCK_INPUTS}",
-                    resolved_inputs.len()
-                ),
-            ));
-        }
-        if resolved_outputs.len() > MAX_DOCK_OUTPUTS {
-            route_issues.push(DockIssue::new(
-                "D016",
-                &path,
-                format!(
-                    "route references {} output bindings, limit is {MAX_DOCK_OUTPUTS}",
-                    resolved_outputs.len()
-                ),
-            ));
-        }
         // 收尾闸只看本 route 的 issues：route_issues 为空则照常产 route，
         // 前序 route 的失败不得让后续干净 route 被跳过。
         if !route_issues.is_empty() {
