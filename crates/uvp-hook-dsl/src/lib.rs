@@ -359,12 +359,24 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                     )
                 })?
                 .clone();
-            let source = target
+            let target_object = target.as_object().ok_or_else(|| {
+                HookError::Message(
+                    "compiled subscriptionTarget must be an object".to_string(),
+                )
+            })?;
+            // 键闭集与其他子对象闸口同口径：拼错的字段（如 singal）不得被
+            // 静默忽略成缺省语义（Go DecodeCompiledHook 同款拒绝）。
+            reject_unknown_keys(
+                target_object,
+                &["source", "signal"],
+                "compiled subscriptionTarget",
+            )?;
+            let source = target_object
                 .get("source")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
-            let signal = target
+            let signal = target_object
                 .get("signal")
                 .and_then(Value::as_str)
                 .map(str::trim)
@@ -2136,6 +2148,50 @@ mod tests {
             hook: "buyer::task.receive.cmp +2592000s".to_string(),
         });
         assert!(boundary.is_ok(), "30d must stay accepted: {boundary:?}");
+    }
+
+    #[test]
+    fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
+        // subscriptionTarget 键闭集：拼错的键（如 singal）与多余字段必须
+        // 确定性拒绝，不得被静默忽略成"缺 source/signal"或缺省语义；
+        // 非对象形态同样响亮失败。
+        let mut ast = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "SUB".to_string(),
+            hook: "::ANCHOR(@seller::trade.listing.cmp)".to_string(),
+        })
+        .unwrap()
+        .cloud_ast;
+        ast["subscriptionTarget"]
+            .as_object_mut()
+            .unwrap()
+            .insert("singal".to_string(), json!("trade.listing.cmp"));
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: ast.clone(),
+            signals: vec![],
+            now: "2026-04-27T00:00:00.000Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("subscriptionTarget")
+                && err.to_string().contains("unsupported field: singal"),
+            "unexpected error: {err}"
+        );
+
+        let mut ast = ast;
+        ast["subscriptionTarget"] = json!(["seller", "trade.listing.cmp"]);
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast,
+            signals: vec![],
+            now: "2026-04-27T00:00:00.000Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("subscriptionTarget must be an object"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
