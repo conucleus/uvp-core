@@ -26,8 +26,13 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 
 - `HookStatusChanged(status=ready)`：合约对 →Ready 先 emit 状态变更再 emit
   `HookReady`；oracle 只以 `HookReady` 观察就绪，ready 状态变更被裁剪。
-- 逐字重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt）：投影
-  重放/重排可能产生重复，重复被吸收，不产生 missing-observed 假阳性。
+- `HookStatusChanged(status=init)`：v0.10 合约不产出（Init 是隐含初值，无
+  观察语义）；携带该状态的输入事件被裁剪——原生入口的输入契约因此不需要
+  适配层预裁 init 观察。
+- 语义重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt 时刻）：
+  投影重放/重排可能重复，重复被吸收，不产生 missing-observed 假阳性。
+  dueAt 按时刻归一化比较（毫秒位数/时区偏移写法不是语义），不同渲染的
+  同一时刻视为重复。
 
 ### 推导（derive，从链上事件补齐 oracle 状态）
 
@@ -39,11 +44,14 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   事实到达即由正常求值自然产生 `HookReady`，无需推导。
 - order-link mint 出生（`triggerOrderFromSignalFromModule`）：出生事实留在
   origin 订单上，本订单不 `_recordSignal` 但 emit `HookReady`，求值路径无事实
-  可依。oracle 据链上 `HookReady` 反推：order-trigger hook 补 runtime
-  ready/readyEmitted 并物化其阶段，同时把该观察记入 observed（接受链上
-  断言；重复的出生 `HookReady` 在合约 `!readyEmitted` 门下不可达，第二次
-  以 missing-observed 暴露流异常）。非 trigger hook 的无信号 `HookReady`
-  不推导，保持 mismatch 暴露真实异常。
+  可依。oracle 据链上 `HookReady` 反推：order-trigger hook（mint 与 dock 两种
+  标记）补 runtime ready/readyEmitted 并物化其阶段，同时把该观察记入
+  observed（接受链上断言；outside/dock 出生的事实已记录、正常求值先行置位
+  readyEmitted，推导对它们在 ready_emitted 门处天然短路，真正走推导路径的
+  只有 order-link mint 出生。重复的出生 `HookReady` 在合约 `!readyEmitted`
+  门下不可达，第二次以 missing-observed 暴露流异常）。非 trigger hook 的
+  无信号 `HookReady` 不推导，保持 mismatch 暴露真实异常。plan 缺失 v2 结构
+  字段（`orderTriggerKind` 等）在此响亮失败，不回退成"非 trigger"。
 
 ### 消费（consume，回填状态不进 expected）
 
@@ -51,6 +59,16 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   阶段的 watcher 求值据此放行。
 - `OrderMaterialized` / `OrderTriggered` / `OrderLinked`：仅存在性事件，
   无观察语义。
+
+## 观察配对与比对契约
+
+- 配对键：expected 与 observed 按 `(planId, orderId, hookId)` 分桶、桶内按
+  到达序配对。全局下标配对会把不同 hook/订单间合法的事件流交错误配成
+  semantic-mismatch——交错是流布局，不是语义分叉；每个事实键的观察序列
+  只与该键自己的求值历史可比（与合约 `_evaluateAffectedHooks` 的 per-key
+  hookIds 序一致）。
+- `dueAt`：按时刻归一化比较（毫秒位数/时区偏移写法不是语义）；时刻不可
+  解析或单侧缺失时不静默放行。
 
 ## poke 语义
 
