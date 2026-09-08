@@ -22,7 +22,7 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
 ///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "d1110902226d1838f97e199bf8aa9f7d2b9300b500a0f7272d26c66b5c6af8f3";
+const PINNED_SHA256: &str = "b856474fac3effc92247ce3c5eeddecb031fe61ffaff07e1d1785a93436a4290";
 
 const CONSTRAINTS_RELATIVE_PATH: &str = "uvp-protocol/protocol/uvp-constraints.v1.json";
 
