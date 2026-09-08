@@ -67,7 +67,10 @@ pub fn compile_request(req: &CompileRequest) -> Result<Value> {
         "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, manifest, false),
         // parse-only：允许 unresolved route。
         "parse" => compile_zhixu_hook_plan(&req.definition, manifest, true),
-        "dock_link" => compile_dock_link(&req.definition, manifest),
+        // dock link 编译 target（uvp.dock-link v1 产物面）已删除
+        // （bug_audit #10：无消费方机制直接移除）：link 校验由
+        // hook_plan/cloud/parse 在 resolutionManifest 在场时同一链路承担，
+        // 无独立产物面。
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"
         ))),
@@ -250,37 +253,6 @@ pub fn compile_cloud_artifact(
         artifact["dockInterface"] = interface_json;
     }
     // 空清单不落字段：未解析 route 是动态选择的声明面，目标空缺。
-    if !dock_state.unresolved_json.is_empty() {
-        artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
-    }
-    Ok(artifact)
-}
-
-/// dock_link：只做 link 的 API 边界——校验父定义的 dock 声明能按 manifest
-/// 全量解析，输出中性 route 与接口声明（不编译 hooks）。
-fn compile_dock_link(
-    definition_value: &Value,
-    resolution_manifest: Option<&Value>,
-) -> Result<Value> {
-    let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
-        .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
-    let issues = validate_zhixu_shape(&definition);
-    if !issues.is_empty() {
-        return Err(CompilerError::Issues(issues.join("; ")));
-    }
-    let stage_entries = flatten_stages(&definition)?;
-    let stage_pairs = stage_entries
-        .iter()
-        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
-        .collect::<Vec<_>>();
-    let dock_state = compile_dock_state(&definition, &stage_pairs, resolution_manifest, false)?;
-    let mut artifact = json!({
-        "schemaVersion": "uvp.dockLink.v1",
-        "dockRoutes": Value::Array(dock_state.routes_json),
-    });
-    if let Some(interface_json) = dock_state.interface_json {
-        artifact["dockInterface"] = interface_json;
-    }
     if !dock_state.unresolved_json.is_empty() {
         artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
     }
@@ -1956,6 +1928,26 @@ mod tests {
         assert!(
             error.to_string().contains("UNRESOLVED_DOCK_TARGET"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn dock_link_compile_target_is_retired() {
+        // bug_audit #10：dock link 编译 target（uvp.dock-link v1 产物面）
+        // 无消费方，直接删除、无兼容形态——出现即按未知 target 响亮拒绝
+        // （link 校验由 hook_plan/cloud/parse 在 manifest 在场时同一链路
+        // 承担）。
+        let request = json!({
+            "target": "dock_link",
+            "definition": target_payment_definition(),
+        });
+        let envelope: Value =
+            serde_json::from_str(&compile_json(&request.to_string())).expect("envelope");
+        assert_eq!(envelope["ok"], json!(false));
+        let message = envelope["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(
+            message.contains("unsupported compile target") && message.contains("dock_link"),
+            "{message}"
         );
     }
 
