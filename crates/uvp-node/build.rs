@@ -18,6 +18,9 @@ fn main() {
         println!("cargo:rustc-link-arg=-undefined");
         println!("cargo:rustc-link-arg=dynamic_lookup");
     }
+    // 环境变量注入的 rev 变化必须触发重跑（与 uvp-ffi/build.rs 同款），
+    // 否则 hermetic 构建改 rev 后指纹停留在上一次编译的取值。
+    println!("cargo:rerun-if-env-changed=UVP_FFI_GIT_REV");
 
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
