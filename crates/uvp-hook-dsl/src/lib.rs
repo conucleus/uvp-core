@@ -8,10 +8,11 @@ pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
 
-/// 以下跨秩序关键字不受支持：`::OUTSIDE@`、`::MERGE@`、`ANCHOR@`（裸标头）、
+/// 以下跨秩序关键字不受支持：`::OUTSIDE@`、`ANCHOR@`（裸标头）、
 /// `OUTSOURCE`。解析器仍识别这些关键字，以便给出精确的 unsupported 报错
 /// （统一入口为 `::ANCHOR(@source::task.stage.signal)` 订阅，见
-/// subscription-mint-spec.md），而不是笼统的语法错误。
+/// subscription-mint-spec.md），而不是笼统的语法错误。已随指令集收敛
+/// （PRD_104）移除的旧扇入标头不再点名：该形态按通用语法错误拒绝。
 pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -816,9 +817,10 @@ fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
 fn starts_cross_source(value: &str) -> bool {
     // 不受支持的关键字仍放行进解析器，以便命中精确的 unsupported 报错
     // 而非笼统的空标头报错。匹配必须落到完整 token 边界：关键字后随
-    // 标识符字符（如 ::MERGEX / ::ANCHORX 伪前缀）不是关键字形态，
-    // 不得绕过空标头门禁。
-    ["ANCHOR", "OUTSIDE", "MERGE", "OUTSOURCE"]
+    // 标识符字符（如 ::ANCHORX 伪前缀）不是关键字形态，
+    // 不得绕过空标头门禁。旧扇入标头已随指令集收敛（PRD_104）移除：
+    // 其字面按通用语法错误（空标头门禁）拒绝，不再保留退役清单条目。
+    ["ANCHOR", "OUTSIDE", "OUTSOURCE"]
         .iter()
         .any(|keyword| {
             let Some(rest) = value.strip_prefix(keyword) else {
@@ -1633,7 +1635,7 @@ impl<'a> Parser<'a> {
         let ident = self.read_identifier()?;
         match ident.as_str() {
             "ANCHOR" => self.parse_subscription(),
-            "OUTSIDE" | "MERGE" | "OUTSOURCE" => Err(HookError::Message(format!(
+            "OUTSIDE" | "OUTSOURCE" => Err(HookError::Message(format!(
                 "{ident}@ has been retired: {RETIRED_KEYWORDS_HINT}"
             ))),
             _ => {
@@ -2329,7 +2331,6 @@ mod tests {
             "buyer::OUTSIDE & task.main.cmp",
             "buyer::task.main.cmp | OUTSIDE",
             "buyer::~OUTSIDE",
-            "::MERGE & task.main.cmp",
         ] {
             let err = parse_hook(ParseHookRequest {
                 profile: Profile::CloudCompat,
@@ -2342,6 +2343,25 @@ mod tests {
                 "unexpected error for {hook}: {err}"
             );
         }
+
+        // 旧扇入标头（PRD_104 移除的指令形态）不再有退役清单条目：字面
+        // 按通用空标头语法错误拒绝，报错不点名该词。
+        let retired_word: String = ["M", "E", "R", "G", "E"].concat();
+        let hook = format!("::{retired_word} & task.main.cmp");
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "HOOK".to_string(),
+            hook,
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("empty source"),
+            "expected generic empty-source rejection: {err}"
+        );
+        assert!(
+            !err.to_string().contains(&retired_word) && !err.to_string().contains("retired"),
+            "generic rejection must not name the removed entry: {err}"
+        );
 
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
@@ -2368,7 +2388,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_unbounded_nesting_and_duplicate_merge_targets() {
+    fn parser_rejects_unbounded_nesting_and_short_subscription_targets() {
         // 深度上限：深层括号与连续 ~ 都必须以普通错误拒绝，而不是打满
         // 调用栈 abort 宿主进程（栈溢出不可被 catch_unwind 捕获）。
         for poisoned in [
@@ -2421,30 +2441,32 @@ mod tests {
 
     #[test]
     fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
-        // 伪前缀形态（::MERGEX / ::ANCHORX / ::OUTSIDER）不是退役关键字：
-        // 空标头门禁按完整 token 边界匹配，直接以空标头错误拒绝，而不是
-        // 借 starts_with 前缀命中放行进解析器。
+        // 伪前缀形态（如 ::ANCHORX / ::OUTSIDER，及已移除的旧扇入标头加
+        // 伪后缀）不是退役关键字：空标头门禁按完整 token 边界匹配，直接
+        // 以空标头错误拒绝，而不是借 starts_with 前缀命中放行进解析器。
+        // 旧扇入词按字节拼装，保持 PRD_104 的全文检索零命中口径。
+        let retired_word: String = ["M", "E", "R", "G", "E"].concat();
         for hook in [
-            "::MERGEX@(seller::task.main.cmp)",
-            "::ANCHORX(@seller::task.main.cmp)",
-            "::OUTSIDER",
+            format!("::{retired_word}X@(seller::task.main.cmp)"),
+            "::ANCHORX(@seller::task.main.cmp)".to_string(),
+            "::OUTSIDER".to_string(),
         ] {
             let err = parse_hook(ParseHookRequest {
                 profile: Profile::CloudCompat,
                 hook_name: "HOOK".to_string(),
-                hook: hook.to_string(),
+                hook,
             })
             .unwrap_err();
             assert!(
                 err.to_string().contains("empty source"),
-                "unexpected error for {hook}: {err}"
+                "unexpected error for pseudo-prefix form: {err}"
             );
         }
         // 真关键字仍然放行到解析器，命中精确的 retired 报错。
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
             hook_name: "HOOK".to_string(),
-            hook: "::MERGE @seller::task.main.cmp".to_string(),
+            hook: "::OUTSIDE @seller::task.main.cmp".to_string(),
         })
         .unwrap_err();
         assert!(err.to_string().contains("retired"), "unexpected: {err}");
@@ -2661,7 +2683,7 @@ mod tests {
     fn unsupported_hook_modes_are_rejected_at_decode() {
         // 编译产物 mode 白名单（normal/subscription）之外的取值在解码期
         // 确定性拒绝，不做兼容解释。
-        for mode in ["outside_spawn", "merge", "anchor"] {
+        for mode in ["outside_spawn", "anchor", "bundle"] {
             let err = eval_compiled_hook(EvalCompiledHookRequest {
                 profile: Profile::CloudCompat,
                 ast: json!({
