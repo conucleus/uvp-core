@@ -176,6 +176,179 @@
           }
         ]
       }
+    },
+    {
+      "name": "and binds tighter than or without parentheses",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.a.cmp & task.b.cmp | task.c.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "(task.a.cmp&task.b.cmp)|task.c.cmp",
+        "normalizedExpression": "buyer::(task.a.cmp&task.b.cmp)|task.c.cmp",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.b.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.c.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "or right operand binds and first without parentheses",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.a.cmp | task.b.cmp & task.c.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.a.cmp|(task.b.cmp&task.c.cmp)",
+        "normalizedExpression": "buyer::task.a.cmp|(task.b.cmp&task.c.cmp)",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.b.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.c.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "not binds tighter than and without parentheses",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::~task.a.cmp & task.b.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "~task.a.cmp&task.b.cmp",
+        "normalizedExpression": "buyer::~task.a.cmp&task.b.cmp",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.b.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "postfix delay binds tighter than and without parentheses",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.a.cmp +5s & task.b.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.a.cmp+5s&task.b.cmp",
+        "normalizedExpression": "buyer::task.a.cmp+5s&task.b.cmp",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.b.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.a.cmp",
+            "delaySeconds": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "postfix delay binds tighter than or under cloud rendering",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::task.a.cmp +5s | task.b.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "(task.a.cmp + 5s) | task.b.cmp",
+        "normalizedExpression": "buyer::task.a.cmp+5s|task.b.cmp",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.b.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.a.cmp",
+            "delaySeconds": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "nested delay parses as chained postfix over a grouped operand",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "(task.a.cmp+5s)+10s",
+        "normalizedExpression": "buyer::(task.a.cmp+5s)+10s",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.a.cmp",
+            "delaySeconds": 5
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.a.cmp",
+            "delaySeconds": 10
+          }
+        ]
+      }
     }
   ],
   "evalCases": [
@@ -561,6 +734,42 @@
         "state": "ready",
         "readyAt": "2026-04-27T00:00:50.000Z"
       }
+    },
+    {
+      "name": "evm nested delay waits on the chained outer due after the inner due",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "now": "2026-04-27T00:00:06.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:15.000Z"
+      }
+    },
+    {
+      "name": "evm nested delay readies at the chained outer due on chain second precision",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "now": "2026-04-27T00:00:15.001Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:15.000Z"
+      }
     }
   ],
   "invalidCases": [
@@ -703,6 +912,13 @@
       "hookName": "HOOK",
       "hook": "::ANCHOR(@sssssssssssssssssssssssssssssssssssss::task.main.cmp)",
       "messageContains": "maximum length of 36"
+    },
+    {
+      "name": "unparenthesized chained delay is rejected",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.a.cmp +5s +10s",
+      "messageContains": "unexpected token"
     }
   ],
   "replayCases": [
