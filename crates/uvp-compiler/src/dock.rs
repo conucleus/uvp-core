@@ -24,8 +24,9 @@ use uvp_model::{DockInterfaceSpec, ZhixuStage};
 // ---------------------------------------------------------------------------
 
 pub const DOCK_ROUTE_SCHEMA_VERSION: &str = "uvp.dockRoute.v2";
-/// 未解析 route（target:null 动态选择）的声明面产物形态：本地声明完整、
-/// 目标空缺，云轨运行时由选择记录补齐。
+/// 未解析 route 的声明面产物形态（bug_audit #20）：本地声明完整——
+/// target:null 动态选择的目标空缺（云轨运行时由选择记录补齐）；静态
+/// 目标 route 在 parse-only 产物中同面携带作者声明的 target.zhixu。
 pub const DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION: &str = "uvp.dockRoute.unresolved.v1";
 pub const DOCK_RESOLUTION_SCHEMA_VERSION: &str = "uvp.dock.resolution.v2";
 
@@ -523,11 +524,12 @@ pub fn collect_unlinked_routes(
 }
 
 impl UnlinkedDockRoute {
-    /// 未解析 route（target:null）的声明面产物：本地声明完整、目标空缺
-    /// 不携带任何派生字段——目标身份/承诺由各轨在
-    /// 选择记录补齐目标后自行计算。
+    /// 未解析 route 的声明面产物（bug_audit #20）：本地声明完整、不携带
+    /// 任何派生字段。target:null（动态选择）的目标空缺——目标身份/承诺
+    /// 由各轨在选择记录补齐后自行计算；静态目标 route 携带作者声明的
+    /// target.zhixu（name 引用，非派生身份），与动态目标对称进声明面。
     pub fn unresolved_json(&self) -> Value {
-        json!({
+        let mut route = json!({
             "schemaVersion": DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION,
             "stageIdentifier": self.stage_identifier,
             "localSource": self.stage_source,
@@ -541,7 +543,11 @@ impl UnlinkedDockRoute {
                 "signal": signal_name,
                 "port": port,
             })).collect::<Vec<_>>(),
-        })
+        });
+        if let Some(target_name) = &self.config.target_name {
+            route["target"] = json!({ "zhixu": target_name });
+        }
+        route
     }
 }
 

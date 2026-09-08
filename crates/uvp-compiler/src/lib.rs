@@ -291,8 +291,9 @@ fn compile_dock_link(
 struct DockState {
     interface_json: Option<Value>,
     routes_json: Vec<Value>,
-    /// target:null 动态选择 route 的声明面产物：不进 link——目标空缺的
-    /// route 没有可解析的绑定面。
+    /// 声明面产物（unresolvedDockRoutes）：target:null 动态选择 route 恒入
+    /// （目标空缺，不进 link）；parse-only 产物中静态目标 route 同面携带
+    /// （bug_audit #20，与动态目标对称）。
     unresolved_json: Vec<Value>,
     /// dockInterface input port 引用的本地 hook（`<task>.<stage>#<hook>`），
     /// 这些 mailbox hook 不走普通依赖引用校验（dock 模块按端口约束校验）。
@@ -311,13 +312,21 @@ fn compile_dock_state(
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
 
-    // target:null 的动态选择 route 不进 link（目标空缺，无 D008 可言），
-    // 改入未解析清单随产物携带（云轨运行时由选择记录补齐）。
+    // 声明面收集（bug_audit #20）：target:null 的动态选择 route 不进
+    // link（目标空缺，无 D008 可言），改入未解析清单随产物携带（云轨
+    // 运行时由选择记录补齐）；parse-only 产物（allow_unresolved）的静态
+    // 目标 route 同样进入声明面——解析产物如实携带全部委托形态，与动态
+    // 目标对称（静态条目携带作者声明的 target.zhixu）。
     let mut static_routes = Vec::new();
     let mut unresolved_json = Vec::new();
     for route in unlinked {
         match route.config.target_name.as_ref() {
-            Some(_) => static_routes.push(route),
+            Some(_) => {
+                if allow_unresolved {
+                    unresolved_json.push(route.unresolved_json());
+                }
+                static_routes.push(route);
+            }
             None => unresolved_json.push(route.unresolved_json()),
         }
     }
@@ -1956,6 +1965,62 @@ mod tests {
             compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, true)
                 .expect("parse target allows unresolved routes");
         assert_eq!(value["dockRoutes"].as_array().unwrap().len(), 0);
+        // bug_audit #20：静态目标 route 不因无 manifest 而从声明面消失——
+        // parse 产物如实携带全部委托形态，静态条目携带作者声明的
+        // target.zhixu（name 引用，非派生身份）。
+        let unresolved = value["unresolvedDockRoutes"].as_array().unwrap();
+        assert_eq!(unresolved.len(), 1);
+        let route = &unresolved[0];
+        assert_eq!(
+            route["schemaVersion"],
+            dock::DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION
+        );
+        assert_eq!(route["stageIdentifier"], "settlement.execute_payment");
+        assert_eq!(route["target"], json!({ "zhixu": TARGET_NAME }));
+        assert_eq!(route["interfaceName"], "payment_service");
+        assert_eq!(route["orderMode"], "new");
+        assert_eq!(
+            route["inputBindings"],
+            json!([{ "hookId": "settlement.execute_payment#EXECUTE", "port": "execute" }])
+        );
+    }
+
+    #[test]
+    fn parse_product_declaration_face_is_complete_with_manifest() {
+        // parse-only 产物带 manifest：静态 route 照常解析进 dockRoutes，
+        // 同时保留声明面条目（与动态目标对称——manifest 在场时 null-target
+        // route 也不退出声明面，见 manifest_present_null_target_route_stays_
+        // unresolved）。
+        let target = target_payment_definition();
+        let manifest = manifest_for(&target);
+        let artifact = compile_cloud_artifact(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&manifest),
+            true,
+        )
+        .expect("parse-only compilation with a manifest links and declares");
+        assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            artifact["dockRoutes"][0]["target"]["name"],
+            json!(TARGET_NAME)
+        );
+        let unresolved = artifact["unresolvedDockRoutes"].as_array().unwrap();
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(
+            unresolved[0]["stageIdentifier"],
+            "settlement.execute_payment"
+        );
+        assert_eq!(unresolved[0]["target"], json!({ "zhixu": TARGET_NAME }));
+
+        // 可运行产物（allow_unresolved=false）不做声明面冗余：静态 route
+        // 全量解析后 unresolvedDockRoutes 不落字段（既有口径不变）。
+        let runnable = compile_cloud_artifact(
+            &parent_settlement_definition(TARGET_NAME),
+            Some(&manifest),
+            false,
+        )
+        .expect("runnable compilation keeps the lean declaration face");
+        assert!(runnable.get("unresolvedDockRoutes").is_none());
     }
 
     #[test]
