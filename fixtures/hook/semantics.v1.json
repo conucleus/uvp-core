@@ -621,13 +621,6 @@
       "messageContains": "retired"
     },
     {
-      "name": "merge entry is retired",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::MERGE@(seller::task.main.cmp, buyer::task.other.cmp)",
-      "messageContains": "retired"
-    },
-    {
       "name": "legacy anchor header form is retired",
       "profile": "cloud_compat",
       "hookName": "HOOK",
