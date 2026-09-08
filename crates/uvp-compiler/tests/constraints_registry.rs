@@ -8,9 +8,10 @@
 //!   3. rust 线没有探针的新 rule 会让本文件硬失败（防静默漏测）。
 //!
 //! 读不到注册表时硬失败并给出路径/环境变量指引，绝不 skip。
-//! 路径解析：优先环境变量 `UVP_CONSTRAINTS_PATH`；默认相对 crate 目录的
-//! `../../../uvp-eth/uvp-protocol/protocol/uvp-constraints.v1.json`（uvp-core
-//! 与 uvp-eth/uvp-protocol 同父目录的检出布局）。
+//! 路径解析：优先环境变量 `UVP_CONSTRAINTS_PATH`；默认从 crate 目录逐级
+//! 向上寻找 `uvp-protocol/protocol/uvp-constraints.v1.json`——uvp-core 无论
+//! 作为 uvp-eth 子模块检出（uvp-eth/uvp-core、注册表在 uvp-eth/uvp-protocol）
+//! 还是与 uvp-protocol 平级独立检出，都能命中，不绑定单一兄弟目录布局。
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -21,12 +22,26 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
 ///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "d5d9088bdca481a142b89494dce4d1384b51b4b80c86874a57e4535ea13a9354";
+const PINNED_SHA256: &str = "d1110902226d1838f97e199bf8aa9f7d2b9300b500a0f7272d26c66b5c6af8f3";
+
+const CONSTRAINTS_RELATIVE_PATH: &str = "uvp-protocol/protocol/uvp-constraints.v1.json";
 
 fn default_constraints_path() -> std::path::PathBuf {
-    // 测试进程 cwd = crates/uvp-compiler。
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../uvp-eth/uvp-protocol/protocol/uvp-constraints.v1.json")
+    // 从 crate 目录逐级向上扫：第一个持有 uvp-protocol 检出的祖先即布局根。
+    // root 独立收缩——candidate 若用 push/pop 原地拼装，pop 每次只剥一个
+    // 组件，多段相对路径剥不干净会逐轮膨胀成死循环。
+    let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        let candidate = root.join(CONSTRAINTS_RELATIVE_PATH);
+        if candidate.exists() {
+            return candidate;
+        }
+        if !root.pop() {
+            break;
+        }
+    }
+    // 一个不存在的路径也保留：报错信息据此给出布局指引。
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(CONSTRAINTS_RELATIVE_PATH)
 }
 
 fn load_constraints_table() -> (String, Value) {
@@ -79,7 +94,7 @@ fn probe_compile(definition: Value) -> (bool, String) {
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
 
-/// link 级探针：target=hook_plan + resolution manifest（D018/D020 等
+/// link 级探针：target=hook_plan + resolution manifest（D009/D020 等
 /// link 期校验的可达路径）。
 fn probe_link(definition: Value, manifest: Value) -> (bool, String) {
     let request = json!({
@@ -408,6 +423,48 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
+        "task-pattern-name-charset".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["spec"]["taskPatterns"][0]["name"] = json!("1main");
+                    d
+                })
+            },
+            "must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'",
+        ),
+    ));
+    probes.push((
+        "stage-name-charset".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["name"] = json!("work shop");
+                    d
+                })
+            },
+            "must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'",
+        ),
+    ));
+    probes.push((
+        "executor-supplier-type-closed-enum".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["executor"]["supplierType"] = json!("org");
+                    d
+                })
+            },
+            "supplierType must be one of",
+        ),
+    ));
+    probes.push((
         "send-signal-combined-max-length".into(),
         (
             || probe_compile(base_definition()),
@@ -682,6 +739,23 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
+    // --- dock 级（D013 出生 hook 语法结构）---
+    probes.push((
+        "dock-birth-hook-single-atom-syntax".into(),
+        (
+            || probe_compile(target_interface_definition()),
+            || {
+                probe_compile({
+                    let mut d = target_interface_definition();
+                    d["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_ENTER"] =
+                        json!("buyer::main.work.enter & buyer::main.work.enter");
+                    d
+                })
+            },
+            "D013",
+        ),
+    ));
+
     probes
 }
 
@@ -756,5 +830,54 @@ fn constraints_registry_probes_rust_line() {
         assert_satisfy(outcome, &rule);
         let outcome = violate();
         assert_violate(outcome, anchor, &rule);
+    }
+}
+
+/// 拒绝面×实现线镜像状态矩阵（雏形）的形状闸：每行必须携带唯一 id、
+/// surface 真源描述与三线 mirrors 状态（mirrored / inherit-ffi / none
+/// 前缀）。矩阵不驱动探针，但形状劣化（缺线、状态词表外）必须在此
+/// 响亮失败，不让矩阵退化成自由文本注释堆。
+#[test]
+fn rejection_surface_matrix_is_well_formed() {
+    let (_, table) = load_constraints_table();
+    let surfaces = table
+        .get("rejectionSurfaces")
+        .and_then(Value::as_array)
+        .expect("registry carries rejectionSurfaces array");
+    assert!(
+        !surfaces.is_empty(),
+        "拒绝面矩阵为空：合约拒绝面真源与镜像债没有单一出处可对账"
+    );
+    let mut ids = std::collections::BTreeSet::new();
+    for surface in surfaces {
+        let id = surface
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("rejection surface carries id");
+        assert!(ids.insert(id.to_string()), "duplicate surface id {id}");
+        assert!(
+            surface
+                .get("surface")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty()),
+            "surface {id} must describe the on-chain rejection source"
+        );
+        let mirrors = surface
+            .get("mirrors")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("surface {id} carries mirrors for all three lines"));
+        for line in ["rust", "go", "ts"] {
+            let status = mirrors
+                .get(line)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("surface {id} carries mirror status for {line}"));
+            let known = ["mirrored", "inherit-ffi", "none"]
+                .iter()
+                .any(|prefix| status.starts_with(prefix));
+            assert!(
+                known,
+                "surface {id} line {line} status {status:?} outside the status vocabulary"
+            );
+        }
     }
 }
