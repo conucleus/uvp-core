@@ -127,9 +127,11 @@
             ],
             "inputs": {
               "amend": {
+                "source": "factory",
                 "hook": "manufacturing.produce#DOCK_AMEND"
               },
               "execute": {
+                "source": "factory",
                 "hook": "manufacturing.intake#EXECUTE"
               }
             },

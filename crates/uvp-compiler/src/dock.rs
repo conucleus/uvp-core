@@ -552,6 +552,11 @@ impl UnlinkedDockRoute {
 #[derive(Debug, Clone)]
 pub struct InterfacePortInput {
     pub port: String,
+    /// 输入端口所属 stage 的 source 类（单源 seam 的 input 侧观测面）。
+    /// hook 引用 `<task>.<stage>#<receiveHookName>` 本身不携带 source——
+    /// 中性声明补 source 兄弟键后，linker 才能对 input 与 output 两侧
+    /// 执行同一单源校验（文法 §4.2，bug_audit #1）。
+    pub source: String,
     /// `<task>.<stage>#<receiveHookName>`
     pub hook: String,
 }
@@ -574,11 +579,12 @@ pub struct InterfaceDeclaration {
 
 impl InterfaceDeclaration {
     fn to_json(&self) -> Value {
-        let inputs = Map::from_iter(
-            self.inputs
-                .iter()
-                .map(|port| (port.port.clone(), json!({ "hook": port.hook }))),
-        );
+        let inputs = Map::from_iter(self.inputs.iter().map(|port| {
+            (
+                port.port.clone(),
+                json!({ "source": port.source, "hook": port.hook }),
+            )
+        }));
         let outputs = Map::from_iter(
             self.outputs
                 .iter()
@@ -663,6 +669,19 @@ pub fn compile_dock_interface(
                 ));
                 continue;
             };
+            // input 端口的中性声明携带所属 stage 的 source 类（单源 seam 的
+            // input 侧观测面）：hook 引用本身无 source 维度，无法派生即响亮
+            // 失败，不留静默空串兜底（bug_audit #1）。
+            if stage.source.trim().is_empty() {
+                issues.push(DockIssue::new(
+                    "D022",
+                    format!("{path}.hook"),
+                    format!(
+                        "references stage {stage_identifier} which declares no source: the input port source cannot be derived"
+                    ),
+                ));
+                continue;
+            }
             let Some(raw_expression) = stage.receive_signals.get(&hook_name) else {
                 issues.push(DockIssue::new(
                     "D022",
@@ -744,6 +763,7 @@ pub fn compile_dock_interface(
 
             inputs.push(InterfacePortInput {
                 port: port_name.clone(),
+                source: stage.source.clone(),
                 hook: port.hook.clone(),
             });
         }
@@ -1142,18 +1162,34 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
             issues.push(DockIssue::new(
                 "D008",
                 &port_path,
-                "input port must be an object {hook: <task>.<stage>#<hookName>}",
+                "input port must be an object {source, hook}",
             ));
             continue;
         };
         for key in port_object.keys() {
-            if key != "hook" {
+            if !matches!(key.as_str(), "source" | "hook") {
                 issues.push(DockIssue::new(
                     "D008",
                     format!("{port_path}.{key}"),
-                    format!("unknown field {key:?}; allowed: [\"hook\"]"),
+                    format!("unknown field {key:?}; allowed: [\"source\", \"hook\"]"),
                 ));
             }
+        }
+        // source 必填（单源 seam 的 input 侧观测面）：缺失/空白即响亮失败，
+        // 不回退、不臆造——linker 的双侧单源校验依赖该字段（bug_audit #1）。
+        let source = port_object
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if source.is_empty() {
+            issues.push(DockIssue::new(
+                "D008",
+                format!("{port_path}.source"),
+                "source is required (the owning stage's source class); it must not be blank",
+            ));
+            continue;
         }
         let hook = port_object
             .get("hook")
@@ -1169,6 +1205,7 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
         }
         inputs.push(InterfacePortInput {
             port: port_name.clone(),
+            source,
             hook: hook.to_string(),
         });
     }
@@ -1415,10 +1452,16 @@ pub fn link_dock_routes(
             });
         }
 
-        // D012：被绑定端口同一 source seam。input 端口的 hook 引用不含
-        // source 维度（声明面就无此信息），seam 只能从 output 端口的
-        // canonical signal 前缀观测：绑定 output 时必须全部落在同一 seam。
+        // D012：被绑定接口同一 source seam——双侧同口径（bug_audit #1）：
+        // input 侧从接口声明的 input 端口 source 观测（被绑定接口的全部
+        // input 端口都参与：它们是同一接缝的投递邮箱），output 侧从
+        // route-bound 输出端口的 canonical signal 前缀观测。两侧并集必须
+        // 恰好一个 seam——input 端口 source 与接口 seam 不一致（跨源寻址）
+        // 在此编译期拒绝。
         let mut seams = BTreeSet::new();
+        for input in &interface.inputs {
+            seams.insert(input.source.clone());
+        }
         for output in &resolved_outputs {
             if let Some(port) = interface
                 .outputs
@@ -1435,7 +1478,7 @@ pub fn link_dock_routes(
                 "D012",
                 &path,
                 format!(
-                    "all output ports bound by one route must share a single target source seam, found {seams:?}"
+                    "the bound interface must expose a single target source seam across input port sources and route-bound output signal prefixes, found {seams:?}"
                 ),
             ));
             issues.extend(route_issues);
@@ -1664,9 +1707,163 @@ mod tests {
         json!({
             "name": name,
             "orderModes": ["new"],
-            "inputs": { "execute": { "hook": "main.work#DOCK_ENTER" } },
+            "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
             "outputs": {},
         })
+    }
+
+    #[test]
+    fn manifest_input_ports_require_source() {
+        // bug_audit #1：input 端口的 source 兄弟键是 manifest 必填项——
+        // 缺失/空白/非字符串都是确定性 D008，不回退、不臆造。
+        let base = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "payment_execution",
+                "interfaces": [{
+                    "name": "svc",
+                    "orderModes": ["new"],
+                    "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
+                    "outputs": {},
+                }],
+            }]
+        });
+        parse_resolution_manifest(&base).expect("input port with source parses");
+
+        let mut missing = base.clone();
+        missing["definitions"][0]["interfaces"][0]["inputs"]["execute"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source");
+        let issues = parse_resolution_manifest(&missing).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.path.ends_with("inputs.execute.source")
+                && issue.message.contains("source is required")),
+            "{issues:?}"
+        );
+
+        let mut blank = base.clone();
+        blank["definitions"][0]["interfaces"][0]["inputs"]["execute"]["source"] = json!("  ");
+        let issues = parse_resolution_manifest(&blank).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "D008" && issue.message.contains("must not be blank")),
+            "{issues:?}"
+        );
+
+        // 键闭集同步：source/hook 之外的兄弟键按未知字段拒绝。
+        let mut extra = base;
+        extra["definitions"][0]["interfaces"][0]["inputs"]["execute"]["sourceClass"] =
+            json!("buyer");
+        let issues = parse_resolution_manifest(&extra).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.message.contains("unknown field")
+                && issue.message.contains("sourceClass")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn link_rejects_cross_source_seams_from_both_sides() {
+        // bug_audit #1：D012 从 input 端口 source 与 output signal 前缀双侧
+        // 观测 seam——被绑定接口的任一侧跨源即拒绝（编译期 input 侧校验）。
+        let unlinked = vec![UnlinkedDockRoute {
+            stage_identifier: "local.stage".to_string(),
+            stage_source: "local-src".to_string(),
+            config: ZhixuExecutorConfig {
+                target_name: Some("target_def".to_string()),
+                interface_name: "svc".to_string(),
+                order_mode: ORDER_MODE_NEW.to_string(),
+                input_map: BTreeMap::from([("ENTER".to_string(), "execute".to_string())]),
+                signal_map: BTreeMap::new(),
+            },
+        }];
+
+        // 基线：双侧同源放行。
+        let single_seam_manifest = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "target_def",
+                "interfaces": [{
+                    "name": "svc",
+                    "orderModes": ["new"],
+                    "inputs": {
+                        "execute": { "source": "alpha", "hook": "main.work#DOCK_ENTER" }
+                    },
+                    "outputs": {},
+                }],
+            }]
+        });
+        let manifest = parse_resolution_manifest(&single_seam_manifest).unwrap();
+        link_dock_routes("local", &unlinked, &manifest)
+            .expect("single-seam interface on both sides links");
+
+        // input 侧内部跨源：两个 input 端口来自不同 source 类（被绑定接口
+        // 的全部 input 端口都参与 seam 观测，无需被本 route 逐个绑定）。
+        let inputs_cross = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "target_def",
+                "interfaces": [{
+                    "name": "svc",
+                    "orderModes": ["new", "existing"],
+                    "inputs": {
+                        "execute": { "source": "alpha", "hook": "main.work#DOCK_ENTER" },
+                        "audit": { "source": "beta", "hook": "main.work#DOCK_AUDIT" }
+                    },
+                    "outputs": {},
+                }],
+            }]
+        });
+        let manifest = parse_resolution_manifest(&inputs_cross).unwrap();
+        let issues = link_dock_routes("local", &unlinked, &manifest).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D012"
+                && issue.message.contains("input port sources")
+                && issue.message.contains("route-bound output signal prefixes")),
+            "{issues:?}"
+        );
+
+        // input 与 output 两侧跨源：route-bound 输出端口的前缀与 input
+        // 端口 source 不一致。
+        let sides_cross_unlinked = vec![UnlinkedDockRoute {
+            stage_identifier: "local.stage".to_string(),
+            stage_source: "local-src".to_string(),
+            config: ZhixuExecutorConfig {
+                target_name: Some("target_def".to_string()),
+                interface_name: "svc".to_string(),
+                order_mode: ORDER_MODE_NEW.to_string(),
+                input_map: BTreeMap::from([("ENTER".to_string(), "execute".to_string())]),
+                signal_map: BTreeMap::from([("done_sig".to_string(), "done".to_string())]),
+            },
+        }];
+        let sides_cross = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "target_def",
+                "interfaces": [{
+                    "name": "svc",
+                    "orderModes": ["new"],
+                    "inputs": {
+                        "execute": { "source": "alpha", "hook": "main.work#DOCK_ENTER" }
+                    },
+                    "outputs": {
+                        "done": { "signal": "beta::main.work.cmp" }
+                    },
+                }],
+            }]
+        });
+        let manifest = parse_resolution_manifest(&sides_cross).unwrap();
+        let issues = link_dock_routes("local", &sides_cross_unlinked, &manifest).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "D012" && issue.message.contains("single target source seam")),
+            "{issues:?}"
+        );
     }
 
     #[test]

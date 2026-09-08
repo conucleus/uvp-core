@@ -1897,12 +1897,13 @@ mod tests {
         assert_eq!(interfaces[1]["name"], json!("payment_service"));
         assert_eq!(interfaces[0]["orderModes"], json!(["existing"]));
         assert_eq!(interfaces[1]["orderModes"], json!(["new"]));
-        // 中性声明：inputs/outputs 是端口→{hook}/{signal} 原文。
+        // 中性声明：inputs 是端口→{source, hook}，outputs 是端口→{signal}
+        // 原文（source 是 input 侧的单源 seam 观测面，bug_audit #1）。
         assert_eq!(
             interfaces[1]["inputs"],
             json!({
-                "cancel": { "hook": "payment_flow.control#DOCK_CANCEL" },
-                "execute": { "hook": "payment_flow.init#DOCK_EXECUTE" }
+                "cancel": { "source": "payment", "hook": "payment_flow.control#DOCK_CANCEL" },
+                "execute": { "source": "payment", "hook": "payment_flow.init#DOCK_EXECUTE" }
             })
         );
         assert_eq!(
@@ -2837,7 +2838,7 @@ mod tests {
         json!({
             "name": name,
             "orderModes": ["new"],
-            "inputs": { "enter": { "hook": "main.work#DOCK_ENTER" } },
+            "inputs": { "enter": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
             "outputs": {},
         })
     }
