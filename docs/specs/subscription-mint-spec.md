@@ -1,6 +1,6 @@
 # 订阅与铸单模型规格（Subscription & Mint Model）
 
-> 状态：对齐基线（v1，替代 merge-anchor-delivery-spec.md）
+> 状态：对齐基线（v1，替代已废弃的旧锚定投递规格）
 > 语义版本：`uvp.semantic.v1`（上线前版本线整体重置为 v1：原 0.6→0.7 等开发期迭代编号全部作废，一次到位，不并存两套语义）
 > 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
 > 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.10、`UVPDockingModule` 3.0 及其余 module fixtures；PlanCommitV2、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出已退役的旧指令/入口。
@@ -9,13 +9,13 @@
 
 ## 0. 本文解决什么
 
-旧模型的"跨秩序四典型"（分馏 `::OUTSIDE@`、撮合 `::MERGE@`、收购 `::ANCHOR@`、委托 signalMap）是同一根管道的四个命名捆绑包，每个捆绑包背着大量场景定语（回流方向、三段判定切分、k≥2 表达式下限等）。本规格把四典型收敛为三个正交层——**事实、路由、铸单**——并给出对应的语法表面。收敛后：
+旧模型的"跨秩序四典型"（分馏 `::OUTSIDE@`、撮合扇入标头、收购 `::ANCHOR@`、委托 signalMap）是同一根管道的四个命名捆绑包，每个捆绑包背着大量场景定语（回流方向、三段判定切分、k≥2 表达式下限等）。本规格把四典型收敛为三个正交层——**事实、路由、铸单**——并给出对应的语法表面。收敛后：
 
 - 事实怎么进来：订阅（一种语法，两条路由规则）。
 - 订单怎么出生：str 自报（免声明）或 `mint: per-fact` 代铸（唯一声明点）。
 - 阶段种类：编译期定死、终生不可变。
 
-旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。合约冻结侧仍含 op 5，工具链不再产出/校验该指令。
+旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。指令集收敛为 SIGNAL / NOT / AND / OR / DELAY（PRD_104）：旧扇入指令随枚举与编码门一并移除，携带集外指令的 plan 在 `commitPlan` 注册边界响亮拒绝。
 
 ---
 
@@ -64,7 +64,7 @@
 | `{source}::{condition}` | 同单 hook（布尔/延时），现有语义不变 | 在订阅方自己的订单上下文内求值，判决一次（init/wait/ready/cxl） |
 | `::ANCHOR(@{source}::{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
 
-旧 `::OUTSIDE@` / `::MERGE@` / `::ANCHOR@` 标头、OUTSOURCE、k≥2 表达式下限、旧空标头白名单规则退役（新订阅必须空标头）。
+旧 `::OUTSIDE@` / `::ANCHOR@` 标头、OUTSOURCE、k≥2 表达式下限、旧空标头白名单规则退役（新订阅必须空标头；旧扇入标头已随指令集收敛整体移除，按通用语法错误拒绝）。
 
 ### 2.3 三种接收方（编译期定死，选项 A）
 
@@ -173,9 +173,9 @@ Stage 字段总表（目标态）：
 | 场景 | 旧写法 | 新写法 |
 |---|---|---|
 | 分馏（汽油/顾客路线） | `::OUTSIDE@(源::t.s.sig)` | 订阅 + `mint: per-fact` |
-| 撮合（k≥2 配对） | `::MERGE@(a::…, b::…)` | 无锚监听 + 多条 `::ANCHOR(@…)`；配对后执行器 str 多父 |
+| 撮合（k≥2 配对） | 旧扇入标头（k≥2） | 无锚监听 + 多条 `::ANCHOR(@…)`；配对后执行器 str 多父 |
 | 收购回流 | `::ANCHOR@(裸三段)` | 有锚阶段 + `::ANCHOR(@…)`（按单路由） |
-| 观察入口（k=1） | k=1 MERGE | 无锚监听 + 单条 `::ANCHOR(@…)` |
+| 观察入口（k=1） | 旧扇入标头（k=1） | 无锚监听 + 单条 `::ANCHOR(@…)` |
 | 交易所开门/关门 | 无（外部 trigger + 载体单） | match source 上一个发开门/关门事实的 stage，通道锚定 |
 | 委托 | 目标 dockInterface 端口 + inputMap/signalMap，独立子订单 | 支持：具名接口 + order.mode（new 建子单/existing 接既有单），inputMap/signalMap 对译目标接口端口 |
 
@@ -186,7 +186,6 @@ Stage 字段总表（目标态）：
 - 回放基线：全部事实（订单锚定 + 通道锚定）+ 不可变定义 + 对接记录。
 - 代铸订单：事实重放 → 纯函数派生 ID → 同一订单集合，不漂移。
 - hook 判决（普通表达式）：维持现有 hook_state 语义层（init/wait/ready/cxl，终态不可变）；订阅通道不经判决层，事实→路由→投递直通。
-- MERGE（op 5）豁免：冻结合约仍接受手工 plan 提交的 Merge 指令（编码门未摘除），因此回放 oracle 必须能求值 op 5——工具链不再产出/校验该指令（§0）指生产侧，不约束回放侧的指令集覆盖。
 - 投递层（重试/退避/dead/复活）机制原样，适用于订阅通道投递。
 
 ## 7. 兼容与退役
@@ -194,7 +193,7 @@ Stage 字段总表（目标态）：
 - 版本 slate 重置（2026-08-31 裁决）：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格且语义/AST/语料/部署清单置 v1；云执行产物因已冻结为结构化复合身份信封，使用 `uvp.cloudArtifact.v2`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件同步更名 semantics.v1.json）、`uvp.cloudArtifact.v2`；部署清单 `uvp-eth.addresses.v5` → `uvp-eth.addresses.v1`。开发期累积的 0.7/v2/v5 编号无兼容义务，作废。
 - 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v2`、`onchainHookPlan.v2`、`cloudArtifact.v2`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
 - `UVPStateMachine` 0.10 的 PlanCommitV2、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 3.0 的 open/input/output boundary 必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
-- 旧关键字（OUTSIDE/MERGE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
+- 旧关键字（OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
 
 ## 8. 决策记录
 
