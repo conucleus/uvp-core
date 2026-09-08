@@ -643,14 +643,13 @@ fn evaluate_instructions(
                     now,
                 )?);
             }
-            "AND" | "OR" | "MERGE" => {
+            "AND" | "OR" => {
                 let op_name = value_str(instruction, "op")?;
                 let is_and = op_name == "AND";
-                let is_merge = op_name == "MERGE";
                 let arity = value_i64(instruction, "arity")?;
-                // 合约编码门（_validateHook）：AND/OR/MERGE 的 arity ≥ 2
-                // （MERGE 的 k=1 观察入口是 cloud 运行时投递形态，链上无
-                // 对应物，编码层即拒绝）。解码层同口径拒绝 k=1。
+                // 合约编码门（_validateHook）：AND/OR 的 arity ≥ 2
+                // （k=1 观察入口是 cloud 运行时投递形态，链上无对应物，
+                // 编码层即拒绝）。解码层同口径拒绝 k=1。
                 if arity < 2 {
                     return Err(ReplayError::Message(format!(
                         "malformed instruction plan: {} arity must be at least 2",
@@ -669,8 +668,6 @@ fn evaluate_instructions(
                 let combine = |left, right| {
                     if is_and {
                         and_value(left, right)
-                    } else if is_merge {
-                        merge_value(left, right)
                     } else {
                         or_value(left, right)
                     }
@@ -683,7 +680,7 @@ fn evaluate_instructions(
                     )
                 })?);
             }
-            // 求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY/MERGE）；其他
+            // 求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY）；其他
             // 指令一律 unsupported（合约侧编码校验同样不为其发放合法生产者）。
             other => {
                 return Err(ReplayError::Message(format!(
@@ -807,42 +804,6 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             cancel: false,
             due_at: left.due_at.max(right.due_at),
             anchor_at: left.anchor_at.max(right.anchor_at),
-        };
-    }
-    false_value()
-}
-
-fn merge_value(left: EvalValue, right: EvalValue) -> EvalValue {
-    // 撮合扇入（合约 _mergeValue 逐字对齐）：任一路贡献信号在场即就绪，
-    // 锚点取在场分支中最早到达（先到因果）；无等待/取消分支——合约编码层
-    // 约束操作数必须是裸 SIGNAL 引用，wait/cancel 不可达，按缺席处理。
-    // 权威 DSL（uvp.semantic.v1）已退役 MERGE 表达式语法，官方编译器不产出
-    // 该指令；合约仍接受手工 plan 的 op=Merge，oracle 必须同口径求值。
-    if left.value && right.value {
-        return EvalValue {
-            value: true,
-            wait: false,
-            cancel: false,
-            due_at: 0,
-            anchor_at: min_anchor(left.anchor_at, right.anchor_at),
-        };
-    }
-    if left.value {
-        return EvalValue {
-            value: true,
-            wait: false,
-            cancel: false,
-            due_at: 0,
-            anchor_at: left.anchor_at,
-        };
-    }
-    if right.value {
-        return EvalValue {
-            value: true,
-            wait: false,
-            cancel: false,
-            due_at: 0,
-            anchor_at: right.anchor_at,
         };
     }
     false_value()
@@ -1218,7 +1179,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn or_merge_keeps_earliest_anchor() {
+    fn or_combination_keeps_earliest_anchor() {
         let left = EvalValue {
             value: true,
             wait: false,
@@ -1233,12 +1194,12 @@ mod tests {
             due_at: 0,
             anchor_at: 5,
         };
-        let merged = or_value(left, right);
-        assert_eq!(merged.anchor_at, 5);
+        let combined = or_value(left, right);
+        assert_eq!(combined.anchor_at, 5);
     }
 
     #[test]
-    fn or_merge_ready_winner_keeps_own_anchor_without_waiting_branch() {
+    fn or_ready_winner_keeps_own_anchor_without_waiting_branch() {
         // P1-5 回归：ready×wait 混合时，等待分支的陈旧锚点不得参与归约——
         // 就绪胜者自带计时器（对齐 hook-dsl Expr::Or 与合约 _orValue）。
         // 此前 oracle 取 min(1000, 10)=10，对 `(a | (b +100s)) +50s` 形态
@@ -1257,18 +1218,18 @@ mod tests {
             due_at: 110,
             anchor_at: 10,
         };
-        let merged = or_value(ready, waiting);
-        assert!(merged.value);
-        assert!(!merged.wait);
-        assert_eq!(merged.anchor_at, 1000);
-        let merged = or_value(waiting, ready);
-        assert!(merged.value);
-        assert_eq!(merged.anchor_at, 1000);
+        let combined = or_value(ready, waiting);
+        assert!(combined.value);
+        assert!(!combined.wait);
+        assert_eq!(combined.anchor_at, 1000);
+        let combined = or_value(waiting, ready);
+        assert!(combined.value);
+        assert_eq!(combined.anchor_at, 1000);
     }
 
     #[test]
     fn rejects_unknown_instruction() {
-        // 未知指令一律 unsupported：求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY/MERGE）。
+        // 未知指令一律 unsupported：求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY）。
         let instructions = vec![
             json!({"op": "SIGNAL", "signalKey": "0xaa"}),
             json!({"op": "SIGNAL", "signalKey": "0xbb"}),
@@ -1286,66 +1247,38 @@ mod tests {
     }
 
     #[test]
-    fn merge_instruction_matches_contract_semantics() {
-        // 合约 op=Merge 求值对齐：任一在场分支即就绪，锚点取在场分支最早
-        // 到达；全部缺席则未就绪。k=1（arity<2）按合约编码门拒绝。
-        let mut order = OracleOrderState::default();
-        order.signals.insert(
-            "0x50".to_string(),
-            json!({"submittedAt": "2026-04-27T00:00:30.000Z"}),
-        );
-        order.signals.insert(
-            "0x51".to_string(),
-            json!({"submittedAt": "2026-04-27T00:00:10.000Z"}),
-        );
+    fn retired_fan_in_instruction_is_rejected_as_unknown() {
+        // PRD_104 指令集收敛：旧撮合扇入指令（semantic 0.6 引入、无官方
+        // 生产者，仅手工 plan 可触达）随解冻窗口移除。求值器不再有专属
+        // 分支——携带该指令的 plan 与任意未知指令同口径，在 unsupported
+        // 错误上响亮失败。指令字面按字节拼装，使仓内对退役词的全文检索
+        // （PRD_104 验收口径）保持零命中。
+        let retired_op = String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
         let instructions = vec![
             json!({"op": "SIGNAL", "signalKey": "0x50"}),
             json!({"op": "SIGNAL", "signalKey": "0x51"}),
-            json!({"op": "MERGE", "arity": 2}),
+            json!({"op": retired_op, "arity": 2}),
         ];
-        let merged = evaluate_instructions(&order, &instructions, "2026-04-27T00:01:00Z").unwrap();
-        assert!(merged.value);
-        assert_eq!(
-            merged.anchor_at,
-            seconds_from_iso("2026-04-27T00:00:10Z").unwrap()
-        );
-
-        let mut partial = OracleOrderState::default();
-        partial.signals.insert(
-            "0x50".to_string(),
-            json!({"submittedAt": "2026-04-27T00:00:30.000Z"}),
-        );
-        let merged =
-            evaluate_instructions(&partial, &instructions, "2026-04-27T00:01:00Z").unwrap();
-        assert!(merged.value);
-        assert_eq!(
-            merged.anchor_at,
-            seconds_from_iso("2026-04-27T00:00:30Z").unwrap()
-        );
-
-        let absent = evaluate_instructions(
+        let error = evaluate_instructions(
             &OracleOrderState::default(),
             &instructions,
             "2026-04-27T00:01:00Z",
         )
-        .unwrap();
-        assert!(!absent.value && !absent.wait && !absent.cancel);
-
-        let unary = vec![
-            json!({"op": "SIGNAL", "signalKey": "0x50"}),
-            json!({"op": "MERGE", "arity": 1}),
-        ];
-        let error = evaluate_instructions(&order, &unary, "2026-04-27T00:01:00Z").unwrap_err();
+        .unwrap_err();
         assert!(
-            error.to_string().contains("arity must be at least 2"),
+            error
+                .to_string()
+                .contains("unsupported chain-mode instruction"),
             "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn merge_hook_replays_with_earliest_anchor_golden() {
-        // golden：手工 plan 的 MERGE 出生 hook（官方编译器不产出），两路
-        // 事实先后到达，回放观察到 HookReady 且链上期望逐一对齐。
+    fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
+        // 负向 golden：手工 plan 携带退役扇入指令时，回放整体以错误收场
+        // （envelope ok:false），不产出"部分观察 + mismatch"的软化报告——
+        // 与合约 commitPlan 注册边界的响亮拒绝同口径。
+        let retired_op = String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
         let events = vec![
             json!({
                 "eventName": "PlanRegistered",
@@ -1365,7 +1298,7 @@ mod tests {
                         "instructions": [
                             {"op": "SIGNAL", "signalKey": "0x50"},
                             {"op": "SIGNAL", "signalKey": "0x51"},
-                            {"op": "MERGE", "arity": 2}
+                            {"op": retired_op, "arity": 2}
                         ]
                     }],
                     "dependencyIndex": { "0x50": ["match.exchange#PAIR"], "0x51": ["match.exchange#PAIR"] }
@@ -1395,49 +1328,20 @@ mod tests {
                 "senderId": "seller",
                 "submittedAt": "2026-04-27T00:00:30.000Z"
             }),
-            json!({
-                "eventName": "HookStatusChanged",
-                "blockNumber": 3,
-                "logIndex": 1,
-                "transactionHash": "0x03",
-                "planId": "0x01",
-                "zhixuId": "demo",
-                "orderId": "order-1",
-                "hookId": "match.exchange#PAIR",
-                "status": "ready"
-            }),
-            json!({
-                "eventName": "HookReady",
-                "blockNumber": 3,
-                "logIndex": 2,
-                "transactionHash": "0x03",
-                "planId": "0x01",
-                "zhixuId": "demo",
-                "orderId": "order-1",
-                "hookId": "match.exchange#PAIR",
-                "stageIdentifier": "match.exchange",
-                "hookName": "PAIR"
-            }),
         ];
-        let result = replay_chain_events(
+        let error = replay_chain_events(
             events,
             &ReplayOptions {
                 sort: None,
                 strict: Some(true),
             },
         )
-        .unwrap();
-        assert_eq!(
-            result["mismatches"].as_array().map(Vec::len),
-            Some(0),
-            "merge golden must replay without mismatch"
-        );
-        assert_eq!(result["observed"].as_array().map(Vec::len), Some(1));
-        assert_eq!(result["observed"][0]["eventName"], "HookReady");
-        assert_eq!(
-            result["state"]["orders"]["0x01::order-1"]["hookStatuses"]["match.exchange#PAIR"]
-                ["status"],
-            "ready"
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported chain-mode instruction"),
+            "unexpected error: {error}"
         );
     }
 

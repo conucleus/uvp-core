@@ -78,9 +78,9 @@ unexpected-observed 假阳性；到期后的 poke 照常重评。
 
 ## 指令集
 
-冻结指令集 `SIGNAL` / `NOT` / `AND` / `OR` / `DELAY` / `MERGE`。`MERGE`
-（撮合扇入，合约 semantic 0.6）按合约 `_mergeValue` 逐字求值：任一在场分支
-即就绪、锚点取在场分支最早到达、操作数限定裸 `SIGNAL` 引用、编码层 arity
-k≥2（k=1 观察入口是 cloud 运行时投递形态，链上无对应物）。权威 DSL
-（uvp.semantic.v1）已退役 MERGE 表达式语法，官方编译器不产出该指令；
-合约仍接受手工 plan 的 `op=Merge`，oracle 必须同口径求值。
+冻结指令集 `SIGNAL` / `NOT` / `AND` / `OR` / `DELAY`（PRD_104 指令集
+收敛：旧撮合扇入指令随解冻窗口移除，合约枚举与编码门同步摘除）。
+`AND` / `OR` 的编码门要求 arity ≥ 2（k=1 观察入口是 cloud 运行时投递
+形态，链上无对应物，编码层即拒绝）。携带指令集之外指令的 plan 在求值
+期按 unsupported 指令响亮失败——官方编译器只产出冻结集，集外指令没有
+合法生产者；回放不为其保留求值口径，整体以错误收场而非降级 mismatch。
