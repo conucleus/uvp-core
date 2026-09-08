@@ -2902,6 +2902,75 @@ mod tests {
     }
 
     #[test]
+    fn rejects_dock_startup_graph_cycles_at_manifest_level() {
+        // bug_audit #16（D015 同源防线前移）：manifest 声明面可成的环在
+        // link 期环检测一律拒绝——互为目标两节点环、经中间定义三节点环、
+        // 自指标自环，不要求本地定义参与成环。
+        let target = target_payment_definition();
+        let parent = parent_settlement_definition(TARGET_NAME);
+        let parent_with_route_to = |name: &str| {
+            let mut parent = parent_settlement_definition(TARGET_NAME);
+            parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
+                .as_object_mut()
+                .unwrap()["target"]["zhixu"] = json!(name);
+            parent
+        };
+
+        // A→B→A：manifest 内两定义互为目标（本地未参与成环也要拒绝）。
+        let mut mutual = manifest_for(&target);
+        mutual["definitions"][0]["dockEdges"] = json!([{ "target": "wheel_a" }]);
+        mutual["definitions"].as_array_mut().unwrap().push(json!({
+            "name": "wheel_a",
+            "interfaces": [minimal_interface_value("svc_a")],
+            "dockEdges": [{ "target": "payment_execution" }],
+        }));
+        let error = compile_zhixu_hook_plan(&parent, Some(&mutual), false)
+            .expect_err("mutual two-definition cycle must fail");
+        assert!(
+            error.to_string().contains("D015") && error.to_string().contains("cycle"),
+            "{error}"
+        );
+
+        // A→B→C→A：本地 route A→payment_execution，manifest 边
+        // payment_execution→mid、mid→settlement（回指本地）。
+        let mut three_node = manifest_for(&target);
+        three_node["definitions"][0]["dockEdges"] = json!([{ "target": "mid_cycle" }]);
+        three_node["definitions"].as_array_mut().unwrap().push(json!({
+            "name": "mid_cycle",
+            "interfaces": [minimal_interface_value("svc_mid")],
+            "dockEdges": [{ "target": "settlement" }],
+        }));
+        let error = compile_zhixu_hook_plan(&parent, Some(&three_node), false)
+            .expect_err("three-definition cycle must fail");
+        let message = error.to_string();
+        // 环路径的起点按 BTreeMap 节点序确定（mid_cycle 最小），断言按
+        // 环成员 + 完整三段回指形态，不钉旋转起点。
+        assert!(
+            message.contains("D015")
+                && message.contains("mid_cycle -> settlement -> payment_execution -> mid_cycle"),
+            "{message}"
+        );
+
+        // A→A：manifest 定义经 dockEdges 自指标（自环）。route 自环
+        // （target 回指父定义名）由 rejects_link_violations 覆盖。
+        let mut self_edge = manifest_for(&target);
+        self_edge["definitions"][0]["dockEdges"] = json!([{ "target": "payment_execution" }]);
+        let error = compile_zhixu_hook_plan(
+            &parent_with_route_to(TARGET_NAME),
+            Some(&self_edge),
+            false,
+        )
+        .expect_err("manifest self-edge cycle must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("D015")
+                && error.to_string().contains("payment_execution -> payment_execution"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn cloud_artifact_uses_resolved_routes() {
         let target = target_payment_definition();
         let manifest = manifest_for(&target);
