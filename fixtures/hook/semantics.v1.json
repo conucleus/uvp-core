@@ -919,6 +919,20 @@
       "hookName": "HOOK",
       "hook": "buyer::task.a.cmp +5s +10s",
       "messageContains": "unexpected token"
+    },
+    {
+      "name": "channel name containing the signal separator dot is rejected",
+      "profile": "evm_strict",
+      "hookName": "BAD.KEY",
+      "hook": "buyer::task.main.cmp",
+      "messageContains": "must not contain '.' or '#'"
+    },
+    {
+      "name": "channel name containing the hookId separator hash is rejected",
+      "profile": "cloud_compat",
+      "hookName": "BAD#KEY",
+      "hook": "buyer::task.main.cmp",
+      "messageContains": "must not contain '.' or '#'"
     }
   ],
   "replayCases": [

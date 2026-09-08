@@ -234,6 +234,16 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
             "hook_name must be 1-36 characters".to_string(),
         ));
     }
+    // 通道名词表纪律（bug_audit #18，文法 §7 第 4 条）：'.' 是 canonical
+    // 信号名 task.stage.signal 的分隔符、'#' 是 hookId 分隔符
+    // （stage#hook_name）——通道名（receiveSignals 键）携带任一分隔符都会
+    // 让 hookId 命名空间含混，解析期即拒绝。信号名含 '.' 是设计内形态，
+    // 不在通道名词表管辖内；编译层 validate_receive_signal_keys 同款。
+    if hook_name.contains('.') || hook_name.contains('#') {
+        return Err(HookError::Message(
+            "hook_name must not contain '.' or '#'".to_string(),
+        ));
+    }
     // 解析行为与 profile 无关（profile 只影响归一化/兼容性输出），
     // 因此 parse_hook_expr 不接收 profile。
     let hook = parse_hook_expr(&req.hook)?;
