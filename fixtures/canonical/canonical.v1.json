@@ -1,12 +1,12 @@
 {
   "schemaVersion": "uvp.canonicalJsonCorpus.v1",
-  "authority": "uvp-core uvp-ir::canonical_stringify (serde_json integer number identity; float-form literals rejected at the authority, bug_audit #15)",
+  "authority": "uvp-core uvp-ir::canonical_stringify (serde_json integer number identity; float-form literals rejected at the authority)",
   "consumers": [
     "uvp-protocol packages/compiler canonical.ts must reproduce pass cases byte-for-byte and reject the expectReject cases with an equivalent single rejection face"
   ],
   "rules": [
     "The canonical hash-preimage vocabulary is closed over integers: number literals without '.' or 'e' (u64/i64) canonicalize bare, without a decimal point.",
-    "Float-form number literals are rejected outright (bug_audit #15): any f64 payload — integral floats (100.0), fractions (1.5), exponent spellings (1e2, 2.5e-8, 1e300), and negative zero (-0.0) — fails loudly at the authoritative canonicalizer, listing the offending token. Cross-language float formatting (ryu vs JS Number->String) carries no byte-for-byte alignment obligation; the single rejection face lives in the Rust authority.",
+    "Float-form number literals are rejected outright: any f64 payload — integral floats (100.0), fractions (1.5), exponent spellings (1e2, 2.5e-8, 1e300), and negative zero (-0.0) — fails loudly at the authoritative canonicalizer, listing the offending token. Cross-language float formatting (ryu vs JS Number->String) carries no byte-for-byte alignment obligation; the single rejection face lives in the Rust authority.",
     "Object keys sort by code point; arrays keep order."
   ],
   "cases": [

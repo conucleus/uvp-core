@@ -126,7 +126,7 @@ pub fn compile_zhixu_hook_plan(
         &stage_entries,
         &selected_stage_bindings,
     ));
-    // 阶段物化门（簇 A，onchain 目标）：每个阶段声明都必须编译出至少一个
+    // 阶段物化门（onchain 目标）：每个阶段声明都必须编译出至少一个
     // 带物化位（order-trigger mint/dock 或 EMIT_READY）的 hook——纯
     // flags=0 watcher 不物化阶段，零 hook 阶段同样不物化，且其 sendSignals
     // 在链上没有钩子可挂（submitSignal 要求源阶段已物化，恒 revert
@@ -751,10 +751,10 @@ fn stage_is_subscription(stage: &ZhixuStage) -> bool {
     })
 }
 
-/// 阶段物化门（簇 A，onchain 目标）：链上阶段只能由本阶段 order-trigger
+/// 阶段物化门（onchain 目标）：链上阶段只能由本阶段 order-trigger
 /// （mint/dock）或 EMIT_READY hook Ready 物化；executor patch 也不物化
 /// （UVPStateMachine activateStageExecutor 不调用 _materializeStage）。
-/// 因此每个阶段声明都必须编译出至少一个带物化位的 hook（P0-4）：
+/// 因此每个阶段声明都必须编译出至少一个带物化位的 hook：
 /// - 仅 sendSignals、无 receiveSignals 的阶段编译为零 hook——阶段永不可
 ///   物化，其信号在链上没有钩子可挂（_recordSignal 要求源阶段已物化，
 ///   submitSignal 恒 revert UnknownHook），下游 hook 永 Init；
@@ -1568,7 +1568,7 @@ mod tests {
                         {
                             "name": "confirm",
                             "source": "buyer",
-                            // P0-4 物化门：零 hook 阶段在链上永不可物化、信号
+                            // 物化门：零 hook 阶段在链上永不可物化、信号
                             // 没有钩子可挂；seed 是执行者自发入口信号。
                             "receiveSignals": { "PLACE": "buyer::checkout.confirm.seed" },
                             "sendSignals": ["cmp", "seed"],
@@ -1677,7 +1677,7 @@ mod tests {
                             {
                                 "name": "work",
                                 "source": "buyer",
-                                // P0-4：零 hook 阶段不过物化门，给一条自发
+                                // 零 hook 阶段不过物化门，给一条自发
                                 // 种子入口钩子（能力计数不受影响）。
                                 "receiveSignals": { "START": "buyer::main.work.sig000" },
                                 "sendSignals": signals,
@@ -2207,7 +2207,7 @@ mod tests {
             json!({
                 "name": "emit",
                 "source": "other",
-                // P0-4：自发种子入口钩子，避免零 hook 阶段被物化门拒绝。
+                // 自发种子入口钩子，避免零 hook 阶段被物化门拒绝。
                 "receiveSignals": { "PUBLISH": "other::anchor_task.emit.seed" },
                 "sendSignals": ["cmp", "seed"],
                 "executor": { "supplierType": "organization", "supplierID": "other-org" }
@@ -3467,7 +3467,7 @@ mod tests {
 
     fn emitter_stage_value(task: &str, name: &str, source: &str, send_signals: &[&str]) -> Value {
         let mut signals = send_signals.to_vec();
-        // P0-4：零 hook 阶段不过物化门；seed 是执行者自发入口信号。
+        // 零 hook 阶段不过物化门；seed 是执行者自发入口信号。
         signals.push("seed");
         json!({
             "name": name,

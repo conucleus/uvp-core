@@ -592,7 +592,7 @@ fn evaluate_hook(order: &mut OracleOrderState, hook: &Value, now: &str) -> Resul
         changed.insert("status".to_string(), Value::String("cxl".to_string()));
         observations.push(Value::Object(changed));
     }
-    // 阶段物化三线统一（簇 A）：`orderTriggerKind` 与 `emitReady` hook 都
+    // 阶段物化三线统一：`orderTriggerKind` 与 `emitReady` hook 都
     // 物化自身阶段——前者是出生边，后者是 executor dispatch 边（合约
     // `_evaluateHook` 的 EMIT_READY 分支同样调用 _materializeStage）。仅
     // emitReady=false 的沉默 trigger 物化但不发 HookReady；该形态已被
@@ -781,7 +781,7 @@ fn delay_value(value: EvalValue, delay_seconds: i64, now: &str) -> Result<EvalVa
         wait: false,
         cancel: false,
         due_at: 0,
-        // 锚点推进（semantic 0.5 链式裁决）：延时到期时刻本身成为新的锚点，
+        // 锚点推进（链式延时语义）：延时到期时刻本身成为新的锚点，
         // 使 `(A+5s)+10s` 的外层延时从 A+5s 起算，与生产求值器一致。
         anchor_at: due_at,
     })
@@ -819,7 +819,7 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
 }
 
 fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
-    // OR 的延时锚点取"最早成熟时刻"（semantic 0.5 / 簇 B 裁定）：纯信号
+    // OR 的延时锚点取"最早成熟时刻"：纯信号
     // 分支在到达时刻成熟，复合分支在自身成熟时刻成熟（如 AND 取操作数
     // 的 max）。只有 READY 的分支才有资格竞争锚点；等待分支的陈旧锚点
     // 不得获胜——就绪胜者保留自己的计时。与核心求值器（uvp-hook-dsl
@@ -1207,10 +1207,9 @@ mod tests {
 
     #[test]
     fn or_ready_winner_keeps_own_anchor_without_waiting_branch() {
-        // P1-5 回归：ready×wait 混合时，等待分支的陈旧锚点不得参与归约——
-        // 就绪胜者自带计时器（对齐 hook-dsl Expr::Or 与合约 _orValue）。
-        // 此前 oracle 取 min(1000, 10)=10，对 `(a | (b +100s)) +50s` 形态
-        // 给出比合约更早的 due，产生假 mismatch。
+        // ready×wait 混合时，等待分支的陈旧锚点不得参与归约——就绪胜者
+        // 自带计时器（对齐 hook-dsl Expr::Or 与合约 _orValue）：归约结果
+        // 的 due 取就绪分支自身的计时，不取双分支 due 的较早者。
         let ready = EvalValue {
             value: true,
             wait: false,
@@ -2026,10 +2025,10 @@ mod tests {
 
     #[test]
     fn emit_ready_hook_materializes_stage_before_materialization() {
-        // 簇 A 对齐：EMIT_READY hook 是 executor dispatch 边——阶段未物化时
+        // EMIT_READY hook 是 executor dispatch 边——阶段未物化时
         // 仍求值，Ready 时物化自身阶段并发 HookReady（普通 executor 阶段的
-        // 标准形态：全部 receive hook emit-ready）。此前 oracle 对所有非
-        // trigger hook 一律"未物化即跳过"，正常编译产物的回放必然 mismatch。
+        // 标准形态：全部 receive hook emit-ready）。"未物化即跳过"只适用
+        // 于 trigger hook。
         let mut order = OracleOrderState {
             zhixu_id: "demo".to_string(),
             order_id: "order-1".to_string(),
