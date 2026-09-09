@@ -425,7 +425,8 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                 .ok_or_else(|| {
                     HookError::Message("compiled hook AST is missing source".to_string())
                 })?;
-            // 与解析期标头校验同口径（plain identifier ≤36，落 VARCHAR(36)）：
+            // 与解析期标头校验同口径（plain identifier ≤36，编译期上限严于
+            // 落库列宽 source_zhixu_id VARCHAR(64)）：
             // 毒 source 解码期确定性拒绝，而不是成为永不匹配任何事实键的
             // source 维度。
             if !is_plain_identifier(&source) || source.len() > 36 {
@@ -493,8 +494,8 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
     let mut result = BTreeMap::new();
     for signal in signals {
         // 解码层最后一道防线：事实身份必须与解析器对 hook 侧身份的口径
-        // 一致——source 是 plain identifier 且 ≤36（hook_dependency.
-        // source_zhixu_id VARCHAR(36)），signal_name 是三段式
+        // 一致——source 是 plain identifier 且 ≤36（编译期钉死的键上限，
+        // 严于落库列 hook_dependency.source_zhixu_id VARCHAR(64)），signal_name 是三段式
         // task.stage.signal、每段 plain identifier、全名 ≤100
         // （individual_record.signal_name VARCHAR(100)）。空 source 是
         // 合法的"无归属事实"（语义语料的负例形态，永不匹配非空 hook
@@ -559,9 +560,10 @@ fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
         ));
     }
     if !source.is_empty() {
-        // 标头 source 类是落库列（VARCHAR(36)）与路由键：解析期钉死长度与
-        // 字符集（对齐 Go 镜像 zhixu_schema.go 的 ≤36 与 plain-identifier
-        // 规则）。订阅形态（::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
+        // 标头 source 类是路由键：解析期钉死长度与字符集（编译期 ≤36 上限
+        // 严于落库列宽 source_zhixu_id VARCHAR(64)，对齐 Go 镜像
+        // zhixu_schema.go 的 ≤36 与 plain-identifier 规则）。订阅形态
+        // （::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
         // source 在解析 ANCHOR 目标时按同值（≤36 + plain identifier）校验。
         if source.len() > 36 {
             return Err(HookError::Message(format!(
@@ -1685,8 +1687,9 @@ impl<'a> Parser<'a> {
         // 拒绝空格、括号、额外 :: 分隔与非 ASCII 字符。这里故意不 trim：
         // `ANCHOR` 的目标是一个严格 token，内部空格不能被规范化后放行，
         // 否则不同运行时可能对同一份原文产生不同的 signal key。
-        // 长度与标头 source 同值：source 落 hook_dependency.source_zhixu_id
-        // VARCHAR(36)，超长在解析期拒绝而不是拖到落库报 value too long。
+        // 长度与标头 source 同值：≤36 是编译期钉死的上限，严于落库列
+        // hook_dependency.source_zhixu_id VARCHAR(64)——超长在解析期拒绝
+        // 而不是拖到落库报 value too long。
         if !is_plain_identifier(source) {
             return Err(HookError::Message(format!(
                 "subscription source must be a plain identifier: {source:?}"

@@ -191,8 +191,8 @@ Stage 字段总表（目标态）：
 ## 7. 兼容与退役
 
 - 版本 slate 重置（2026-08-31 裁决）：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格且语义/AST/语料/部署清单置 v1；云执行产物因已冻结为结构化复合身份信封，使用 `uvp.cloudArtifact.v2`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件同步更名 semantics.v1.json）、`uvp.cloudArtifact.v2`；部署清单 `uvp-eth.addresses.v5` → `uvp-eth.addresses.v1`。开发期累积的 0.7/v2/v5 编号无兼容义务，作废。
-- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v2`、`onchainHookPlan.v2`、`cloudArtifact.v2`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
-- `UVPStateMachine` 0.10 的 PlanCommitV2、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 3.0 的 open/input/output boundary 必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
+- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v2`、`onchainHookPlan.v2`、`cloudArtifact.v2`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。`uvp.dockRoute.unresolved.v1` 不在矩阵键内——该声明面由 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION` 与 Go `DockRouteUnresolvedSchemaVersion` 常量互认钉住。
+- `UVPStateMachine` 0.10 的 PlanCommitV2、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.0 的 open/input/output boundary 必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
 - 旧关键字（OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
 
 ## 8. 决策记录
@@ -214,7 +214,7 @@ Stage 字段总表（目标态）：
 |---|---|---|
 | 链下身份归属 | 身份、资质、审核归**秩序商店**（商店语境可称"平台"）；UVP DSL 只承载几何拓扑 + 事实纪律；链下身份与链上身份在商店汇合 | 担保交易秩序本身可上架商店供挑选；引擎不新增身份系统 |
 | 裸跑形态 | 产品接受 UVP 裸跑：即使黑产裸跑，每个环节谁是谁靠事实留痕可审计；合法生意（如出口小汽车）走官方秩序商店获得受控管理 | 引擎层不强设身份门；留痕 + 凭据分层是信任模型 |
-| /signal 凭据 | per-sender 密钥表已落地（未建档回落共享密钥）；验签主体归真注入信封（自报与主体不符即 401）；裸跑形态启动响亮告警、保留自报 sender 留痕 | 一把共享密钥泄露即全线；归真后记录里的"谁发的"来自凭据 |
+| /signal 凭据 | per-sender 密钥表已落地（与部署级共享密钥是二选一的显式模式，无回落：per-sender 模式下未建档 sender 一律拒绝）；验签主体归真注入信封（自报与主体不符即 401）；裸跑形态启动响亮告警、保留自报 sender 留痕 | 一把共享密钥泄露即全线；归真后记录里的"谁发的"来自凭据 |
 | 血缘边构成者 | rel_order_order 增加 constituted_by（asserted/mint）+ constituent_sender；触发器代写断言边留信封 sender，mint 边标引擎 | 裸跑下断言边只留痕不设门；门语义收紧（构成权收回父侧 + 事实核对）待商店主体体系落地 |
 | patch selector | applyStageExecutorUpdate 校验 selector 阶段存在且 selectedStages 覆盖目标；主体对 selector 的控制权归属校验挂起 | 现网主链路（平台）不传 selector 不受影响；挂起项与商店主体词汇表一并设计 |
 | chain-services 自报头 | x-uvp-* 自报头永不作为权威；治理/运维/evidence 入口的身份由商店前置签发 | 自报 header 即得管理员 + 服务持 registry owner key 真实上链是对抗路确认的边界缺口；随商店落地整改 |
@@ -231,11 +231,11 @@ Stage 字段总表（目标态）：
 
 | 裁决 | 结论 | 落地 |
 |---|---|---|
-| 模-1 静态执行者 | 出生/订阅阶段必须编译期静态绑定非委托 executor；运行时 patch 一律拒绝（既有门禁不变） | Go validator 去豁免（uvp f724212 之后批次）；uvp-core validate_mint_anchors 增查；bootstrap child.main 前置注册静态执行者、register_select 撤销对该阶段的 patch |
+| 模-1 静态执行者 | 出生/订阅阶段必须编译期静态绑定执行者（出生阶段必须非委托 executor；有锚订阅阶段允许绑定 zhixu 委托的唯一例外见上表"有锚订阅阶段绑定 zhixu 委托执行者"）；运行时 patch 一律拒绝（既有门禁不变） | Go validator 去豁免（uvp f724212 之后批次）；uvp-core validate_mint_anchors 增查；bootstrap child.main 前置注册静态执行者、register_select 撤销对该阶段的 patch |
 | 模-2 出生入口组成 | 出生入口只能是 ANCHOR 订阅；"订阅之外附加单正普通 hook"形态废除 | Go validateMintStages + zhixu_schema、uvp-core validate_mint_anchors 三处拒绝；TS 测试对齐 |
 | 模-3 域边界 | 域 = zhixu 实例。订阅按类匹配只在本实例内解析；跨秩序扇入要求 rel_zhixu_dock 显式对接（双向记录，compiler 新增 POST /zhixu-dock 登记，dbops.RegisterZhixuDock）。依赖按秩序 id 显式绑定（委托接缝/同单锚定）不受 dock 门限制 | uvp core-ddl + loadAffectedHooks + 契约测试 |
 | 事实标签 tie-break | hook_state.id 与 hook_delivery.id 改从共享序列 fact_label_seq 取值，标签对全部输出事实严格全序 | core-ddl |
-| nonce 防重放 | 接受现状（first-win 幂等吸收），nonce 查重/升级 JWT 随商店身份落地一并做 | 决策记录 |
+| nonce 防重放 | HMAC 入口的 nonce 查重已落地（`(senderID, nonce)` 原子 check-and-record，TTL 缓存、进程内单实例——多副本需共享存储）；升级 JWT 随商店身份落地一并做。未开 HMAC 的入口退化为 first-win 幂等吸收 | 决策记录 |
 | DLQ 通知可靠性 | 告警语义走指标（stmDLQTotal 告警规则），持久化重投等运维真消费 DLQ 时再建 | 决策记录 |
 | chain-services 暴露面 | 模-5 修正"暂不整改"的前提：CORS 默认关闭（UVP_API_CORS_ALLOWED_ORIGINS 白名单回显）；notification-profile 挂 store.supplier.notification_profile.update；管理员白名单（GOVERNANCE_ADMIN_REVIEWER_IDS）真接入鉴权。身份归商店的裁决不变 | chain-services 本批次 |
 | 合约解冻批次（窗口已开） | #1 派生信号 capability 对称：跨订单派生要求目标（origin）订单 plan 声明同一 capability；#31 同 hook 输入内 dependencyKeys 去重；#30 README 口径改为"patch 即时接管、不可回滚恢复执行者"。#10 (planId, orderId) 复合键涉及全部模块/periphery 的订单寻址迁移，作为解冻窗口的下一个独立批次 | contracts 本批次 + forge 86/86 |
