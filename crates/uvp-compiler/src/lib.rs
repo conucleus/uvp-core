@@ -916,6 +916,8 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     }
     // 5) 防跨源代铸环（源类级统一环检测，直连自环已在上面按条上报）。
     issues.extend(validate_mint_subscription_cycles(entries));
+    // 6) 一事一单：同一事实至多被一个 mint 阶段声明为出生入口。
+    issues.extend(validate_mint_signal_key_uniqueness(entries));
     issues
 }
 
@@ -954,6 +956,45 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
         )],
         None => Vec::new(),
     }
+}
+
+/// 一事一单：同一 (source, signal) 事实键至多被一个 mint（per-fact 订阅
+/// 铸单）阶段声明为出生入口。两个及以上 mint 阶段声明同一事实时，云轨会
+/// 按阶段各铸一单、链上一事实物化多单，三线回放对"该事实对应哪个订单"
+/// 发散；需要多阶段消费同一事实的场合走正常 hook 依赖（普通 receive
+/// hook），不铸单。
+fn validate_mint_signal_key_uniqueness(entries: &[StageEntry]) -> Vec<String> {
+    let mut stages_by_key: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
+    for entry in entries {
+        if entry.stage.mint.is_none() {
+            continue;
+        }
+        for raw_expression in entry.stage.receive_signals.values() {
+            // 解析失败的条目不构成事实键：语法错误由引用存在性校验统一上报。
+            let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
+                continue;
+            };
+            let Some(target) = &parsed.subscription_target else {
+                continue;
+            };
+            stages_by_key
+                .entry((target.source.clone(), target.signal_name.clone()))
+                .or_default()
+                .insert(entry.stage_identifier.as_str());
+        }
+    }
+    stages_by_key
+        .into_iter()
+        .filter_map(|((source, signal), stages)| {
+            if stages.len() < 2 {
+                return None;
+            }
+            let stages = stages.into_iter().collect::<Vec<_>>().join(", ");
+            Some(format!(
+                "{source}::{signal} is declared as the birth entry by multiple mint stages ({stages}): one fact mints at most one order (一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖)"
+            ))
+        })
+        .collect()
 }
 
 /// 在 source 类有向图中找第一个可达环并回溯出完整路径（BFS + 父指针，
@@ -3443,6 +3484,126 @@ mod tests {
                 .contains("must not subscribe its own source class"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn rejects_two_mint_stages_declaring_the_same_birth_fact() {
+        // 一事一单：两个 mint 阶段把同一 (source, signal) 声明为出生入口，
+        // 云轨会按阶段各铸一单、链上一事实物化多单——编译期拒绝（含
+        // cloud/hook_plan 两个 target）。
+        let definition = mint_definitions(&[
+            (
+                "dispatch",
+                emitter_stage_value("dispatch", "main", "producer", &["smart_contract"]),
+            ),
+            (
+                "orchard",
+                mint_stage_value(
+                    "orchard",
+                    "retail",
+                    "buyer",
+                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
+                    &["ack"],
+                ),
+            ),
+            (
+                "cellar",
+                mint_stage_value(
+                    "cellar",
+                    "store",
+                    "cellar",
+                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
+                    &["shelve"],
+                ),
+            ),
+        ]);
+        let error = compile_zhixu_hook_plan(&definition, None, true)
+            .expect_err("two mint stages on the same birth fact must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("producer::dispatch.main.smart_contract")
+                && message.contains("一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖"),
+            "unexpected error: {message}"
+        );
+        let error = compile_cloud_artifact(&definition, None, true)
+            .expect_err("cloud target must reject the duplicate birth fact too");
+        assert!(
+            error
+                .to_string()
+                .contains("一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn allows_two_mint_stages_with_distinct_birth_facts() {
+        // 两个 mint 阶段各自声明不同的出生事实：一事一单未被触碰，照常放行。
+        let definition = mint_definitions(&[
+            (
+                "dispatch",
+                emitter_stage_value("dispatch", "main", "producer", &["smart_contract"]),
+            ),
+            (
+                "depot",
+                emitter_stage_value("depot", "ship", "distributor", &["manifest"]),
+            ),
+            (
+                "orchard",
+                mint_stage_value(
+                    "orchard",
+                    "retail",
+                    "buyer",
+                    json!({ "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" }),
+                    &["ack"],
+                ),
+            ),
+            (
+                "cellar",
+                mint_stage_value(
+                    "cellar",
+                    "store",
+                    "cellar",
+                    json!({ "SPAWN": "::ANCHOR(@distributor::depot.ship.manifest)" }),
+                    &["shelve"],
+                ),
+            ),
+        ]);
+        compile_zhixu_hook_plan(&definition, None, true)
+            .expect("distinct birth facts per mint stage must compile for hook_plan");
+        compile_cloud_artifact(&definition, None, true)
+            .expect("distinct birth facts per mint stage must compile for cloud");
+    }
+
+    #[test]
+    fn allows_single_mint_stage_with_multiple_birth_facts() {
+        // 单个 mint 阶段声明多个出生事实仍是一阶段一单语义，不在拒绝面。
+        let definition = mint_definitions(&[
+            (
+                "dispatch",
+                emitter_stage_value("dispatch", "main", "producer", &["smart_contract"]),
+            ),
+            (
+                "depot",
+                emitter_stage_value("depot", "ship", "distributor", &["manifest"]),
+            ),
+            (
+                "orchard",
+                mint_stage_value(
+                    "orchard",
+                    "retail",
+                    "buyer",
+                    json!({
+                        "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)",
+                        "STORE": "::ANCHOR(@distributor::depot.ship.manifest)"
+                    }),
+                    &["ack", "shelve"],
+                ),
+            ),
+        ]);
+        compile_zhixu_hook_plan(&definition, None, true)
+            .expect("one mint stage with multiple birth facts must compile for hook_plan");
+        compile_cloud_artifact(&definition, None, true)
+            .expect("one mint stage with multiple birth facts must compile for cloud");
     }
 
     fn mint_stage_value(
