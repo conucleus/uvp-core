@@ -1718,8 +1718,8 @@ mod tests {
 
     #[test]
     fn manifest_rejects_unknown_definition_fields() {
-        // 条目级键闭集：interface 声明合法但残留拼错键（interface 单数）时
-        // 旧口径静默吸收、解析成功——发布方数据错误以缺省语义参与 link。
+        // 条目级键闭集：interface 声明合法但残留拼错键（interface 单数）也
+        // 按未知字段拒绝——发布方数据错误不得以缺省语义参与 link。
         let manifest = json!({
             "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
             "definitions": [{
