@@ -2,7 +2,9 @@
 //!
 //! 约束注册表 `uvp-protocol/protocol/uvp-constraints.v1.json` 是跨语言接受面
 //! 规则（zhixu / hook-dsl / dock / onchain-plan）的单一出处。本 harness：
-//!   1. 钉住注册表 version + sha256 —— 任何一处改表，三线（TS/Rust/Go）测试同声报警；
+//!   1. 钉住注册表 version，并把实际 sha256 与同目录 meta 文件声明的值比对
+//!      （sha 声明点唯一在 uvp-protocol 仓，改表不同步声明会让三线
+//!      TS/Rust/Go 测试同声报警）；
 //!   2. 对 applies 含 "rust" 的每条 rule 生成边界探针（满足/违反各一）打真 validator
 //!      （uvp_compiler::compile_json / uvp_hook_dsl::parse_hook_json），断言真实错误文案锚点；
 //!   3. rust 线没有探针的新 rule 会让本文件硬失败（防静默漏测）。
@@ -18,11 +20,6 @@ use sha2::{Digest, Sha256};
 
 const CONSTRAINTS_ENV_VAR: &str = "UVP_CONSTRAINTS_PATH";
 const PINNED_VERSION: &str = "uvp.constraints.v1";
-/// sha256(uvp-constraints.v1.json)。改表必须三线同步更新：
-///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
-///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
-///   uvp(go)       pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "2f776f56eff245ffd6f764df758bb0f173c9e1f244bb43df61784a37c3aeab3a";
 
 const CONSTRAINTS_RELATIVE_PATH: &str = "uvp-protocol/protocol/uvp-constraints.v1.json";
 
@@ -44,7 +41,7 @@ fn default_constraints_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(CONSTRAINTS_RELATIVE_PATH)
 }
 
-fn load_constraints_table() -> (String, Value) {
+fn load_constraints_table() -> (String, Value, std::path::PathBuf) {
     let path = std::env::var(CONSTRAINTS_ENV_VAR)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| default_constraints_path());
@@ -59,7 +56,36 @@ fn load_constraints_table() -> (String, Value) {
     });
     let table: Value = serde_json::from_str(&raw)
         .unwrap_or_else(|err| panic!("[uvp-constraints] 注册表不是合法 JSON：{err}"));
-    (raw, table)
+    (raw, table, path)
+}
+
+/// 注册表内容 sha 的唯一声明点：与注册表同目录的 meta 文件，路径跟随
+/// 注册表的实际命中结果（env 覆盖与逐级向上布局都自然一致）。声明缺失
+/// 会让 sha 比对退化成摆设，读不到/算法不符也硬失败。
+fn load_constraints_meta(registry_path: &std::path::Path) -> Value {
+    let meta_path = registry_path
+        .parent()
+        .expect("registry path has a parent")
+        .join("uvp-constraints.v1.meta.json");
+    let raw = std::fs::read_to_string(&meta_path).unwrap_or_else(|err| {
+        panic!(
+            "[uvp-constraints] 读不到注册表 sha 声明文件（硬失败，不 skip）：{}\n\
+             - 注册表内容 sha 只在 uvp-protocol 仓 protocol/uvp-constraints.v1.meta.json 声明。\n\
+             原始错误：{err}",
+            meta_path.display()
+        )
+    });
+    let meta: Value = serde_json::from_str(&raw)
+        .unwrap_or_else(|err| panic!("[uvp-constraints] sha 声明文件不是合法 JSON：{err}"));
+    let algorithm = meta
+        .get("algorithm")
+        .and_then(Value::as_str)
+        .expect("sha 声明文件携带 algorithm");
+    assert_eq!(
+        algorithm, "sha256",
+        "sha 声明文件 algorithm={algorithm}，本 harness 只实现 sha256"
+    );
+    meta
 }
 
 // ---------------------------------------------------------------------------
@@ -765,7 +791,8 @@ fn rust_probes() -> Vec<(String, Probe)> {
 
 #[test]
 fn constraints_registry_is_pinned() {
-    let (raw, table) = load_constraints_table();
+    let (raw, table, registry_path) = load_constraints_table();
+    let meta = load_constraints_meta(&registry_path);
     assert_eq!(
         table
             .get("version")
@@ -776,16 +803,20 @@ fn constraints_registry_is_pinned() {
     );
     let digest = Sha256::digest(raw.as_bytes());
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let declared = meta
+        .get("contentSha256")
+        .and_then(Value::as_str)
+        .expect("sha 声明文件携带 contentSha256");
     assert_eq!(
-        hex, PINNED_SHA256,
-        "约束注册表内容被修改：请逐条核对规则后同步更新三线 harness 的 sha256 钉\
-         （uvp-protocol packages/compiler、uvp-core crates/uvp-compiler、Go pkg/compiler/validator）"
+        hex, declared,
+        "约束注册表内容与 meta 声明的 sha256 不一致：请逐条核对规则后，\
+         在 uvp-protocol 仓同一提交里更新 protocol/uvp-constraints.v1.meta.json 的 contentSha256"
     );
 }
 
 #[test]
 fn every_rust_rule_has_a_probe() {
-    let (_, table) = load_constraints_table();
+    let (_, table, _) = load_constraints_table();
     let rules = table
         .get("rules")
         .and_then(Value::as_array)
@@ -839,7 +870,7 @@ fn constraints_registry_probes_rust_line() {
 /// 响亮失败，不让矩阵退化成自由文本注释堆。
 #[test]
 fn rejection_surface_matrix_is_well_formed() {
-    let (_, table) = load_constraints_table();
+    let (_, table, _) = load_constraints_table();
     let surfaces = table
         .get("rejectionSurfaces")
         .and_then(Value::as_array)
