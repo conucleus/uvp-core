@@ -2369,11 +2369,7 @@ mod tests {
                 json!(expression);
             let error = compile_zhixu_hook_plan(&target, None, true)
                 .expect_err("same-atom composition must fail");
-            assert!(
-                error.to_string().contains("D013"),
-                "{expression}: {}",
-                error.to_string()
-            );
+            assert!(error.to_string().contains("D013"), "{expression}: {error}");
         }
 
         // input atom 的 (task, stage) 必须落在所属 stage 上：mailbox 地址

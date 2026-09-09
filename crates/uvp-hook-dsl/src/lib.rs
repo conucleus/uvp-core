@@ -2187,7 +2187,6 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let mut ast = ast;
         ast["subscriptionTarget"] = json!(["seller", "trade.listing.cmp"]);
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
