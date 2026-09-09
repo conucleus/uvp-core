@@ -961,6 +961,22 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
         .enumerate()
     {
         let path = format!("resolutionManifest.definitions[{index}]");
+        // 条目级键闭集与 interface/dockEdges 闸口同口径：拼错的字段（如
+        // interface 单数、dockEdgess）被静默吸收会让发布方数据错误以缺省
+        // 语义参与 link。
+        if let Some(entry_object) = entry.as_object() {
+            for key in entry_object.keys() {
+                if !matches!(key.as_str(), "name" | "dockEdges" | "interfaces") {
+                    issues.push(DockIssue::new(
+                        "D008",
+                        format!("{path}.{key}"),
+                        format!(
+                            "unknown field {key:?}; allowed: [\"name\", \"dockEdges\", \"interfaces\"]"
+                        ),
+                    ));
+                }
+            }
+        }
         let name = entry
             .get("name")
             .and_then(Value::as_str)
@@ -1696,6 +1712,27 @@ mod tests {
             issues
                 .iter()
                 .any(|issue| issue.code == "D008" && issue.message.contains("artifactHash")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_definition_fields() {
+        // 条目级键闭集：interface 声明合法但残留拼错键（interface 单数）时
+        // 旧口径静默吸收、解析成功——发布方数据错误以缺省语义参与 link。
+        let manifest = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "payment_execution",
+                "interfaces": [minimal_interface("svc")],
+                "interface": [minimal_interface("svc")],
+            }]
+        });
+        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.message.contains("unknown field")
+                && issue.message.contains("\"interface\"")),
             "{issues:?}"
         );
     }
