@@ -21,8 +21,8 @@ const PINNED_VERSION: &str = "uvp.constraints.v1";
 /// sha256(uvp-constraints.v1.json)。改表必须三线同步更新：
 ///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
 ///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
-///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "8aefc28d9a3be2a034b8d2ec5a232dba2515337818dc62de927fb4ea5141ec5a";
+///   uvp(go)       pkg/compiler/validator/constraints_registry_test.go
+const PINNED_SHA256: &str = "2f776f56eff245ffd6f764df758bb0f173c9e1f244bb43df61784a37c3aeab3a";
 
 const CONSTRAINTS_RELATIVE_PATH: &str = "uvp-protocol/protocol/uvp-constraints.v1.json";
 
