@@ -114,7 +114,12 @@ pub fn compile_zhixu_hook_plan(
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
 
     // Dock：目标接口编译 + 调用方 route 收集 + link。
-    let dock_state = compile_dock_state(&definition, &stage_pairs, resolution_manifest, allow_unresolved)?;
+    let dock_state = compile_dock_state(
+        &definition,
+        &stage_pairs,
+        resolution_manifest,
+        allow_unresolved,
+    )?;
 
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_stage_executors(
@@ -196,8 +201,12 @@ pub fn compile_cloud_artifact(
         .map(|entry| entry.stage_identifier.clone())
         .collect::<BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-    let dock_state =
-        compile_dock_state(&definition, &stage_pairs, resolution_manifest, allow_unresolved)?;
+    let dock_state = compile_dock_state(
+        &definition,
+        &stage_pairs,
+        resolution_manifest,
+        allow_unresolved,
+    )?;
 
     let mut validation_issues = Vec::new();
     // Cloud and hook_plan are two artifact profiles over the same definition;
@@ -343,9 +352,7 @@ fn compile_dock_state(
         .map(|route| route.to_json())
         .collect::<Vec<_>>();
     Ok(DockState {
-        interface_json: interfaces
-            .as_deref()
-            .map(dock::interface_declarations_json),
+        interface_json: interfaces.as_deref().map(dock::interface_declarations_json),
         routes_json,
         unresolved_json,
         input_port_hook_ids,
@@ -1923,8 +1930,9 @@ mod tests {
 
     #[test]
     fn rejects_parent_without_manifest() {
-        let error = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, false)
-            .expect_err("unresolved dock target must fail");
+        let error =
+            compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, false)
+                .expect_err("unresolved dock target must fail");
         assert!(
             error.to_string().contains("UNRESOLVED_DOCK_TARGET"),
             "unexpected error: {error}"
@@ -1953,9 +1961,8 @@ mod tests {
 
     #[test]
     fn parse_target_allows_unresolved() {
-        let value =
-            compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, true)
-                .expect("parse target allows unresolved routes");
+        let value = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, true)
+            .expect("parse target allows unresolved routes");
         assert_eq!(value["dockRoutes"].as_array().unwrap().len(), 0);
         // bug_audit #20：静态目标 route 不因无 manifest 而从声明面消失——
         // parse 产物如实携带全部委托形态，静态条目携带作者声明的
@@ -2525,8 +2532,7 @@ mod tests {
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("non-slug target name must fail");
         assert!(
-            error.to_string().contains("D003")
-                && error.to_string().contains("metadata.name"),
+            error.to_string().contains("D003") && error.to_string().contains("metadata.name"),
             "{}",
             error.to_string()
         );
@@ -2711,12 +2717,7 @@ mod tests {
         let input_map: Map<String, Value> = channels
             .iter()
             .enumerate()
-            .map(|(index, channel)| {
-                (
-                    channel.clone(),
-                    Value::String(format!("p{index}")),
-                )
-            })
+            .map(|(index, channel)| (channel.clone(), Value::String(format!("p{index}"))))
             .collect();
         let parent = json!({
             "apiVersion": "uvp/v0",
@@ -2766,10 +2767,7 @@ mod tests {
             ["zhixuExecutorConfig"]
             .as_object_mut()
             .unwrap();
-        config["inputMap"]
-            .as_object_mut()
-            .unwrap()
-            .remove("CH8");
+        config["inputMap"].as_object_mut().unwrap().remove("CH8");
         parent["spec"]["taskPatterns"][0]["stages"][1]["receiveSignals"]
             .as_object_mut()
             .unwrap()
@@ -2789,8 +2787,7 @@ mod tests {
         // supplierType 闭集 {individual, organization, zhixu}：拼错的类型
         // 会经 executorRoutes 进链上承诺，编译期拒绝。
         let mut parent = parent_settlement_definition(TARGET_NAME);
-        parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] =
-            json!("org");
+        parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] = json!("org");
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("unknown supplierType must fail before entering executorRoutes");
         assert!(
@@ -2992,11 +2989,14 @@ mod tests {
         // payment_execution→mid、mid→settlement（回指本地）。
         let mut three_node = manifest_for(&target);
         three_node["definitions"][0]["dockEdges"] = json!([{ "target": "mid_cycle" }]);
-        three_node["definitions"].as_array_mut().unwrap().push(json!({
-            "name": "mid_cycle",
-            "interfaces": [minimal_interface_value("svc_mid")],
-            "dockEdges": [{ "target": "settlement" }],
-        }));
+        three_node["definitions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "name": "mid_cycle",
+                "interfaces": [minimal_interface_value("svc_mid")],
+                "dockEdges": [{ "target": "settlement" }],
+            }));
         let error = compile_zhixu_hook_plan(&parent, Some(&three_node), false)
             .expect_err("three-definition cycle must fail");
         let message = error.to_string();
@@ -3012,17 +3012,14 @@ mod tests {
         // （target 回指父定义名）由 rejects_link_violations 覆盖。
         let mut self_edge = manifest_for(&target);
         self_edge["definitions"][0]["dockEdges"] = json!([{ "target": "payment_execution" }]);
-        let error = compile_zhixu_hook_plan(
-            &parent_with_route_to(TARGET_NAME),
-            Some(&self_edge),
-            false,
-        )
-        .expect_err("manifest self-edge cycle must fail");
+        let error =
+            compile_zhixu_hook_plan(&parent_with_route_to(TARGET_NAME), Some(&self_edge), false)
+                .expect_err("manifest self-edge cycle must fail");
         assert!(
-            error
-                .to_string()
-                .contains("D015")
-                && error.to_string().contains("payment_execution -> payment_execution"),
+            error.to_string().contains("D015")
+                && error
+                    .to_string()
+                    .contains("payment_execution -> payment_execution"),
             "{error}"
         );
     }

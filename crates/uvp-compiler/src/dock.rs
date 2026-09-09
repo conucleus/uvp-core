@@ -821,9 +821,7 @@ pub fn compile_dock_interface(
                 issues.push(DockIssue::new(
                     "D014",
                     format!("{path}.signal"),
-                    format!(
-                        "signal {signal_name} is not in stage {stage_identifier} sendSignals"
-                    ),
+                    format!("signal {signal_name} is not in stage {stage_identifier} sendSignals"),
                 ));
                 continue;
             }
@@ -862,7 +860,12 @@ pub fn compile_dock_interface(
 
 /// 目标定义全部接口的中性声明产物（接口名升序数组）。
 pub fn interface_declarations_json(interfaces: &[InterfaceDeclaration]) -> Value {
-    Value::Array(interfaces.iter().map(InterfaceDeclaration::to_json).collect())
+    Value::Array(
+        interfaces
+            .iter()
+            .map(InterfaceDeclaration::to_json)
+            .collect(),
+    )
 }
 
 /// 全部 input 端口引用的本地 hook 集合（`<task>.<stage>#<hook>`）：
@@ -1256,9 +1259,7 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
             issues.push(DockIssue::new(
                 "D008",
                 format!("{port_path}.signal"),
-                format!(
-                    "signal must be <source>::<task>.<stage>.<signal>, found {signal:?}"
-                ),
+                format!("signal must be <source>::<task>.<stage>.<signal>, found {signal:?}"),
             ));
             continue;
         }
@@ -1402,9 +1403,7 @@ pub fn link_dock_routes(
                 format!("{path}.order.mode"),
                 format!(
                     "interface {:?} of target {target_name:?} allows orderModes {:?}, found {:?}",
-                    config.interface_name,
-                    interface.order_modes,
-                    config.order_mode
+                    config.interface_name, interface.order_modes, config.order_mode
                 ),
             ));
             issues.extend(route_issues);
@@ -1414,11 +1413,7 @@ pub fn link_dock_routes(
         // D009（端口存在 + 方向）。
         let mut resolved_inputs = Vec::new();
         for (local_hook, port_name) in &config.input_map {
-            if interface
-                .inputs
-                .iter()
-                .all(|port| &port.port != port_name)
-            {
+            if interface.inputs.iter().all(|port| &port.port != port_name) {
                 route_issues.push(DockIssue::new(
                     "D009",
                     format!("{path}.inputMap.{local_hook}"),
@@ -1437,11 +1432,7 @@ pub fn link_dock_routes(
 
         let mut resolved_outputs = Vec::new();
         for (local_signal, port_name) in &config.signal_map {
-            if interface
-                .outputs
-                .iter()
-                .all(|port| &port.port != port_name)
-            {
+            if interface.outputs.iter().all(|port| &port.port != port_name) {
                 route_issues.push(DockIssue::new(
                     "D009",
                     format!("{path}.signalMap.{local_signal}"),
@@ -1867,7 +1858,8 @@ mod tests {
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.code == "D012" && issue.message.contains("single target source seam")),
+                .any(|issue| issue.code == "D012"
+                    && issue.message.contains("single target source seam")),
             "{issues:?}"
         );
     }

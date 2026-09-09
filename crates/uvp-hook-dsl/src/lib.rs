@@ -371,9 +371,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                 })?
                 .clone();
             let target_object = target.as_object().ok_or_else(|| {
-                HookError::Message(
-                    "compiled subscriptionTarget must be an object".to_string(),
-                )
+                HookError::Message("compiled subscriptionTarget must be an object".to_string())
             })?;
             // 键闭集与其他子对象闸口同口径：拼错的字段（如 singal）不得被
             // 静默忽略成缺省语义（Go DecodeCompiledHook 同款拒绝）。
@@ -830,16 +828,14 @@ fn starts_cross_source(value: &str) -> bool {
     // 标识符字符（如 ::ANCHORX 伪前缀）不是关键字形态，
     // 不得绕过空标头门禁。扇入类旧标头不在词表内：
     // 其字面按通用语法错误（空标头门禁）拒绝，没有退役清单条目。
-    ["ANCHOR", "OUTSIDE", "OUTSOURCE"]
-        .iter()
-        .any(|keyword| {
-            let Some(rest) = value.strip_prefix(keyword) else {
-                return false;
-            };
-            rest.chars()
-                .next()
-                .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
-        })
+    ["ANCHOR", "OUTSIDE", "OUTSOURCE"].iter().any(|keyword| {
+        let Some(rest) = value.strip_prefix(keyword) else {
+            return false;
+        };
+        rest.chars()
+            .next()
+            .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
+    })
 }
 
 fn reject_unsupported_operators(condition: &str) -> Result<()> {
@@ -2201,7 +2197,8 @@ mod tests {
         })
         .unwrap_err();
         assert!(
-            err.to_string().contains("subscriptionTarget must be an object"),
+            err.to_string()
+                .contains("subscriptionTarget must be an object"),
             "unexpected error: {err}"
         );
     }

@@ -132,10 +132,7 @@ mod tests {
         // 而不是在 panic guard 之外 panic 跨 extern "C" 边界 abort 宿主。
         let ptr = into_c_string("{\"message\":\"a\0b\"}".to_string());
         let recovered = unsafe { CString::from_raw(ptr) };
-        assert_eq!(
-            recovered.to_str().unwrap(),
-            "{\"message\":\"a\\u0000b\"}"
-        );
+        assert_eq!(recovered.to_str().unwrap(), "{\"message\":\"a\\u0000b\"}");
     }
 
     #[test]

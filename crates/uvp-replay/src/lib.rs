@@ -908,16 +908,14 @@ fn chain_event_to_expected_observation(event: &Value) -> Result<Value> {
 /// 序列只与该键自己的求值历史可比。
 fn compare_hook_observations(expected: &[Value], observed: &[Value]) -> Vec<Value> {
     let mut mismatches = Vec::new();
-    let mut expected_queues: BTreeMap<String, std::collections::VecDeque<&Value>> =
-        BTreeMap::new();
+    let mut expected_queues: BTreeMap<String, std::collections::VecDeque<&Value>> = BTreeMap::new();
     for item in expected {
         expected_queues
             .entry(hook_observation_key(item))
             .or_default()
             .push_back(item);
     }
-    let mut observed_queues: BTreeMap<String, std::collections::VecDeque<&Value>> =
-        BTreeMap::new();
+    let mut observed_queues: BTreeMap<String, std::collections::VecDeque<&Value>> = BTreeMap::new();
     for item in observed {
         observed_queues
             .entry(hook_observation_key(item))
@@ -1252,7 +1250,8 @@ mod tests {
         // 不在指令集内。求值器没有专属分支——携带该指令的 plan 与任意
         // 未知指令同口径，在 unsupported 错误上响亮失败。指令字面按字节
         // 拼装，使仓内对该词的全文检索保持零命中。
-        let retired_op = String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
+        let retired_op =
+            String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
         let instructions = vec![
             json!({"op": "SIGNAL", "signalKey": "0x50"}),
             json!({"op": "SIGNAL", "signalKey": "0x51"}),
@@ -1277,7 +1276,8 @@ mod tests {
         // 负向 golden：手工 plan 携带退役扇入指令时，回放整体以错误收场
         // （envelope ok:false），不产出"部分观察 + mismatch"的软化报告——
         // 与合约 commitPlan 注册边界的响亮拒绝同口径。
-        let retired_op = String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
+        let retired_op =
+            String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
         let events = vec![
             json!({
                 "eventName": "PlanRegistered",
@@ -2151,9 +2151,7 @@ mod tests {
     fn replay_options_rejects_unknown_fields() {
         // options 与外层信封同口径拒绝未知字段：拼错的键不得被静默吞成
         // 缺省语义。
-        let output = replay_json(
-            r#"{"events": [], "options": {"strick": false}}"#,
-        );
+        let output = replay_json(r#"{"events": [], "options": {"strick": false}}"#);
         let envelope: Value = serde_json::from_str(&output).expect("envelope");
         assert_eq!(envelope["ok"], json!(false), "{output}");
         assert!(
@@ -2331,16 +2329,17 @@ mod tests {
         // 两订单的 HookReady 到达序与 oracle 推导序相反（链上 order-2 的
         // 就绪先落块）——全局下标配对会误报 2 条 semantic-mismatch，
         // 分桶配对 0 条。
-        let plan = single_hook_plan("flow.start#BIRTH", json!([{ "op": "SIGNAL", "signalKey": "0x50" }]));
-        let mut events = vec![
-            json!({
-                "eventName": "PlanRegistered",
-                "blockNumber": 1,
-                "logIndex": 0,
-                "transactionHash": "0x01",
-                "plan": plan
-            }),
-        ];
+        let plan = single_hook_plan(
+            "flow.start#BIRTH",
+            json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+        );
+        let mut events = vec![json!({
+            "eventName": "PlanRegistered",
+            "blockNumber": 1,
+            "logIndex": 0,
+            "transactionHash": "0x01",
+            "plan": plan
+        })];
         for (index, order_id) in ["order-1", "order-2"].iter().enumerate() {
             events.push(json!({
                 "eventName": "OrderRegistered",
@@ -2405,7 +2404,10 @@ mod tests {
         // v0.10 合约不产出 HookStatusChanged(status=init)（Init 是隐含初值，
         // 无观察语义）：携带该状态的输入事件被裁剪，不产生 expected、
         // 不参与比对——原生入口可直接喂，无需适配层预裁。
-        let plan = single_hook_plan("flow.start#BIRTH", json!([{ "op": "SIGNAL", "signalKey": "0x50" }]));
+        let plan = single_hook_plan(
+            "flow.start#BIRTH",
+            json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+        );
         let events = vec![
             json!({
                 "eventName": "PlanRegistered",

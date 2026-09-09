@@ -34,7 +34,10 @@ fn canonical_stringify_matches_the_pinned_vectors() {
     let mut pass_count = 0usize;
     let mut reject_count = 0usize;
     for case in corpus.cases {
-        match (case.expect_reject.as_deref(), case.expect_canonical.as_deref()) {
+        match (
+            case.expect_reject.as_deref(),
+            case.expect_canonical.as_deref(),
+        ) {
             (Some(anchor), None) => {
                 let err = uvp_ir::canonical_stringify(&case.input)
                     .err()
