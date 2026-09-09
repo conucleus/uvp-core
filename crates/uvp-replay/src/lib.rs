@@ -172,12 +172,14 @@ struct OracleState {
 ///   （`createDockedOrderFromModule`）出生把事实 `_recordSignal` 落在本订单，
 ///   裸 atom 出生 hook 由正常求值自然产生 HookReady，无需推导；order-link
 ///   mint 出生（`triggerOrderFromSignalFromModule`）不 `_recordSignal` 但
-///   emit HookReady。oracle 据链上 HookReady 反推：order-trigger hook（mint
-///   与 dock 两种标记）补 runtime ready/readyEmitted 并物化其阶段，同时把
-///   该观察记入 observed（接受链上断言；outside/dock 出生的事实已记录、
-///   正常求值先行置位 readyEmitted，推导对它们在 ready_emitted 门处天然
-///   短路，真正走推导路径的只有 order-link mint 出生）。非 trigger hook
-///   的无信号 HookReady 不推导，保持 mismatch 暴露真实异常。
+///   emit HookReady。oracle 据链上 HookReady 反推的范围只覆盖 mint 标记的
+///   出生 hook：补 runtime ready/readyEmitted 并物化其阶段，同时把该观察
+///   记入 observed（接受链上断言——order-link 出生的事实只存在于 origin
+///   订单，本订单没有可求值的信号源，链是唯一推导来源）。dock 标记的
+///   出生 hook 不接受断言：dock 出生事实恒先落本订单（SignalSubmitted
+///   先行），求值路径已可推导其 Ready，链上出现 oracle 未推导的 dock
+///   HookReady 只能是事实缺失的异常。dock/mint 之外的无信号 HookReady
+///   同样不推导，保持 mismatch 暴露真实异常。
 fn absorb_chain_observation(
     state: &mut OracleState,
     expected: &mut Vec<Value>,
@@ -225,10 +227,11 @@ fn absorb_chain_observation(
 }
 
 /// order-link 出生推导：三种出生形态中仅 order-link mint 无法由求值推导
-/// （详见 `absorb_chain_observation` 的推导规则）。推导门是 order-trigger
-/// 标记（mint|dock）；plan 的 v2 结构字段缺失/非法在此响亮失败，不做
-/// "缺 orderTriggerKind 即视为非 trigger"的静默回退——那是把结构错误
-/// 吞成推导缺口。
+/// （详见 `absorb_chain_observation` 的推导规则）。推导门是 mint 标记——
+/// dock 出生的事实恒先落本订单，其 Ready 可由求值推导，接受无信号断言
+/// 会把事实缺失的异常吞成配对成功；plan 的 v2 结构字段缺失/非法在此
+/// 响亮失败，不做"缺 orderTriggerKind 即视为非 trigger"的静默回退——
+/// 那是把结构错误吞成推导缺口。
 fn derive_order_link_birth(
     state: &mut OracleState,
     observed: &mut Vec<Value>,
@@ -250,7 +253,7 @@ fn derive_order_link_birth(
     let Ok(hook) = find_hook(plan, hook_id) else {
         return Ok(());
     };
-    if !hook_is_order_trigger(&hook)? {
+    if order_trigger_kind(&hook)? != "mint" {
         return Ok(());
     }
     let stage_id = value_str(&hook, "stageId").unwrap_or_default().to_string();
@@ -485,6 +488,12 @@ fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Result<Vec<Val
 /// 加 `emitReady`。oracle 只认 v2 字段，缺失即结构性错误
 /// （fail-closed，不做隐式回退）。
 fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
+    Ok(matches!(order_trigger_kind(hook)?, "mint" | "dock"))
+}
+
+/// 出生推导按 kind 精确分流（只有 mint 接受链上断言），两处共用同一
+/// 提取入口，缺失/非法值都报结构错误。
+fn order_trigger_kind(hook: &Value) -> Result<&str> {
     let kind = hook
         .get("orderTriggerKind")
         .and_then(Value::as_str)
@@ -494,13 +503,13 @@ fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
                 value_str(hook, "hookId").unwrap_or("<unknown>")
             ))
         })?;
-    match kind {
-        "mint" | "dock" => Ok(true),
-        "none" => Ok(false),
-        other => Err(ReplayError::Message(format!(
-            "hook {} carries unsupported orderTriggerKind {other}",
+    if matches!(kind, "mint" | "dock" | "none") {
+        Ok(kind)
+    } else {
+        Err(ReplayError::Message(format!(
+            "hook {} carries unsupported orderTriggerKind {kind}",
             value_str(hook, "hookId").unwrap_or("<unknown>")
-        ))),
+        )))
     }
 }
 
@@ -1539,6 +1548,155 @@ mod tests {
             true
         );
         assert_eq!(order["materializedStages"]["linked.entry"], true);
+    }
+
+    #[test]
+    fn dock_hook_ready_without_signal_stays_a_mismatch() {
+        // dock 出生事实恒先落本订单（createDockedOrderFromModule 内
+        // _recordSignal → SignalSubmitted）：没有信号先行的链上 HookReady
+        // 是事实缺失的异常，oracle 不做断言推导，mismatch 保持暴露。
+        let events = vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": {
+                    "planId": "0x01",
+                    "zhixuId": "demo",
+                    "compiledHooks": [{
+                        "hookId": "target.entry#DOCK_ENTER",
+                        "stageId": "target.entry",
+                        "stageIdentifier": "target.entry",
+                        "hookName": "DOCK_ENTER",
+                        "orderTriggerKind": "dock",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }],
+                    "dependencyIndex": { "0x50": ["target.entry#DOCK_ENTER"] }
+                }
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-9",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "HookReady",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-9",
+                "hookId": "target.entry#DOCK_ENTER",
+                "stageIdentifier": "target.entry",
+                "hookName": "DOCK_ENTER"
+            }),
+        ];
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap();
+        let mismatches = result["mismatches"].as_array().unwrap();
+        assert_eq!(mismatches.len(), 1, "{mismatches:?}");
+        assert_eq!(mismatches[0]["reason"], "missing-observed");
+        // 断言不被接受：订单状态不被无信号的链上 HookReady 污染。
+        let order = &result["state"]["orders"]["0x01::order-9"];
+        assert!(order["hookStatuses"].as_object().unwrap().is_empty());
+        assert!(order["materializedStages"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dock_birth_with_recorded_fact_replays_clean() {
+        // 合法 dock 出生流：出生事实（SignalSubmitted）先行，求值路径推导
+        // HookReady，链上 HookReady 与之一一配对——mint-only 推导门不影响。
+        let events = vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": {
+                    "planId": "0x01",
+                    "zhixuId": "demo",
+                    "compiledHooks": [{
+                        "hookId": "target.entry#DOCK_ENTER",
+                        "stageId": "target.entry",
+                        "stageIdentifier": "target.entry",
+                        "hookName": "DOCK_ENTER",
+                        "orderTriggerKind": "dock",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }],
+                    "dependencyIndex": { "0x50": ["target.entry#DOCK_ENTER"] }
+                }
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-9",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-9",
+                "sourceId": "0x30",
+                "signalId": "0x40",
+                "signalKey": "0x50",
+                "senderId": "relayer",
+                "submittedAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "HookReady",
+                "blockNumber": 3,
+                "logIndex": 1,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-9",
+                "hookId": "target.entry#DOCK_ENTER",
+                "stageIdentifier": "target.entry",
+                "hookName": "DOCK_ENTER"
+            }),
+        ];
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result["mismatches"].as_array().map(Vec::len),
+            Some(0),
+            "dock birth with a recorded fact must replay without mismatch"
+        );
+        let order = &result["state"]["orders"]["0x01::order-9"];
+        assert_eq!(
+            order["hookStatuses"]["target.entry#DOCK_ENTER"]["readyEmitted"],
+            true
+        );
+        assert_eq!(order["materializedStages"]["target.entry"], true);
     }
 
     #[test]
