@@ -39,7 +39,7 @@ pub fn canonical_stringify(value: &Value) -> Result<String> {
 
 // 数字的 canonical 规则（Rust 是跨语言权威，TS canonical.ts 必须同口径；
 // 钉死向量见 fixtures/canonical/canonical.v1.json）：
-// - 哈希输入词表封闭（bug_audit #15）：浮点形态的数字字面量（serde_json
+// - 哈希输入词表封闭：浮点形态的数字字面量（serde_json
 //   的 f64 载荷，含整值浮点 1.0、指数写法 1e2、负零 -0.0）在权威
 //   canonicalization 一律响亮拒绝并列出肇事 token——跨语言浮点格式化
 //   （ryu vs JS Number→String）无逐字节对齐义务，单一拒绝面放在权威侧，
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn canonical_hash_inputs_reject_float_form_numbers() {
-        // bug_audit #15：整值浮点/分数/指数/负零一律拒绝，错误列出肇事
+        // 整值浮点/分数/指数/负零一律拒绝，错误列出肇事
         // token；整数（含超 double 精度的 u64）照常放行。
         for (label, value) in [
             ("integral float", json!({ "a": 1.0 })),

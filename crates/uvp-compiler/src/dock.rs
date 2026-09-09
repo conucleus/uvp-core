@@ -24,7 +24,7 @@ use uvp_model::{DockInterfaceSpec, ZhixuStage};
 // ---------------------------------------------------------------------------
 
 pub const DOCK_ROUTE_SCHEMA_VERSION: &str = "uvp.dockRoute.v2";
-/// 未解析 route 的声明面产物形态（bug_audit #20）：本地声明完整——
+/// 未解析 route 的声明面产物形态：本地声明完整——
 /// target:null 动态选择的目标空缺（云轨运行时由选择记录补齐）；静态
 /// 目标 route 在 parse-only 产物中同面携带作者声明的 target.zhixu。
 pub const DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION: &str = "uvp.dockRoute.unresolved.v1";
@@ -524,7 +524,7 @@ pub fn collect_unlinked_routes(
 }
 
 impl UnlinkedDockRoute {
-    /// 未解析 route 的声明面产物（bug_audit #20）：本地声明完整、不携带
+    /// 未解析 route 的声明面产物：本地声明完整、不携带
     /// 任何派生字段。target:null（动态选择）的目标空缺——目标身份/承诺
     /// 由各轨在选择记录补齐后自行计算；静态目标 route 携带作者声明的
     /// target.zhixu（name 引用，非派生身份），与动态目标对称进声明面。
@@ -561,7 +561,7 @@ pub struct InterfacePortInput {
     /// 输入端口所属 stage 的 source 类（单源 seam 的 input 侧观测面）。
     /// hook 引用 `<task>.<stage>#<receiveHookName>` 本身不携带 source——
     /// 中性声明补 source 兄弟键后，linker 才能对 input 与 output 两侧
-    /// 执行同一单源校验（文法 §4.2，bug_audit #1）。
+    /// 执行同一单源校验（文法 §4.2）。
     pub source: String,
     /// `<task>.<stage>#<receiveHookName>`
     pub hook: String,
@@ -677,7 +677,7 @@ pub fn compile_dock_interface(
             };
             // input 端口的中性声明携带所属 stage 的 source 类（单源 seam 的
             // input 侧观测面）：hook 引用本身无 source 维度，无法派生即响亮
-            // 失败，不留静默空串兜底（bug_audit #1）。
+            // 失败，不留静默空串兜底。
             if stage.source.trim().is_empty() {
                 issues.push(DockIssue::new(
                     "D022",
@@ -1201,7 +1201,7 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
             }
         }
         // source 必填（单源 seam 的 input 侧观测面）：缺失/空白即响亮失败，
-        // 不回退、不臆造——linker 的双侧单源校验依赖该字段（bug_audit #1）。
+        // 不回退、不臆造——linker 的双侧单源校验依赖该字段。
         let source = port_object
             .get("source")
             .and_then(Value::as_str)
@@ -1465,7 +1465,7 @@ pub fn link_dock_routes(
             });
         }
 
-        // D012：被绑定接口同一 source seam——双侧同口径（bug_audit #1）：
+        // D012：被绑定接口同一 source seam——双侧同口径：
         // input 侧从接口声明的 input 端口 source 观测（被绑定接口的全部
         // input 端口都参与：它们是同一接缝的投递邮箱），output 侧从
         // route-bound 输出端口的 canonical signal 前缀观测。两侧并集必须
@@ -1748,7 +1748,7 @@ mod tests {
 
     #[test]
     fn manifest_input_ports_require_source() {
-        // bug_audit #1：input 端口的 source 兄弟键是 manifest 必填项——
+        // input 端口的 source 兄弟键是 manifest 必填项——
         // 缺失/空白/非字符串都是确定性 D008，不回退、不臆造。
         let base = json!({
             "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
@@ -1802,7 +1802,7 @@ mod tests {
 
     #[test]
     fn link_rejects_cross_source_seams_from_both_sides() {
-        // bug_audit #1：D012 从 input 端口 source 与 output signal 前缀双侧
+        // D012 从 input 端口 source 与 output signal 前缀双侧
         // 观测 seam——被绑定接口的任一侧跨源即拒绝（编译期 input 侧校验）。
         let unlinked = vec![UnlinkedDockRoute {
             stage_identifier: "local.stage".to_string(),

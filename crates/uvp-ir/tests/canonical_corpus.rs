@@ -1,7 +1,7 @@
 //! Canonical-JSON 跨语言钉死语料：Rust（uvp-ir）是权威，TS 侧
 //! canonical.ts 必须对同一份 fixture 同口径——通过用例逐字节复现
 //! expectCanonical，拒绝用例（expectReject）以同等的单一拒绝面失败
-//! （bug_audit #15：哈希输入词表对浮点形态数字字面量封闭）。
+//! （哈希输入词表对浮点形态数字字面量封闭）。
 //! fixture 内 rules 字段是规则文本的唯一出处。
 
 use serde::Deserialize;

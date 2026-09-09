@@ -234,7 +234,7 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
             "hook_name must be 1-36 characters".to_string(),
         ));
     }
-    // 通道名词表纪律（bug_audit #18，文法 §7 第 4 条）：'.' 是 canonical
+    // 通道名词表纪律（文法 §7 第 4 条）：'.' 是 canonical
     // 信号名 task.stage.signal 的分隔符、'#' 是 hookId 分隔符
     // （stage#hook_name）——通道名（receiveSignals 键）携带任一分隔符都会
     // 让 hookId 命名空间含混，解析期即拒绝。信号名含 '.' 是设计内形态，

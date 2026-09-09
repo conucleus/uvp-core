@@ -68,7 +68,7 @@ pub fn compile_request(req: &CompileRequest) -> Result<Value> {
         // parse-only：允许 unresolved route。
         "parse" => compile_zhixu_hook_plan(&req.definition, manifest, true),
         // dock link 编译 target（uvp.dock-link v1 产物面）已删除
-        // （bug_audit #10：无消费方机制直接移除）：link 校验由
+        // （无消费方，机制直接移除）：link 校验由
         // hook_plan/cloud/parse 在 resolutionManifest 在场时同一链路承担，
         // 无独立产物面。
         other => Err(CompilerError::Message(format!(
@@ -274,7 +274,7 @@ struct DockState {
     routes_json: Vec<Value>,
     /// 声明面产物（unresolvedDockRoutes）：target:null 动态选择 route 恒入
     /// （目标空缺，不进 link）；parse-only 产物中静态目标 route 同面携带
-    /// （bug_audit #20，与动态目标对称）。
+    /// （与动态目标对称）。
     unresolved_json: Vec<Value>,
     /// dockInterface input port 引用的本地 hook（`<task>.<stage>#<hook>`），
     /// 这些 mailbox hook 不走普通依赖引用校验（dock 模块按端口约束校验）。
@@ -293,7 +293,7 @@ fn compile_dock_state(
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
 
-    // 声明面收集（bug_audit #20）：target:null 的动态选择 route 不进
+    // 声明面收集：target:null 的动态选择 route 不进
     // link（目标空缺，无 D008 可言），改入未解析清单随产物携带（云轨
     // 运行时由选择记录补齐）；parse-only 产物（allow_unresolved）的静态
     // 目标 route 同样进入声明面——解析产物如实携带全部委托形态，与动态
@@ -400,7 +400,7 @@ struct StageEntry {
 }
 
 /// 全局 stage.source 上限：DSL 壳字段统一 100 字节（与 metadata.name
-/// 同宽，bug_audit #14）。hook_name 的 36 字节上限是链轨落库内幕
+/// 同宽）。hook_name 的 36 字节上限是链轨落库内幕
 /// （global_hook.hook_name 列宽），不反向约束 DSL 壳字段。
 const MAX_STAGE_SOURCE_BYTES: usize = 100;
 /// DDL 维度镜像：global_zhixu.name / global_stage.stage_identifier
@@ -480,7 +480,7 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
                 }
             }
             // stage.source：非空、plain identifier 字符集、≤100（DSL 壳
-            // 字段统一 100 字节，与 metadata.name 同宽，bug_audit #14）。
+            // 字段统一 100 字节，与 metadata.name 同宽）。
             // 空串会以空键混进 mintedSources；含空格/Unicode 的 source
             // 是路由键，两侧必须逐字节一致（Go 镜像 zhixu_schema.go 同款
             // 字符集校验；36 字节的 hook_name 上限是链轨落库内幕，不约束
@@ -1889,7 +1889,7 @@ mod tests {
         assert_eq!(interfaces[0]["orderModes"], json!(["existing"]));
         assert_eq!(interfaces[1]["orderModes"], json!(["new"]));
         // 中性声明：inputs 是端口→{source, hook}，outputs 是端口→{signal}
-        // 原文（source 是 input 侧的单源 seam 观测面，bug_audit #1）。
+        // 原文（source 是 input 侧的单源 seam 观测面）。
         assert_eq!(
             interfaces[1]["inputs"],
             json!({
@@ -1941,7 +1941,7 @@ mod tests {
 
     #[test]
     fn dock_link_compile_target_is_retired() {
-        // bug_audit #10：dock link 编译 target（uvp.dock-link v1 产物面）
+        // dock link 编译 target（uvp.dock-link v1 产物面）
         // 无消费方，直接删除、无兼容形态——出现即按未知 target 响亮拒绝
         // （link 校验由 hook_plan/cloud/parse 在 manifest 在场时同一链路
         // 承担）。
@@ -1964,7 +1964,7 @@ mod tests {
         let value = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, true)
             .expect("parse target allows unresolved routes");
         assert_eq!(value["dockRoutes"].as_array().unwrap().len(), 0);
-        // bug_audit #20：静态目标 route 不因无 manifest 而从声明面消失——
+        // 静态目标 route 不因无 manifest 而从声明面消失——
         // parse 产物如实携带全部委托形态，静态条目携带作者声明的
         // target.zhixu（name 引用，非派生身份）。
         let unresolved = value["unresolvedDockRoutes"].as_array().unwrap();
@@ -2284,7 +2284,7 @@ mod tests {
                 "source {label:?}: {error}"
             );
         }
-        // 100 字节边界恰好放行（DSL 壳字段统一 100，bug_audit #14）。
+        // 100 字节边界恰好放行（DSL 壳字段统一 100）。
         let mut parent = parent_settlement_definition(TARGET_NAME);
         parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(100));
         let error = compile_zhixu_hook_plan(&parent, None, false)
@@ -2953,7 +2953,7 @@ mod tests {
 
     #[test]
     fn rejects_dock_startup_graph_cycles_at_manifest_level() {
-        // bug_audit #16（D015 同源防线前移）：manifest 声明面可成的环在
+        // D015 同源防线前移：manifest 声明面可成的环在
         // link 期环检测一律拒绝——互为目标两节点环、经中间定义三节点环、
         // 自指标自环，不要求本地定义参与成环。
         let target = target_payment_definition();
