@@ -2896,7 +2896,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error.to_string().contains("stageIdentifier must be a string"),
+            error
+                .to_string()
+                .contains("stageIdentifier must be a string"),
             "missing stageIdentifier must fail loudly, got: {error}"
         );
     }

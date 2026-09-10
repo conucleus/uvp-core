@@ -49,7 +49,10 @@ fn input_side_errors_exit_nonzero_with_envelope() {
     // --profile 闭集预校验：非法值在拼装前响亮拒绝（与 --deny token 的
     // 闭集校验同口径）。
     let output = run(&["lint-hook", "--profile", "bogus", "buyer::flow.main.a"]);
-    assert!(!output.status.success(), "unknown profile must exit non-zero");
+    assert!(
+        !output.status.success(),
+        "unknown profile must exit non-zero"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("\"ok\":false") && stdout.contains("evm_strict|cloud_compat"),
@@ -64,7 +67,10 @@ fn input_side_errors_exit_nonzero_with_envelope() {
         "x\", \"hook\": \"y",
         "buyer::flow.main.a",
     ]);
-    assert!(!output.status.success(), "injected profile must exit non-zero");
+    assert!(
+        !output.status.success(),
+        "injected profile must exit non-zero"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let envelope: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("stdout stays a parseable envelope");

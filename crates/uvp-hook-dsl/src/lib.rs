@@ -2992,7 +2992,8 @@ mod tests {
             })
             .unwrap_err();
             assert!(
-                err.to_string().contains("hook_name must not contain whitespace"),
+                err.to_string()
+                    .contains("hook_name must not contain whitespace"),
                 "unexpected error for {hook_name:?}: {err}"
             );
         }

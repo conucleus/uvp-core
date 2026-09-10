@@ -112,15 +112,10 @@ mod tests {
         // 不是"整数放行"的例外）。
         let beyond_u64: Value =
             serde_json::from_str(r#"{"a":18446744073709551616}"#).expect("parses as f64");
-        let err = canonical_stringify(&beyond_u64)
-            .expect_err("integer literals beyond the 64-bit range parse as f64 and must be rejected");
-        assert!(
-            matches!(err, CanonicalError::FloatNumber { .. }),
-            "{err}"
+        let err = canonical_stringify(&beyond_u64).expect_err(
+            "integer literals beyond the 64-bit range parse as f64 and must be rejected",
         );
-        assert!(
-            err.to_string().contains("float-form JSON number"),
-            "{err}"
-        );
+        assert!(matches!(err, CanonicalError::FloatNumber { .. }), "{err}");
+        assert!(err.to_string().contains("float-form JSON number"), "{err}");
     }
 }

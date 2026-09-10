@@ -2924,9 +2924,9 @@ mod tests {
             } else {
                 compile_cloud_artifact(&parent, None, true)
             };
-            let error = result
-                .err()
-                .unwrap_or_else(|| panic!("{target}: must reject organization executor with delegation config"));
+            let error = result.err().unwrap_or_else(|| {
+                panic!("{target}: must reject organization executor with delegation config")
+            });
             assert!(
                 error.to_string().contains("D002")
                     && error
@@ -3559,7 +3559,9 @@ mod tests {
         let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err("receiveSignals key containing whitespace must fail");
         assert!(
-            error.to_string().contains("must not contain '.', '#' or whitespace"),
+            error
+                .to_string()
+                .contains("must not contain '.', '#' or whitespace"),
             "unexpected error: {error}"
         );
     }

@@ -1284,9 +1284,7 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
         Some(other) => issues.push(DockIssue::new(
             "D008",
             "outputs",
-            format!(
-                "outputs must be an object mapping port names to {{signal}}, found {other}"
-            ),
+            format!("outputs must be an object mapping port names to {{signal}}, found {other}"),
         )),
     }
     for (port_name, port) in output_ports.into_iter().flatten() {
@@ -2011,7 +2009,9 @@ mod tests {
         assert!(
             issues.iter().any(|issue| issue.code == "D002"
                 && issue.path == "task.execute_payment.executor.zhixuExecutorConfig"
-                && issue.message.contains("only valid when supplierType is zhixu")),
+                && issue
+                    .message
+                    .contains("only valid when supplierType is zhixu")),
             "{issues:?}"
         );
 
@@ -2136,9 +2136,10 @@ mod tests {
         });
         let issues = parse_resolution_manifest(&manifest).unwrap_err();
         assert!(
-            issues
-                .iter()
-                .any(|issue| issue.code == "D008" && issue.message.contains("must be <source>::<task>.<stage>.<signal>")),
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue
+                    .message
+                    .contains("must be <source>::<task>.<stage>.<signal>")),
             "{issues:?}"
         );
     }
