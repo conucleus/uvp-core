@@ -413,11 +413,11 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    stage_mut(&mut d)["source"] = json!(oversize_ascii(101, b'b'));
+                    stage_mut(&mut d)["source"] = json!(oversize_ascii(37, b'b'));
                     d
                 })
             },
-            "exceeds 100 bytes",
+            "exceeds 36 bytes",
         ),
     ));
     probes.push((

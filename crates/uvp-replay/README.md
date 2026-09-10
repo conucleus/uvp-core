@@ -44,14 +44,18 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   事实到达即由正常求值自然产生 `HookReady`，无需推导。
 - order-link mint 出生（`triggerOrderFromSignalFromModule`）：出生事实留在
   origin 订单上，本订单不 `_recordSignal` 但 emit `HookReady`，求值路径无事实
-  可依。oracle 据链上 `HookReady` 反推：order-trigger hook（mint 与 dock 两种
-  标记）补 runtime ready/readyEmitted 并物化其阶段，同时把该观察记入
-  observed（接受链上断言；outside/dock 出生的事实已记录、正常求值先行置位
-  readyEmitted，推导对它们在 ready_emitted 门处天然短路，真正走推导路径的
-  只有 order-link mint 出生。重复的出生 `HookReady` 在合约 `!readyEmitted`
-  门下不可达，第二次以 missing-observed 暴露流异常）。非 trigger hook 的
-  无信号 `HookReady` 不推导，保持 mismatch 暴露真实异常。plan 缺失 v2 结构
-  字段（`orderTriggerKind` 等）在此响亮失败，不回退成"非 trigger"。
+  可依。oracle 据链上 `HookReady` 反推（推导门刻意 **mint-only**）：mint 标记
+  的出生 hook 补 runtime ready/readyEmitted 并物化其阶段，同时把该观察记入
+  observed（接受链上断言）。dock 标记的出生 hook **不接受**断言推导：dock
+  出生事实恒先落本订单（`createDockedOrderFromModule` 内 `_recordSignal` →
+  `SignalSubmitted` 先行），求值路径已可推导其 Ready，链上出现 oracle 未推导
+  的 dock `HookReady` 只能是事实缺失的异常——接受断言会把异常吞成配对成功，
+  该形态保持 missing-observed mismatch 暴露（冻结测试
+  `dock_hook_ready_without_signal_stays_a_mismatch` 钉住）。重复的出生
+  `HookReady` 在合约 `!readyEmitted` 门下不可达，第二次以 missing-observed
+  暴露流异常。非 trigger hook 的无信号 `HookReady` 同样不推导，保持 mismatch
+  暴露真实异常。plan 缺失 v2 结构字段（`orderTriggerKind`、`stageId` 等）在此
+  响亮失败，不回退成"非 trigger"。
 
 ### 消费（consume，回填状态不进 expected）
 

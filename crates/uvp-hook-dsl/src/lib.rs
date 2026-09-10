@@ -550,7 +550,9 @@ const MAX_PARSE_DEPTH: usize = 120;
 
 /// hook 通道名闸（parse 与 lint 共用同一口径）：长度对齐 DDL 列宽
 /// （hook_name VARCHAR(36)），'.' / '#' 分别是 canonical 信号名与 hookId
-/// 的命名空间分隔符，携带即拒绝。
+/// 的命名空间分隔符，携带即拒绝；空白字符（含首尾空格）同样拒绝——
+/// 通道名进 hookId（stage#hook_name），两侧必须逐字节一致，含空白的
+/// 名字是全仓响亮拒绝纪律下的确定性非法输入，不做 trim 归一。
 fn validate_hook_name(hook_name: &str) -> Result<()> {
     if hook_name.trim().is_empty() || hook_name.len() > 36 {
         return Err(HookError::Message(
@@ -560,6 +562,11 @@ fn validate_hook_name(hook_name: &str) -> Result<()> {
     if hook_name.contains('.') || hook_name.contains('#') {
         return Err(HookError::Message(
             "hook_name must not contain '.' or '#'".to_string(),
+        ));
+    }
+    if hook_name.chars().any(char::is_whitespace) {
+        return Err(HookError::Message(
+            "hook_name must not contain whitespace".to_string(),
         ));
     }
     Ok(())
@@ -2973,6 +2980,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_hook_names_containing_whitespace() {
+        // 通道名进 hookId（stage#hook_name），两侧必须逐字节一致：含空白的
+        // 名字（首尾/内部）是确定性非法输入，不做 trim 归一——与编译器
+        // validate_receive_signal_keys 同口径。
+        for hook_name in ["BAD KEY", " LEAD", "TRAIL ", "TAB\tKEY"] {
+            let err = parse_hook(ParseHookRequest {
+                profile: Profile::EvmStrict,
+                hook_name: hook_name.to_string(),
+                hook: "buyer::task.main.cmp".to_string(),
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("hook_name must not contain whitespace"),
+                "unexpected error for {hook_name:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn cloud_normalization_emits_single_parentheses_for_grouped_delay_operands() {
         // Cloud 面与 Tight 面共用"一层分组括号"外观：延时操作数为 And/Or
         // 组时只保留优先级闸产生的那一层括号，不得出现 `((A & B)) +5s`
@@ -3170,8 +3196,9 @@ mod tests {
 
     #[test]
     fn non_subscription_source_header_requires_plain_identifier_of_at_most_36() {
-        // 标头 source 类落 VARCHAR(36) 且是路由键：超长/非法字符集在解析期
-        // 拒绝（对齐 Go 镜像 zhixu_schema.go 的 ≤36 与标识符规则）。
+        // 标头 source 类是路由键：编译期上限 36 字节（严于落库列宽
+        // source_zhixu_id VARCHAR(64)，对齐 Go 镜像 zhixu_schema.go 的
+        // ≤36 与标识符规则），超长/非法字符集在解析期拒绝。
         let overlong = "s".repeat(37);
         for raw in [
             format!("{overlong}::task.main.cmp"),
@@ -3333,7 +3360,8 @@ mod tests {
             hook: "::ANCHOR(@seller::task.main.cmp)".to_string(),
         })
         .unwrap();
-        // 订阅目标 source 超 36 字节：与标头同列宽（VARCHAR(36)），解析期拒绝。
+        // 订阅目标 source 超 36 字节：与标头同口径（编译上限 36 字节，
+        // 严于落库列宽 source_zhixu_id VARCHAR(64)），解析期拒绝。
         let overlong = "s".repeat(37);
         let err = parse_hook(ParseHookRequest {
             profile: Profile::EvmStrict,

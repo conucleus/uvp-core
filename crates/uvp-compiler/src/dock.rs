@@ -478,9 +478,11 @@ fn valid_order_modes(modes: &[String]) -> bool {
 }
 
 fn is_zhixu_executor(executor: &Option<uvp_model::ZhixuExecutor>) -> bool {
+    // 精确比较：supplierType 闭集（含空白变体拒绝）已在 validate_zhixu_shape
+    // 把关，此处不留 trim 容忍（单一口径）。
     executor
         .as_ref()
-        .is_some_and(|e| e.supplier_type.trim() == "zhixu")
+        .is_some_and(|e| e.supplier_type == "zhixu")
 }
 
 /// 未链接 route：本地编译产物（调用方侧）。
@@ -494,6 +496,8 @@ pub struct UnlinkedDockRoute {
 }
 
 /// 收集并本地校验一个定义内全部 zhixu executor route（不解析目标端口）。
+/// 非 zhixu executor 携带 `zhixuExecutorConfig` 在此响亮拒绝（D001 同罪：
+/// "既静态执行者又委托对接"的矛盾键组合不得静默烧进 executorRoutes 承诺）。
 pub fn collect_unlinked_routes(
     entries: &[(String, ZhixuStage)],
 ) -> DockResult<Vec<UnlinkedDockRoute>> {
@@ -504,6 +508,16 @@ pub fn collect_unlinked_routes(
             continue;
         };
         if !is_zhixu_executor(&stage.executor) {
+            if executor.zhixu_executor_config.is_some() {
+                issues.push(DockIssue::new(
+                    "D002",
+                    format!("{stage_identifier}.executor.zhixuExecutorConfig"),
+                    format!(
+                        "zhixuExecutorConfig is only valid when supplierType is zhixu, found {:?}; a static executor cannot also declare delegation (same contract as D001's misplaced supplierID)",
+                        executor.supplier_type
+                    ),
+                ));
+            }
             continue;
         }
         let executor_value =
@@ -905,7 +919,10 @@ fn parse_hook_reference(reference: &str) -> Option<(String, String)> {
 fn parse_canonical_signal(signal: &str) -> Option<(String, String, String)> {
     let (source, rest) = signal.split_once("::")?;
     let parts: Vec<&str> = rest.split('.').collect();
-    if parts.len() != 3 || source.is_empty() {
+    // 空段（"buyer::main..cmp"、"buyer::main.stage."）不是合法 canonical
+    // 形态：拼出的空 stage/空 signal 是永不匹配的寻址键，按形态错误拒绝
+    // （与 Go 镜像 isCanonicalSignalShape 的非空段校验同口径）。
+    if parts.len() != 3 || source.is_empty() || parts.iter().any(|part| part.is_empty()) {
         return None;
     }
     Some((
@@ -1149,17 +1166,30 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
             format!("interface name must match ^[a-z][a-z0-9_]{{0,31}}$, found {name:?}"),
         ));
     }
-    let order_modes = object
-        .get("orderModes")
-        .and_then(Value::as_array)
-        .map(|modes| {
-            modes
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    // orderModes：数组形态 + 字符串项都按确定性非法输入响亮拒绝——
+    // filter_map 吞掉非字符串项会让 ["new", 123] 静默解析成 ["new"]，
+    // 发布方数据错误以缺省语义参与 link。
+    let mut order_modes = Vec::new();
+    match object.get("orderModes") {
+        None => {}
+        Some(Value::Array(modes)) => {
+            for mode in modes {
+                match mode.as_str() {
+                    Some(mode) => order_modes.push(mode.to_string()),
+                    None => issues.push(DockIssue::new(
+                        "D008",
+                        "orderModes",
+                        format!("orderModes entries must be strings, found {mode}"),
+                    )),
+                }
+            }
+        }
+        Some(other) => issues.push(DockIssue::new(
+            "D008",
+            "orderModes",
+            format!("orderModes must be an array of strings, found {other}"),
+        )),
+    }
     if !valid_order_modes(&order_modes) {
         issues.push(DockIssue::new(
             "D008",
@@ -1169,11 +1199,22 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
     }
 
     let mut inputs = Vec::new();
-    for (port_name, port) in object
-        .get("inputs")
-        .and_then(Value::as_object)
-        .unwrap_or(&Map::new())
-    {
+    // inputs/outputs 的类型非法（字符串、数组等）是确定性发布方数据错误，
+    // 响亮拒绝——as_object().unwrap_or(&Map::new()) 会把 "inputs":
+    // "OOPS" 静默吞成空 map，link 按"无端口"继续。
+    let mut input_ports: Option<&Map<String, Value>> = None;
+    match object.get("inputs") {
+        None => {}
+        Some(Value::Object(ports)) => input_ports = Some(ports),
+        Some(other) => issues.push(DockIssue::new(
+            "D008",
+            "inputs",
+            format!(
+                "inputs must be an object mapping port names to {{source, hook}}, found {other}"
+            ),
+        )),
+    }
+    for (port_name, port) in input_ports.into_iter().flatten() {
         let port_path = format!("inputs.{port_name}");
         if !valid_port_name(port_name) {
             issues.push(DockIssue::new(
@@ -1236,11 +1277,19 @@ fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration
     }
 
     let mut outputs = Vec::new();
-    for (port_name, port) in object
-        .get("outputs")
-        .and_then(Value::as_object)
-        .unwrap_or(&Map::new())
-    {
+    let mut output_ports: Option<&Map<String, Value>> = None;
+    match object.get("outputs") {
+        None => {}
+        Some(Value::Object(ports)) => output_ports = Some(ports),
+        Some(other) => issues.push(DockIssue::new(
+            "D008",
+            "outputs",
+            format!(
+                "outputs must be an object mapping port names to {{signal}}, found {other}"
+            ),
+        )),
+    }
+    for (port_name, port) in output_ports.into_iter().flatten() {
         let port_path = format!("outputs.{port_name}");
         if !valid_port_name(port_name) {
             issues.push(DockIssue::new(
@@ -1933,5 +1982,164 @@ mod tests {
             BTreeSet::from(["unrelated-child".to_string()]),
         );
         assert_eq!(max_reachable_route_depth(&edges, "local"), 1);
+    }
+
+    #[test]
+    fn non_zhixu_executor_with_delegation_config_is_rejected() {
+        // "既静态执行者又委托对接"的矛盾声明在收集期响亮拒绝（D001 同罪）：
+        // 静默放行会把 zhixuExecutorConfig 原文烧进 executorRoutes 承诺。
+        let stage = serde_json::from_value::<ZhixuStage>(json!({
+            "name": "execute_payment",
+            "source": "buyer",
+            "receiveSignals": { "EXECUTE": "buyer::task.execute_payment.exec" },
+            "sendSignals": ["str"],
+            "executor": {
+                "supplierType": "organization",
+                "supplierID": "payment-gateway",
+                "zhixuExecutorConfig": {
+                    "target": { "zhixu": "payment_execution" },
+                    "interface": "payment_service",
+                    "order": { "mode": "new" },
+                    "inputMap": { "EXECUTE": "execute" },
+                    "signalMap": { "str": "started" }
+                }
+            }
+        }))
+        .expect("stage decodes");
+        let issues = collect_unlinked_routes(&[("task.execute_payment".to_string(), stage)])
+            .expect_err("organization executor carrying zhixuExecutorConfig must be rejected");
+        assert!(
+            issues.iter().any(|issue| issue.code == "D002"
+                && issue.path == "task.execute_payment.executor.zhixuExecutorConfig"
+                && issue.message.contains("only valid when supplierType is zhixu")),
+            "{issues:?}"
+        );
+
+        // 基线：organization executor 不携带委托配置，收集期照常跳过（无 issue）。
+        let stage = serde_json::from_value::<ZhixuStage>(json!({
+            "name": "plain",
+            "source": "buyer",
+            "receiveSignals": { "RUN": "buyer::task.plain.run" },
+            "sendSignals": ["cmp"],
+            "executor": { "supplierType": "organization", "supplierID": "org" }
+        }))
+        .expect("stage decodes");
+        let routes =
+            collect_unlinked_routes(&[("task.plain".to_string(), stage)]).expect("clean executor");
+        assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn manifest_rejects_non_object_inputs_and_outputs() {
+        // inputs/outputs 类型非法（字符串/数组）是发布方数据错误：响亮拒绝，
+        // 不得静默吞成空 map 按"无端口"继续 link。
+        let base = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "payment_execution",
+                "interfaces": [minimal_interface("svc")],
+            }]
+        });
+        for (label, key, bad) in [
+            ("inputs string", "inputs", json!("OOPS-NOT-AN-OBJECT")),
+            ("inputs array", "inputs", json!([])),
+            ("outputs string", "outputs", json!("OOPS-NOT-AN-OBJECT")),
+            ("outputs number", "outputs", json!(7)),
+        ] {
+            let mut poisoned = base.clone();
+            poisoned["definitions"][0]["interfaces"][0][key] = bad;
+            let issues = parse_resolution_manifest(&poisoned)
+                .err()
+                .unwrap_or_else(|| panic!("{label}: must be rejected"));
+            assert!(
+                issues.iter().any(|issue| issue.code == "D008"
+                    && issue.path.ends_with(&format!(".{key}"))
+                    && issue.message.contains("must be an object")),
+                "{label}: {issues:?}"
+            );
+        }
+        // 基线：键缺席（可选）与对象形态照常解析。
+        parse_resolution_manifest(&base).expect("object-shaped inputs/outputs parse");
+    }
+
+    #[test]
+    fn manifest_rejects_non_string_order_mode_entries() {
+        // orderModes 非字符串项不得被 filter_map 静默丢弃：["new", 123] 是
+        // 确定性非法输入而不是 ["new"]。
+        let manifest = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "payment_execution",
+                "interfaces": [{
+                    "name": "svc",
+                    "orderModes": ["new", 123],
+                    "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
+                    "outputs": {},
+                }],
+            }]
+        });
+        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.path.ends_with(".orderModes")
+                && issue.message.contains("entries must be strings")),
+            "{issues:?}"
+        );
+        // 非数组形态同样是确定性的 D008。
+        let mut not_array = manifest.clone();
+        not_array["definitions"][0]["interfaces"][0]["orderModes"] = json!("new");
+        let issues = parse_resolution_manifest(&not_array).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.path.ends_with(".orderModes")
+                && issue.message.contains("must be an array of strings")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn canonical_signal_shapes_reject_empty_segments() {
+        // 空段不是合法 canonical 形态：拼出的空 stage/空 signal 是永不匹配
+        // 的寻址键（与 Go 镜像 isCanonicalSignalShape 的非空段校验同口径）。
+        for signal in [
+            "buyer::main..cmp",
+            "buyer::main.stage.",
+            "buyer::.stage.cmp",
+            "::main.stage.cmp",
+        ] {
+            assert!(
+                parse_canonical_signal(signal).is_none(),
+                "{signal:?} must not parse as a canonical signal"
+            );
+        }
+        assert_eq!(
+            parse_canonical_signal("buyer::main.stage.cmp"),
+            Some((
+                "buyer".to_string(),
+                "main.stage".to_string(),
+                "cmp".to_string()
+            ))
+        );
+
+        // manifest 路径侧同口径：D014/D008 响亮拒绝而不是吞成空段。
+        let manifest = json!({
+            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
+            "definitions": [{
+                "name": "payment_execution",
+                "interfaces": [{
+                    "name": "svc",
+                    "orderModes": ["new"],
+                    "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
+                    "outputs": { "done": { "signal": "buyer::main..cmp" } },
+                }],
+            }]
+        });
+        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "D008" && issue.message.contains("must be <source>::<task>.<stage>.<signal>")),
+            "{issues:?}"
+        );
     }
 }

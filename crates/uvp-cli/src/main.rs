@@ -58,7 +58,13 @@ fn main() -> ExitCode {
         }
         Command::Lint { path, format, deny } => run_lint(&path, &format, &deny),
         command => {
-            let output = run(command);
+            // 有界失败：输入侧错误（@file 读不到、非法 --profile）输出
+            // ok:false 信封并以非零码退出，与 JSON 入口的信封退出码契约
+            // 同口径——panic 只服务编程错误，不服务调用方输入。
+            let output = match run(command) {
+                Ok(output) => output,
+                Err(message) => failure_envelope(&message),
+            };
             println!("{output}");
             // JSON 入口以信封 ok 字段裁决退出码：fixture/CI 门禁消费退出码，
             // 失败仍 exit 0 会让门禁静默放行（信封不可解析按失败处理）。
@@ -71,18 +77,43 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(command: Command) -> String {
+/// 调用方输入错误的信封形态：与库入口的失败信封同构（ok:false +
+/// diagnostics），message 经 serde 转义，不做裸字符串拼接。
+fn failure_envelope(message: &str) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "ok": false,
+        "diagnostics": [{ "message": message }],
+    }))
+    .expect("failure envelope should serialize")
+}
+
+fn run(command: Command) -> Result<String, String> {
     match command {
-        Command::ParseHook { request } => uvp_hook_dsl::parse_hook_json(&read_arg(&request)),
+        Command::ParseHook { request } => Ok(uvp_hook_dsl::parse_hook_json(&read_arg(&request)?)),
         Command::EvalCompiledHook { request } => {
-            uvp_hook_dsl::eval_compiled_hook_json(&read_arg(&request))
+            Ok(uvp_hook_dsl::eval_compiled_hook_json(&read_arg(&request)?))
         }
-        Command::Compile { request } => uvp_compiler::compile_json(&read_arg(&request)),
-        Command::Replay { request } => uvp_replay::replay_json(&read_arg(&request)),
-        Command::LintHook { hook, profile } => uvp_hook_dsl::lint_hook_json(&format!(
-            "{{\"profile\": \"{profile}\", \"hookName\": \"LINT\", \"hook\": {}}}",
-            serde_json::to_string(&read_arg(&hook)).expect("hook text should serialize")
-        )),
+        Command::Compile { request } => Ok(uvp_compiler::compile_json(&read_arg(&request)?)),
+        Command::Replay { request } => Ok(uvp_replay::replay_json(&read_arg(&request)?)),
+        Command::LintHook { hook, profile } => {
+            // profile 闭集预校验：裸 format! 内插既不转义（profile 携带引号
+            // 会拼出不可解析 JSON），也把非法值的报错推迟成信封内的 serde
+            // 报错——拼装前响亮拒绝，与 --deny token 的闭集校验同口径。
+            if !matches!(profile.as_str(), "evm_strict" | "cloud_compat") {
+                return Err(format!(
+                    "unknown --profile value {profile:?}: expected evm_strict|cloud_compat"
+                ));
+            }
+            // 请求体经 serde_json 序列化拼装：hook 原文与 profile 都按 JSON
+            // 字符串转义，杜绝手写内插的转义缺口。
+            let request = serde_json::to_string(&serde_json::json!({
+                "profile": profile,
+                "hookName": "LINT",
+                "hook": read_arg(&hook)?,
+            }))
+            .map_err(|err| err.to_string())?;
+            Ok(uvp_hook_dsl::lint_hook_json(&request))
+        }
         Command::Lint { .. } | Command::Version => unreachable!("handled in main"),
     }
 }
@@ -245,10 +276,11 @@ fn envelope_failed(output: &str) -> bool {
         .is_none_or(|ok| !ok)
 }
 
-fn read_arg(value: &str) -> String {
+/// `@file` 形态的读取失败是调用方输入错误：向上传播为 ok:false 信封 +
+/// 非零退出（有界失败），不 panic。
+fn read_arg(value: &str) -> Result<String, String> {
     if let Some(path) = value.strip_prefix('@') {
-        return fs::read_to_string(path)
-            .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+        return fs::read_to_string(path).map_err(|err| format!("failed to read {path}: {err}"));
     }
-    value.to_string()
+    Ok(value.to_string())
 }

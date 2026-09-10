@@ -1063,7 +1063,7 @@
                     "delaySeconds": 5
                   }
                 ],
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "none",
                 "emitReady": true
               }
             ],
@@ -1316,7 +1316,7 @@
                     "arity": 2
                   }
                 ],
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "none",
                 "emitReady": true
               }
             ],

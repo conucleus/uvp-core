@@ -93,7 +93,9 @@ pub struct ZhixuStage {
 }
 
 /// typed executor。
-/// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）。
+/// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）；
+/// 反向矛盾同样拒绝：`supplierType ≠ zhixu` 时出现 `zhixuExecutorConfig`
+/// 即编译期错误（D001 同罪——键出现在错误的上下文里）。
 /// 未知字段直接拒绝：flatten 透传会静默吞掉拼错字段，
 /// 与 Go 入口的 DisallowUnknownFields 等值；`zhixuExecutorConfig` 内容
 /// 由 dock 模块按 D002 校验。
@@ -121,8 +123,11 @@ pub struct ZhixuExecutor {
 /// 的任意字符串必须在编译期拒绝，而不是烧进承诺后才在消费侧炸开。
 pub const SUPPLIER_TYPES: [&str; 3] = ["individual", "organization", "zhixu"];
 
+/// 精确匹配、不 trim：带首尾空白的变体（" organization "）按闭集外拒绝
+/// 而不是归一化放行——归一化会让产物携带原文、比对侧按精确值分叉。与
+/// Go 侧严格枚举闸（不 trim、空白即拒）同口径。
 pub fn is_known_supplier_type(value: &str) -> bool {
-    SUPPLIER_TYPES.contains(&value.trim())
+    SUPPLIER_TYPES.contains(&value)
 }
 
 /// `spec.dockInterface` 下的具名接口。

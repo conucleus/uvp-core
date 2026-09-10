@@ -834,11 +834,27 @@ fn lint_dominated_delays(group: &SpannedExpr, hook_name: &str, out: &mut Vec<Lin
                 span: dominator.span,
                 label: "dominating delay".to_string(),
             }],
-            proof: Some(LintProof {
-                kind: "ready_implication",
-                rule: Some("delay_dominance"),
-                premise: Some(expr_str(&dominator.expr)),
-                conclusion: Some(expr_str(&dominated.expr)),
+            // delay dominance 的证明方向固定为"长延时就绪 ⇒ 短延时必已就绪"
+            // （函数头注释）。AND 的被支配项是短延时，OR 的被支配项是长延时
+            // ——premise（长）随分支取自不同成员，不能统一取
+            // (dominator, dominated)：OR 下那样会写出
+            // "短就绪 ⇒ 长就绪" 的不可证方向（2609100328 L4）。
+            proof: Some(if is_and {
+                LintProof {
+                    kind: "ready_implication",
+                    rule: Some("delay_dominance"),
+                    premise: Some(expr_str(&dominator.expr)),
+                    conclusion: Some(expr_str(&dominated.expr)),
+                }
+            } else {
+                // OR：dominated 是最长延时（premise=长），dominator 是其余
+                // 成员中最长者（恒短于 dominated），蕴含式为真。
+                LintProof {
+                    kind: "ready_implication",
+                    rule: Some("delay_dominance"),
+                    premise: Some(expr_str(&dominated.expr)),
+                    conclusion: Some(expr_str(&dominator.expr)),
+                }
             }),
         });
     }

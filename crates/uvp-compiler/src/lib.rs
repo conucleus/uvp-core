@@ -400,10 +400,11 @@ struct StageEntry {
     stage_identifier: String,
 }
 
-/// 全局 stage.source 上限：DSL 壳字段统一 100 字节（与 metadata.name
-/// 同宽）。hook_name 的 36 字节上限是链轨落库内幕
-/// （global_hook.hook_name 列宽），不反向约束 DSL 壳字段。
-const MAX_STAGE_SOURCE_BYTES: usize = 100;
+/// 全局 stage.source 上限：36 字节，与 hook 标头/订阅目标的 source 类上限
+/// 同口径（同一 source 类命名空间，hook-dsl 同值钉死）。37-100 字节的
+/// source 是"声明即死"命名空间——所有 hook/订阅引用在解析层被拒。严于
+/// 落库列宽（source_zhixu_id VARCHAR(64)），上限在编译期拒绝。
+const MAX_STAGE_SOURCE_BYTES: usize = 36;
 /// DDL 维度镜像：global_zhixu.name / global_stage.stage_identifier
 /// VARCHAR(100)。
 const MAX_IDENTIFIER_BYTES: usize = 100;
@@ -470,9 +471,11 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
             if let Some(executor) = &stage.executor {
                 // supplierType 闭集（uvp_model::SUPPLIER_TYPES）：拼错的类型
                 // 会经 executorRoutes 进链上承诺，闭集外的字符串在此拒绝。
+                // 精确匹配不 trim——带空白的变体按闭集外拒绝（Go 侧严格
+                // 枚举闸同口径），不归一化放行。
                 if !uvp_model::is_known_supplier_type(&executor.supplier_type) {
                     issues.push(format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}].executor.supplierType must be one of {} (trim-sensitive), found {:?}",
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}].executor.supplierType must be one of {} (exact match, whitespace variants rejected), found {:?}",
                         uvp_model::SUPPLIER_TYPES
                             .map(|value| format!("{value:?}"))
                             .join(", "),
@@ -480,12 +483,11 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
                     ));
                 }
             }
-            // stage.source：非空、plain identifier 字符集、≤100（DSL 壳
-            // 字段统一 100 字节，与 metadata.name 同宽）。
+            // stage.source：非空、plain identifier 字符集、≤36（与
+            // hook-dsl 标头/订阅目标的 source 类上限同口径）。
             // 空串会以空键混进 mintedSources；含空格/Unicode 的 source
             // 是路由键，两侧必须逐字节一致（Go 镜像 zhixu_schema.go 同款
-            // 字符集校验；36 字节的 hook_name 上限是链轨落库内幕，不约束
-            // 本 DSL 壳字段）。
+            // 字符集校验；36 严于落库列宽 source_zhixu_id VARCHAR(64)）。
             if stage.source.trim().is_empty() {
                 issues.push(format!(
                     "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be non-empty"
@@ -663,11 +665,13 @@ fn build_executor_routes(entries: &[StageEntry]) -> Value {
 }
 
 fn is_zhixu_executor_stage(entry: &StageEntry) -> bool {
+    // 精确比较：带空白的变体已在 validate_zhixu_shape 按闭集外拒绝，
+    // 下游不再保留 trim 容忍（单一口径，杜绝"校验侧拒绝、比较侧放行"）。
     entry
         .stage
         .executor
         .as_ref()
-        .is_some_and(|executor| executor.supplier_type.trim() == "zhixu")
+        .is_some_and(|executor| executor.supplier_type == "zhixu")
 }
 
 fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<String> {
@@ -680,7 +684,7 @@ fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value]) -> Vec<S
         let Some(executor) = entry.stage.executor.as_ref() else {
             continue;
         };
-        if executor.supplier_type.trim() == "zhixu" {
+        if executor.supplier_type == "zhixu" {
             continue;
         }
         if executor
@@ -866,7 +870,7 @@ fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
                     .stage
                     .executor
                     .as_ref()
-                    .map(|executor| executor.supplier_type.trim().to_string())
+                    .map(|executor| executor.supplier_type.clone())
                     .unwrap_or_default();
                 if executor_type == "zhixu" {
                     // mint 出生 + 委托执行器：出生（代铸）与委托（dock 子订单）
@@ -1068,6 +1072,8 @@ fn validate_receive_signal_references(
 // receiveSignals key 即阶段内 hook_name，落 hook_name 列（VARCHAR(36)）。
 // 语法手册 §7.4："key 不可为空且不能含 '.'"；'#' 是 hookId 分隔符
 // （stage#hook_name）——key 携带任一分隔符都会让 hookId 命名空间含混。
+// 空白字符与 hook-dsl validate_hook_name 同口径拒绝：通道名两侧必须逐
+// 字节一致，含空白的名字不做 trim 归一。
 fn validate_receive_signal_keys(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
@@ -1079,9 +1085,13 @@ fn validate_receive_signal_keys(entries: &[StageEntry]) -> Vec<String> {
                 ));
                 continue;
             }
-            if hook_name.contains('.') || hook_name.contains('#') || hook_name.len() > 36 {
+            if hook_name.contains('.')
+                || hook_name.contains('#')
+                || hook_name.len() > 36
+                || hook_name.chars().any(char::is_whitespace)
+            {
                 issues.push(format!(
-                    "{}.receiveSignals.{hook_name} is invalid: key must be 1-36 bytes and must not contain '.' or '#'",
+                    "{}.receiveSignals.{hook_name} is invalid: key must be 1-36 bytes and must not contain '.', '#' or whitespace",
                     entry.stage_identifier
                 ));
             }
@@ -1438,20 +1448,24 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     Ok(capabilities)
 }
 
+/// sendSignals 声明的单一精确口径：declared 与 capability 携带同一原文，
+/// 不 trim（文法"map 键值不 trim"同口径）。capability 侧若做 trim 归一，
+/// 产物会出现两种值——引用侧按存储值精确匹配必然失配（死能力），且
+/// "str" 与 " str" 会撞 duplicate 误判。空白/非法字符在此响亮拒绝。
 fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<Value> {
-    let signal = declared_signal.trim();
-    if signal.is_empty() {
+    if declared_signal.is_empty() {
         return Err(CompilerError::Issues(format!(
             "{}.sendSignals cannot contain an empty signal",
             entry.stage_identifier
         )));
     }
-    if let Some((target_source, target_signal_name)) = signal.split_once("::") {
-        let target_source = target_source.trim();
-        let target_signal_name = target_signal_name.trim();
-        if target_source.is_empty() || target_signal_name.is_empty() {
+    if let Some((target_source, target_signal_name)) = declared_signal.split_once("::") {
+        // `<target>::<signal>` 跨源触发形态：目标半段是 source 类，与信号
+        // 半段（裸名或 task.stage.signal）共用信号名同款标识符文法——
+        // `::` 再现（a::b::c）、空白、非标识符字符在此拒绝。
+        if !valid_identifier_part(target_source) || !valid_signal_declaration(target_signal_name) {
             return Err(CompilerError::Issues(format!(
-                "{}.sendSignals contains invalid target signal {}",
+                "{}.sendSignals contains invalid target signal {:?}: <target>::<signal> requires identifier-grammar halves (ASCII letter start, letters/digits/'_'/'-'; signal half may be a bare name or task.stage.signal)",
                 entry.stage_identifier, declared_signal
             )));
         }
@@ -1464,10 +1478,22 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<
             "targetOrderRelation": "triggerOrigin",
         }));
     }
-    let target_signal_name = if signal.contains('.') {
-        signal.to_string()
+    let target_signal_name = if declared_signal.contains('.') {
+        if !valid_signal_declaration(declared_signal) {
+            return Err(CompilerError::Issues(format!(
+                "{}.sendSignals contains invalid canonical signal {:?}: expected task.stage.signal with identifier-grammar segments",
+                entry.stage_identifier, declared_signal
+            )));
+        }
+        declared_signal.to_string()
     } else {
-        format!("{}.{}", entry.stage_identifier, signal)
+        if !valid_identifier_part(declared_signal) {
+            return Err(CompilerError::Issues(format!(
+                "{}.sendSignals contains invalid signal name {:?}: must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'",
+                entry.stage_identifier, declared_signal
+            )));
+        }
+        format!("{}.{}", entry.stage_identifier, declared_signal)
     };
     Ok(json!({
         "stageIdentifier": entry.stage_identifier,
@@ -1477,6 +1503,15 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<
         "targetSignalName": target_signal_name,
         "targetOrderRelation": "current",
     }))
+}
+
+/// sendSignals 信号声明的形态闸：裸名或 task.stage.signal 三段式，每段与
+/// task/stage 名同文法（valid_identifier_part——云轨事实入口的
+/// ValidateIdentifierPart 同口径：编译期放行数字/'-'/'_' 开头的段只会在
+/// 执行器发送时被拒，阶段没有报错出口地静默死）。
+fn valid_signal_declaration(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('.').collect();
+    matches!(parts.len(), 1 | 3) && parts.iter().all(|part| valid_identifier_part(part))
 }
 
 fn route_for_stage(entry: &StageEntry) -> Value {
@@ -1505,7 +1540,7 @@ fn has_static_executor(executor: Option<&ZhixuExecutor>) -> bool {
     match executor {
         None => false,
         // zhixu 委托执行器本身就是静态锚定（配置合法性由 dock 模块校验）。
-        Some(executor) if executor.supplier_type.trim() == "zhixu" => true,
+        Some(executor) if executor.supplier_type == "zhixu" => true,
         Some(executor) => executor
             .supplier_id
             .as_deref()
@@ -2315,7 +2350,9 @@ mod tests {
             ("whitespace", "  ".to_string()),
             ("space inside", "sell er".to_string()),
             ("unicode", "卖家".to_string()),
-            ("oversized", "s".repeat(101)),
+            // 37 字节即拒：壳层上限与 hook 标头/订阅目标的 source 类上限
+            // 收敛到 36（37-100 字节的 source 是"声明即死"命名空间）。
+            ("oversized", "s".repeat(37)),
         ] {
             let mut parent = parent_settlement_definition(TARGET_NAME);
             parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!(source);
@@ -2326,15 +2363,23 @@ mod tests {
                 "source {label:?}: {error}"
             );
         }
-        // 100 字节边界恰好放行（DSL 壳字段统一 100）。
+        // 36 字节边界恰好放行（超出在形状层拒绝，边界值走到后续 link 才失败）。
         let mut parent = parent_settlement_definition(TARGET_NAME);
-        parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(100));
+        parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(36));
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("boundary source must pass shape checks and fail later on linking");
         assert!(
-            !error.to_string().contains("exceeds 100 bytes")
-                && !error.to_string().contains("exceeds 36 bytes"),
-            "100-byte source is legal: {error}"
+            !error.to_string().contains("exceeds 36 bytes"),
+            "36-byte source is legal: {error}"
+        );
+        // 37 字节：形状层响亮拒绝并指向 36 上限。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(37));
+        let error = compile_zhixu_hook_plan(&parent, None, false)
+            .expect_err("37-byte source must be rejected at the shape layer");
+        assert!(
+            error.to_string().contains("exceeds 36 bytes"),
+            "37-byte source rejection must cite the 36-byte cap: {error}"
         );
     }
 
@@ -2834,13 +2879,61 @@ mod tests {
             error
         );
 
+        // 闭集精确匹配（Go 侧严格枚举闸同口径）：带首尾空白的变体按闭集
+        // 外拒绝——trim 放行会让产物携带原文、比对侧按精确值分叉。
+        for supplier_type in [" organization ", "zhixu ", " individual"] {
+            let mut parent = parent_settlement_definition(TARGET_NAME);
+            parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] =
+                json!(supplier_type);
+            let error = compile_zhixu_hook_plan(&parent, None, true)
+                .err()
+                .unwrap_or_else(|| panic!("{supplier_type:?} must be rejected"));
+            assert!(
+                error.to_string().contains("supplierType must be one of")
+                    && error.to_string().contains("whitespace variants rejected"),
+                "{supplier_type:?}: {error}"
+            );
+        }
+
         // 闭集内取值（zhixu 形态由 dock 系列测试覆盖）照常编译。
-        for supplier_type in ["individual", "organization", " organization "] {
+        for supplier_type in ["individual", "organization"] {
             let mut parent = parent_settlement_definition(TARGET_NAME);
             parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] =
                 json!(supplier_type);
             compile_zhixu_hook_plan(&parent, None, true)
                 .unwrap_or_else(|err| panic!("{supplier_type} must pass the closed set: {err}"));
+        }
+    }
+
+    #[test]
+    fn rejects_non_zhixu_executor_with_delegation_config() {
+        // organization executor 携带完整 zhixuExecutorConfig：编译期响亮拒绝
+        // （D001"拼错字段同罪"口径）——静默放行会把委托配置原文烧进
+        // executorRoutes（链上承诺面），"既静态执行者又委托对接"是矛盾声明。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["zhixuExecutorConfig"] = json!({
+            "target": { "zhixu": TARGET_NAME },
+            "interface": "payment_service",
+            "order": { "mode": "new" },
+            "inputMap": { "PLACE": "execute" },
+            "signalMap": { "cmp": "completed" }
+        });
+        for target in ["hook_plan", "cloud"] {
+            let result = if target == "hook_plan" {
+                compile_zhixu_hook_plan(&parent, None, true)
+            } else {
+                compile_cloud_artifact(&parent, None, true)
+            };
+            let error = result
+                .err()
+                .unwrap_or_else(|| panic!("{target}: must reject organization executor with delegation config"));
+            assert!(
+                error.to_string().contains("D002")
+                    && error
+                        .to_string()
+                        .contains("zhixuExecutorConfig is only valid when supplierType is zhixu"),
+                "{target}: {error}"
+            );
         }
     }
 
@@ -3178,6 +3271,71 @@ mod tests {
     }
 
     #[test]
+    fn send_signal_declarations_use_a_single_exact_surface() {
+        // 声明面单一精确口径：declared 与 capability 同一原文（不 trim），
+        // `<target>::<signal>` 与裸名都按信号名同款标识符文法闸——空白、
+        // `::` 再现、非标识符字符、数字开头在此响亮拒绝（capability 侧
+        // trim 归一会产出死能力并与其它声明撞 duplicate）。
+        for (label, signal) in [
+            ("leading whitespace bare", " str"),
+            ("trailing whitespace target", "buyer::cmp "),
+            ("whitespace inside target", "buy er::cmp"),
+            ("double separator", "a::b::c"),
+            ("empty signal half", "buyer::"),
+            ("empty target half", "::cmp"),
+            ("digit-leading bare", "1abc"),
+            ("digit-leading target", "1buyer::cmp"),
+            ("two-part canonical", "task.stage"),
+            ("four-part canonical", "a.b.c.d"),
+        ] {
+            let mut definition = target_payment_definition();
+            definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(signal));
+            let error = compile_zhixu_hook_plan(&definition, None, true)
+                .expect_err(&format!("{label} ({signal:?}) must be rejected"));
+            assert!(
+                error.to_string().contains(".sendSignals"),
+                "{label} ({signal:?}): {error}"
+            );
+        }
+
+        // 合法形态钉住：`<target>::<signal>` 携带合法标识符文法（大写与
+        // task/stage 名同文法合法——身份大小写敏感、无折叠）照常编译，
+        // capability 携带与声明逐字节相同的精确值。
+        let mut definition = target_payment_definition();
+        definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("Seller::NOTED"));
+        let plan = compile_zhixu_hook_plan(&definition, None, true)
+            .expect("identifier-grammar target signal compiles");
+        let capability = plan["signalCapabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|capability| capability["declaredSignal"] == json!("Seller::NOTED"))
+            .expect("capability carries the exact declared value");
+        assert_eq!(capability["targetSource"], json!("Seller"));
+        assert_eq!(capability["targetSignalName"], json!("NOTED"));
+        assert_eq!(capability["targetOrderRelation"], json!("triggerOrigin"));
+
+        // "str" 与 " str" 不再撞 duplicate 误判：" str" 在形态闸被拒绝。
+        let mut definition = target_payment_definition();
+        definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(" str"));
+        let error = compile_zhixu_hook_plan(&definition, None, true)
+            .expect_err("whitespace-padded signal must be rejected by the shape gate");
+        assert!(
+            !error.to_string().contains("duplicate capability"),
+            "whitespace variant must fail on charset, not duplicate: {error}"
+        );
+    }
+
+    #[test]
     fn rejects_executor_without_supplier_id_even_when_selected_stages_anchored() {
         // 非委托 executor 缺 supplierID 时即使被 selectedStages 锚定也拒绝
         // ——产物里不得出现没有投递目标的 executor route。
@@ -3377,7 +3535,7 @@ mod tests {
         let message = error.to_string();
         assert!(
             message.contains("receiveSignals.BAD.KEY")
-                && message.contains("must not contain '.' or '#'"),
+                && message.contains("must not contain '.', '#' or whitespace"),
             "unexpected error: {message}"
         );
 
@@ -3387,7 +3545,21 @@ mod tests {
         let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err("receiveSignals key containing '#' must fail");
         assert!(
-            error.to_string().contains("must not contain '.' or '#'"),
+            error
+                .to_string()
+                .contains("must not contain '.', '#' or whitespace"),
+            "unexpected error: {error}"
+        );
+
+        // 含空白的通道名与 hook-dsl validate_hook_name 同口径拒绝：通道名
+        // 进 hookId（stage#hook_name），两侧必须逐字节一致，不 trim 归一。
+        let mut definition = target_payment_definition();
+        definition["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["BAD KEY"] =
+            json!("payment::payment_flow.init.execute");
+        let error = compile_zhixu_hook_plan(&definition, None, true)
+            .expect_err("receiveSignals key containing whitespace must fail");
+        assert!(
+            error.to_string().contains("must not contain '.', '#' or whitespace"),
             "unexpected error: {error}"
         );
     }

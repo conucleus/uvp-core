@@ -42,8 +42,11 @@ pub fn canonical_stringify(value: &Value) -> Result<String> {
 // - 哈希输入词表封闭：浮点形态的数字字面量（serde_json
 //   的 f64 载荷，含整值浮点 1.0、指数写法 1e2、负零 -0.0）在权威
 //   canonicalization 一律响亮拒绝并列出肇事 token——跨语言浮点格式化
-//   （ryu vs JS Number→String）无逐字节对齐义务，单一拒绝面放在权威侧，
-//   整数（u64/i64）原样序列化不带小数点。
+//   （ryu vs JS Number→String）无逐字节对齐义务，单一拒绝面放在权威侧。
+// - 整数放行的精确边界：i64/u64 载荷（含超 double 精度的 u64 整数，
+//   如 2^53+1）原样序列化不带小数点；超出 64 位范围的整数字面量
+//   （如 2^64）在 JSON 解析层即成 f64 载荷，按浮点形态拒绝——拒绝的
+//   裁决面是载荷类型，不是字面量的书写形态。
 // - 拒绝与 JSON 解析无关：非哈希用途的 JSON 解析不受影响，仅 canonical
 //   串化（哈希 preimage 域）执行该封闭词表。
 fn canonicalize_number(number: &Number) -> Result<Value> {
@@ -70,8 +73,10 @@ mod tests {
 
     #[test]
     fn canonical_hash_inputs_reject_float_form_numbers() {
-        // 整值浮点/分数/指数/负零一律拒绝，错误列出肇事
-        // token；整数（含超 double 精度的 u64）照常放行。
+        // 整值浮点/分数/指数/负零一律拒绝，错误列出肇事 token；i64/u64
+        // 载荷的整数（含超 double 精度的 u64）照常放行；超出 64 位范围的
+        // 整数字面量经 JSON 解析即成 f64 载荷，按浮点形态拒绝（权威行为
+        // =实现，拒绝面按载荷类型裁决）。
         for (label, value) in [
             ("integral float", json!({ "a": 1.0 })),
             ("fraction", json!({ "a": 1.5 })),
@@ -100,6 +105,22 @@ mod tests {
         assert_eq!(
             canonical_stringify(&json!({ "a": 9007199254740993_u64 })).unwrap(),
             r#"{"a":9007199254740993}"#
+        );
+
+        // 超出 64 位范围的整数字面量：JSON 解析层即成 f64 载荷，按浮点
+        // 形态拒绝（钉住权威行为——拒绝面按载荷类型裁决，2^64 整字面量
+        // 不是"整数放行"的例外）。
+        let beyond_u64: Value =
+            serde_json::from_str(r#"{"a":18446744073709551616}"#).expect("parses as f64");
+        let err = canonical_stringify(&beyond_u64)
+            .expect_err("integer literals beyond the 64-bit range parse as f64 and must be rejected");
+        assert!(
+            matches!(err, CanonicalError::FloatNumber { .. }),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("float-form JSON number"),
+            "{err}"
         );
     }
 }
