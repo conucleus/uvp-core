@@ -4,6 +4,15 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+pub mod lint;
+
+pub use lint::{
+    contradicts, lint_hook, lint_hook_with_condition, ready_implies, same_expr,
+    semantic_fingerprint, Category, HookLintResult, LintDiagnostic, LintError, LintProof,
+    LintReport, ProofReason, ProofResult, RelatedSpan, Severity, Span, SpannedExpr,
+    MAX_LINT_BOOLEAN_DEPTH, MAX_LINT_BOOLEAN_OPERANDS, MAX_LINT_NODES, MAX_PAIRWISE_HOOKS,
+};
+
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
@@ -206,6 +215,19 @@ pub fn eval_compiled_hook_json(input: &str) -> String {
     envelope_json(result)
 }
 
+/// lint 的 JSON 入口（请求形态与 parse-hook 一致）。lint 不改变语言合法
+/// 性：语义验证失败按 ok:false 信封返回，合法表达的 diagnostics 在
+/// ok:true 的 value 里，是否阻塞由调用方 deny policy 决定。
+pub fn lint_hook_json(input: &str) -> String {
+    let result = serde_json::from_str::<ParseHookRequest>(input)
+        .map_err(|err| HookError::Message(format!("invalid lint hook request: {err}")))
+        .and_then(|req| {
+            lint_hook(req.profile, &req.hook_name, &req.hook)
+                .map_err(|err| HookError::Message(err.to_string()))
+        });
+    envelope_json(result)
+}
+
 fn envelope_json<T: Serialize>(result: Result<T>) -> String {
     let envelope = match result {
         Ok(value) => Envelope {
@@ -227,26 +249,10 @@ fn envelope_json<T: Serialize>(result: Result<T>) -> String {
 pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     let profile = req.profile;
     let hook_name = req.hook_name;
-    // 长度上限对齐 DDL 列宽（hook_name VARCHAR(36)、signal_name VARCHAR(100)）：
-    // 超长定义在解析期即拒绝，而不是落库时才以 value too long 失败。
-    if hook_name.trim().is_empty() || hook_name.len() > 36 {
-        return Err(HookError::Message(
-            "hook_name must be 1-36 characters".to_string(),
-        ));
-    }
-    // 通道名词表纪律（文法 §7 第 4 条）：'.' 是 canonical
-    // 信号名 task.stage.signal 的分隔符、'#' 是 hookId 分隔符
-    // （stage#hook_name）——通道名（receiveSignals 键）携带任一分隔符都会
-    // 让 hookId 命名空间含混，解析期即拒绝。信号名含 '.' 是设计内形态，
-    // 不在通道名词表管辖内；编译层 validate_receive_signal_keys 同款。
-    if hook_name.contains('.') || hook_name.contains('#') {
-        return Err(HookError::Message(
-            "hook_name must not contain '.' or '#'".to_string(),
-        ));
-    }
+    validate_hook_name(&hook_name)?;
     // 解析行为与 profile 无关（profile 只影响归一化/兼容性输出），
     // 因此 parse_hook_expr 不接收 profile。
-    let hook = parse_hook_expr(&req.hook)?;
+    let (hook, _spans) = parse_hook_expr_with_spans(&req.hook)?;
     validate_hook(&hook.condition)?;
 
     let raw_condition = req
@@ -542,7 +548,29 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
 /// 保证"能解析就能求值"，不会在求值入口被 serde_json 以另一口径拒绝。
 const MAX_PARSE_DEPTH: usize = 120;
 
-fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
+/// hook 通道名闸（parse 与 lint 共用同一口径）：长度对齐 DDL 列宽
+/// （hook_name VARCHAR(36)），'.' / '#' 分别是 canonical 信号名与 hookId
+/// 的命名空间分隔符，携带即拒绝。
+fn validate_hook_name(hook_name: &str) -> Result<()> {
+    if hook_name.trim().is_empty() || hook_name.len() > 36 {
+        return Err(HookError::Message(
+            "hook_name must be 1-36 characters".to_string(),
+        ));
+    }
+    if hook_name.contains('.') || hook_name.contains('#') {
+        return Err(HookError::Message(
+            "hook_name must not contain '.' or '#'".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 解析 hook 原文并返回条件 AST 与 span 侧表（lint / diagnostics 工具的
+/// 低层入口）。侧表按"节点创建次序"推入——递归下降先完成全部操作数再
+/// 包装父节点，该次序恰等于最终 AST 的后序遍历次序，lint 侧
+/// `SpannedExpr::build` 按同一后序配对还原。span 只服务于 diagnostics，
+/// 不改变 runtime AST 的形态与语义，也不进入 Cloud protocol artifact。
+pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
     let (source, condition_raw) = raw
         .trim()
         .split_once("::")
@@ -579,6 +607,7 @@ fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
     reject_unsupported_operators(condition_raw)?;
     let mut parser = Parser::new(condition_raw);
     let condition = parser.parse()?;
+    let spans = parser.spans;
     validate_subscription_position(&condition, true)?;
     if matches!(condition, Expr::Subscription { .. }) && !source.is_empty() {
         return Err(HookError::Message(
@@ -586,11 +615,14 @@ fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
                 .to_string(),
         ));
     }
-    Ok(HookExpr {
-        raw: raw.to_string(),
-        source,
-        condition,
-    })
+    Ok((
+        HookExpr {
+            raw: raw.to_string(),
+            source,
+            condition,
+        },
+        spans,
+    ))
 }
 
 fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
@@ -1534,6 +1566,9 @@ struct Parser<'a> {
     input: &'a str,
     index: usize,
     depth: usize,
+    /// 节点 span 侧表：每个 AST 节点在创建时推入自己的源码区间，
+    /// 推入次序 == 最终树的后序遍历次序（见 parse_hook_expr_with_spans）。
+    spans: Vec<Span>,
 }
 
 /// 递归下降深度上限。hook 表达式来自外部可填写的模板定义，无界嵌套
@@ -1545,7 +1580,22 @@ impl<'a> Parser<'a> {
             input,
             index: 0,
             depth: 0,
+            spans: Vec::new(),
         }
+    }
+
+    /// 当前 token 末尾（剥掉尾部空白）：group / 一元 / 延时节点的 span
+    /// 终点。失败的前瞻 consume 会吞掉尾随空白，直接取 index 会让 span
+    /// 无谓地覆盖行尾空白。
+    fn span_end_here(&self) -> usize {
+        let mut end = self.index.min(self.input.len());
+        while end > 0 {
+            match self.input[..end].chars().next_back() {
+                Some(ch) if ch.is_whitespace() => end -= ch.len_utf8(),
+                _ => break,
+            }
+        }
+        end
     }
 
     fn guard_depth<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
@@ -1579,6 +1629,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_or_inner(&mut self) -> Result<Expr> {
+        self.skip_ws();
+        let start = self.index;
         let mut terms = vec![self.parse_and()?];
         while self.consume("|") {
             terms.push(self.parse_and()?);
@@ -1586,11 +1638,14 @@ impl<'a> Parser<'a> {
         Ok(if terms.len() == 1 {
             terms.remove(0)
         } else {
+            self.spans.push(Span::new(start, self.span_end_here()));
             Expr::Or(terms)
         })
     }
 
     fn parse_and(&mut self) -> Result<Expr> {
+        self.skip_ws();
+        let start = self.index;
         let mut terms = vec![self.guard_depth(|parser| parser.parse_unary())?];
         while self.consume("&") {
             terms.push(self.guard_depth(|parser| parser.parse_unary())?);
@@ -1598,26 +1653,31 @@ impl<'a> Parser<'a> {
         Ok(if terms.len() == 1 {
             terms.remove(0)
         } else {
+            self.spans.push(Span::new(start, self.span_end_here()));
             Expr::And(terms)
         })
     }
 
     fn parse_unary(&mut self) -> Result<Expr> {
         self.skip_ws();
+        let start = self.index;
         if self.consume("~") {
-            return Ok(Expr::Not(Box::new(
-                self.guard_depth(|parser| parser.parse_unary())?,
-            )));
+            let inner = self.guard_depth(|parser| parser.parse_unary())?;
+            self.spans.push(Span::new(start, self.span_end_here()));
+            return Ok(Expr::Not(Box::new(inner)));
         }
         self.parse_postfix()
     }
 
     fn parse_postfix(&mut self) -> Result<Expr> {
+        self.skip_ws();
+        let start = self.index;
         let mut expr = self.parse_primary()?;
         self.skip_ws();
         if self.consume("+") {
             let raw_duration = self.read_duration()?;
             let duration_seconds = duration_to_seconds(&raw_duration)?;
+            self.spans.push(Span::new(start, self.span_end_here()));
             expr = Expr::Delay {
                 expr: Box::new(expr),
                 raw_duration,
@@ -1640,9 +1700,10 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
+        let ident_start = self.index;
         let ident = self.read_identifier()?;
         match ident.as_str() {
-            "ANCHOR" => self.parse_subscription(),
+            "ANCHOR" => self.parse_subscription(ident_start),
             "OUTSIDE" | "OUTSOURCE" => Err(HookError::Message(format!(
                 "{ident}@ has been retired: {RETIRED_KEYWORDS_HINT}"
             ))),
@@ -1652,6 +1713,8 @@ impl<'a> Parser<'a> {
                         "signal reference must use task.stage.signal: {ident}"
                     )));
                 }
+                self.spans
+                    .push(Span::new(ident_start, self.span_end_here()));
                 Ok(Expr::Signal(ident))
             }
         }
@@ -1659,7 +1722,7 @@ impl<'a> Parser<'a> {
 
     /// 订阅通道：`ANCHOR(@source::task.stage.signal)`。`ANCHOR@`（无括号
     /// 裸标头）写法不受支持；目标必须携带 @ 前缀的 source 类名空间。
-    fn parse_subscription(&mut self) -> Result<Expr> {
+    fn parse_subscription(&mut self, anchor_start: usize) -> Result<Expr> {
         self.skip_ws();
         if self.peek() == '@' {
             return Err(HookError::Message(format!(
@@ -1712,6 +1775,8 @@ impl<'a> Parser<'a> {
                 "subscription target must use task.stage.signal: {signal:?}"
             )));
         }
+        self.spans
+            .push(Span::new(anchor_start, self.span_end_here()));
         Ok(Expr::Subscription {
             source: source.to_string(),
             target: signal.to_string(),

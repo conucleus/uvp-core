@@ -8,6 +8,7 @@ use uvp_hook_dsl::{
 use uvp_model::{ZhixuDefinition, ZhixuExecutor, ZhixuStage};
 
 pub mod dock;
+pub mod lint;
 
 /// HookPlan 产物信封版本（TS 权威 uvp-protocol compiler types 的
 /// HOOK_PLAN_SCHEMA_VERSION 镜像）。pub 供 uvp-node NAPI 导出

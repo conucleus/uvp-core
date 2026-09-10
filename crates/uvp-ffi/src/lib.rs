@@ -79,6 +79,20 @@ pub extern "C" fn uvp_replay_json(request_json: *const c_char) -> *mut c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn uvp_lint_hook_json(request_json: *const c_char) -> *mut c_char {
+    into_c_string(guard_ffi_panic("uvp_lint_hook_json", || {
+        uvp_hook_dsl::lint_hook_json(&to_rust_string(request_json))
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn uvp_lint_zhixu_json(request_json: *const c_char) -> *mut c_char {
+    into_c_string(guard_ffi_panic("uvp_lint_zhixu_json", || {
+        uvp_compiler::lint::lint_zhixu_json(&to_rust_string(request_json))
+    }))
+}
+
+#[no_mangle]
 /// # Safety
 ///
 /// `ptr` must be a non-null pointer returned by one of this library's JSON

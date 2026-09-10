@@ -11,7 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+# lint 子命令读取 Zhixu YAML 定义（JSON 输入同样接受：先按 JSON 解析，
+# 失败再按 YAML——JSON 是 YAML 的真子集，先 JSON 保证精确语义）。
+serde_yaml = "0.9"
 uvp-compiler.workspace = true
 uvp-hook-dsl.workspace = true
 uvp-replay.workspace = true

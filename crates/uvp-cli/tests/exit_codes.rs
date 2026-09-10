@@ -40,3 +40,97 @@ fn json_entry_successes_exit_zero() {
     let output = run(&["version"]);
     assert!(output.status.success());
 }
+
+/// lint 子命令的退出码契约：诊断本身不是失败，只有显式 --deny（或定义
+/// 非法、文件不可读）才非零退出（PRD 109 §4.1/§20）。
+#[test]
+fn lint_command_exit_codes_follow_deny_policy() {
+    let dirty_yaml = "lint_dirty_zhixu.yaml";
+    std::fs::write(
+        dirty_yaml,
+        r#"apiVersion: uvp/v0
+kind: Zhixu
+metadata:
+  name: lint_cli_exit
+spec:
+  platform:
+    type: cloud
+  nucleation:
+    id: core
+  taskPatterns:
+    - name: flow
+      stages:
+        - name: main
+          source: buyer
+          sendSignals: ["a"]
+          receiveSignals:
+            DUP: "buyer::flow.main.a & flow.main.a"
+          executor:
+            supplierType: organization
+            supplierID: org-lint
+"#,
+    )
+    .expect("write fixture yaml");
+
+    // 无 --deny：warning 级诊断仍 exit 0。
+    let output = run(&["lint", dirty_yaml]);
+    assert!(
+        output.status.success(),
+        "diagnostics alone must not fail: {output:?}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("UVP-L001"),
+        "stdout should list the diagnostic: {stdout}"
+    );
+
+    // --deny warning：命中 warning 级，非零退出。
+    let output = run(&["lint", "--deny", "warning", dirty_yaml]);
+    assert!(!output.status.success(), "--deny warning must fail the run");
+
+    // --deny error：warning 不命中，exit 0。
+    let output = run(&["lint", "--deny", "error", dirty_yaml]);
+    assert!(
+        output.status.success(),
+        "--deny error must not trip on warnings"
+    );
+
+    // --deny 按具体 code：UVP-L001 命中。
+    let output = run(&["lint", "--deny", "UVP-L001", dirty_yaml]);
+    assert!(
+        !output.status.success(),
+        "--deny UVP-L001 must fail the run"
+    );
+
+    // 拼写的 deny token 直接失败。
+    let output = run(&["lint", "--deny", "warnings", dirty_yaml]);
+    assert!(
+        !output.status.success(),
+        "typo deny tokens must fail loudly"
+    );
+
+    // --format=json：输出信封 JSON。
+    let output = run(&["lint", "--format=json", dirty_yaml]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let envelope: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json output");
+    assert_eq!(envelope["ok"], serde_json::Value::Bool(true));
+    assert_eq!(
+        envelope["value"]["diagnostics"][0]["code"],
+        serde_json::Value::String("UVP-L001".to_string())
+    );
+
+    // lint-hook：单 hook 入口，信封退出码语义与其他 JSON 入口一致。
+    let output = run(&["lint-hook", "buyer::flow.main.a & flow.main.a"]);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("UVP-L001"));
+
+    let output = run(&["lint-hook", "buyer::flow.main.a | ~flow.main.a"]);
+    assert!(
+        !output.status.success(),
+        "semantic rejection must exit non-zero"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("\"ok\":false"));
+
+    std::fs::remove_file(dirty_yaml).ok();
+}

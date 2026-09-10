@@ -53,6 +53,14 @@ exports.replay = function replay(request) {
   return unwrap(native.replayJson(JSON.stringify(request)));
 };
 
+exports.lintHook = function lintHook(request) {
+  return unwrap(native.lintHookJson(JSON.stringify(request)));
+};
+
+exports.lintZhixu = function lintZhixu(request) {
+  return unwrap(native.lintZhixuJson(JSON.stringify(request)));
+};
+
 exports.version = function version() {
   return native.version();
 };

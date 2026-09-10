@@ -38,6 +38,24 @@ pub fn replay_json(request_json: String) -> Result<String> {
 }
 
 #[napi]
+/// UVP Core Lint（PRD 109）单 Hook 入口：请求/信封形态与 parse_hook_json
+/// 一致；diagnostics 在 ok:true 的 value 里，lint 不改变语言合法性。
+pub fn lint_hook_json(request_json: String) -> Result<String> {
+    run_json("lintHookJson", || {
+        uvp_hook_dsl::lint_hook_json(&request_json)
+    })
+}
+
+#[napi]
+/// UVP Core Lint（PRD 109）Zhixu 入口：请求 {"definition": <Zhixu>}；
+/// 单 Hook 规则 + 同 Stage 关系规则，与 compile 完全独立。
+pub fn lint_zhixu_json(request_json: String) -> Result<String> {
+    run_json("lintZhixuJson", || {
+        uvp_compiler::lint::lint_zhixu_json(&request_json)
+    })
+}
+
+#[napi]
 pub fn version() -> String {
     uvp_hook_dsl::CORE_VERSION.to_string()
 }

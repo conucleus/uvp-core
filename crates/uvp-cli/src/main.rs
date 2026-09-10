@@ -12,10 +12,40 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    ParseHook { request: String },
-    EvalCompiledHook { request: String },
-    Compile { request: String },
-    Replay { request: String },
+    ParseHook {
+        request: String,
+    },
+    EvalCompiledHook {
+        request: String,
+    },
+    Compile {
+        request: String,
+    },
+    Replay {
+        request: String,
+    },
+    /// Lint 一个 hook 表达式（PRD 109）。合法表达的 diagnostics 在
+    /// ok:true 的 value 里；lint 结论不是解析失败。
+    LintHook {
+        /// hook 表达式原文（`source::condition`），或 `@file` 路径。
+        hook: String,
+        /// `evm_strict`（默认）或 `cloud_compat`。
+        #[arg(long, default_value = "evm_strict")]
+        profile: String,
+    },
+    /// Lint 一份 Zhixu 定义：semantic validation + 单 Hook 规则 + 同 Stage
+    /// 关系规则。lint 不改变 compile 语义；只有显式 --deny 才影响退出码。
+    Lint {
+        /// Zhixu 定义文件路径（YAML 或 JSON）。
+        path: String,
+        /// `text`（默认）或 `json`（信封 JSON，供 Store / IDE / CI 消费）。
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// 阻塞策略，可重复：`error` / `warning` / `info`（按严重级）或
+        /// 具体 lint code（如 UVP-L002）。命中即以非零码退出。
+        #[arg(long = "deny")]
+        deny: Vec<String>,
+    },
     Version,
 }
 
@@ -26,6 +56,7 @@ fn main() -> ExitCode {
             println!("{}", uvp_hook_dsl::CORE_VERSION);
             ExitCode::SUCCESS
         }
+        Command::Lint { path, format, deny } => run_lint(&path, &format, &deny),
         command => {
             let output = run(command);
             println!("{output}");
@@ -48,8 +79,163 @@ fn run(command: Command) -> String {
         }
         Command::Compile { request } => uvp_compiler::compile_json(&read_arg(&request)),
         Command::Replay { request } => uvp_replay::replay_json(&read_arg(&request)),
-        Command::Version => unreachable!("version handled in main"),
+        Command::LintHook { hook, profile } => uvp_hook_dsl::lint_hook_json(&format!(
+            "{{\"profile\": \"{profile}\", \"hookName\": \"LINT\", \"hook\": {}}}",
+            serde_json::to_string(&read_arg(&hook)).expect("hook text should serialize")
+        )),
+        Command::Lint { .. } | Command::Version => unreachable!("handled in main"),
     }
+}
+
+/// lint 子命令：诊断永远不等于失败——除非调用方显式 --deny（PRD §4.1：
+/// lint 不隐式扩大或缩小协议接受集合，阻塞策略归调用方）。
+fn run_lint(path: &str, format: &str, deny: &[String]) -> ExitCode {
+    let definition = match read_definition(path) {
+        Ok(definition) => definition,
+        Err(err) => {
+            eprintln!("failed to read {path}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let request = serde_json::json!({ "definition": definition }).to_string();
+    let envelope = uvp_compiler::lint::lint_zhixu_json(&request);
+    let value: serde_json::Value = match serde_json::from_str(&envelope) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("unparseable lint envelope: {err}: {envelope}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if envelope_failed(&envelope) {
+        if format == "json" {
+            println!("{envelope}");
+        } else {
+            let messages: Vec<&str> = value
+                .get("diagnostics")
+                .and_then(|item| item.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.get("message").and_then(|m| m.as_str()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            eprintln!("lint did not run: {}", messages.join("; "));
+        }
+        return ExitCode::FAILURE;
+    }
+    let report = &value["value"];
+    if format == "json" {
+        println!("{envelope}");
+    } else {
+        print_lint_text(report);
+    }
+    match denied(&value, deny) {
+        Ok(true) => ExitCode::FAILURE,
+        Ok(false) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn read_definition(path: &str) -> Result<serde_json::Value, String> {
+    let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+        return Ok(value);
+    }
+    serde_yaml::from_str::<serde_json::Value>(&content).map_err(|err| err.to_string())
+}
+
+fn print_lint_text(report: &serde_json::Value) {
+    let diagnostics = report
+        .get("diagnostics")
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if diagnostics.is_empty() {
+        println!("lint: no diagnostics");
+        return;
+    }
+    for diagnostic in &diagnostics {
+        let severity = diagnostic
+            .get("severity")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let code = diagnostic
+            .get("code")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        let hook = diagnostic
+            .get("hookName")
+            .and_then(|h| h.as_str())
+            .unwrap_or("-");
+        let message = diagnostic
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        println!("{severity:<8} {code} [{hook}] {message}");
+        if let Some(explanation) = diagnostic.get("explanation").and_then(|e| e.as_str()) {
+            println!("         {explanation}");
+        }
+    }
+    println!(
+        "lint: {} diagnostic(s) (semantic version {})",
+        diagnostics.len(),
+        report
+            .get("semanticVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+    );
+}
+
+/// deny 策略裁决：`error` / `warning` / `info` 按严重级精确匹配，其余按
+/// lint code 精确匹配。无法识别的 token 直接失败——拼错的策略名静默
+/// 放行会把 CI 门禁变成摆设。
+fn denied(envelope: &serde_json::Value, deny: &[String]) -> Result<bool, String> {
+    if deny.is_empty() {
+        return Ok(false);
+    }
+    let mut policy = Vec::new();
+    for token in deny {
+        match token.as_str() {
+            "error" => policy.push(DenyRule::Severity("error")),
+            "warning" => policy.push(DenyRule::Severity("warning")),
+            "info" => policy.push(DenyRule::Severity("info")),
+            code if code.starts_with("UVP-L") => policy.push(DenyRule::Code(code.to_string())),
+            other => {
+                return Err(format!(
+                    "unknown --deny value {other:?}: expected error|warning|info or a UVP-L### lint code"
+                ))
+            }
+        }
+    }
+    let diagnostics = envelope
+        .get("value")
+        .and_then(|value| value.get("diagnostics"))
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(diagnostics.iter().any(|diagnostic| {
+        let severity = diagnostic
+            .get("severity")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let code = diagnostic
+            .get("code")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        policy.iter().any(|rule| match rule {
+            DenyRule::Severity(want) => severity == *want,
+            DenyRule::Code(want) => code == want,
+        })
+    }))
+}
+
+enum DenyRule {
+    Severity(&'static str),
+    Code(String),
 }
 
 fn envelope_failed(output: &str) -> bool {

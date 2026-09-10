@@ -9,6 +9,12 @@ char* uvp_compile_json(const char* request_json);
 char* uvp_parse_hook_json(const char* request_json);
 char* uvp_eval_compiled_hook_json(const char* request_json);
 char* uvp_replay_json(const char* request_json);
+/* UVP Core Lint（PRD 109）：lint 不改变语言合法性——语义验证失败按
+ * ok:false 信封返回，合法表达的 diagnostics 在 ok:true 的 value 里，
+ * 是否阻塞由宿主侧 deny policy 决定。lint_hook 请求形态与
+ * uvp_parse_hook_json 相同；lint_zhixu 请求为 {"definition": <Zhixu>}。 */
+char* uvp_lint_hook_json(const char* request_json);
+char* uvp_lint_zhixu_json(const char* request_json);
 void uvp_free(char* ptr);
 const char* uvp_core_version(void);
 /* 语义版本（uvp.semantic.v1 线）：版本协商失败时宿主侧必须读取真实值，
