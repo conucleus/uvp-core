@@ -7,11 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "dock_entrance_gate",
-      "uid": "fx-dock-entrance-001",
-      "annotations": {
-        "version": "1"
-      }
+      "name": "dock_entrance_gate"
     },
     "spec": {
       "platform": {
@@ -21,17 +17,16 @@
         "id": "core"
       },
       "dockInterface": {
-        "schemaVersion": "uvp.dock.v1",
-        "inputs": {
-          "enter": {
-            "kind": "entrance",
-            "hook": "guest.arrival#DOCK_ENTER",
-            "access": {
-              "policy": "permit"
+        "guest_arrival": {
+          "orderModes": [
+            "new"
+          ],
+          "inputs": {
+            "enter": {
+              "hook": "guest.arrival#DOCK_ENTER"
             }
           }
-        },
-        "outputs": {}
+        }
       },
       "taskPatterns": [
         {

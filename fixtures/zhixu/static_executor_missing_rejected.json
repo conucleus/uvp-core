@@ -7,11 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "static_executor_missing",
-      "uid": "fx-statexec-002",
-      "annotations": {
-        "version": "1"
-      }
+      "name": "static_executor_missing"
     },
     "spec": {
       "platform": {

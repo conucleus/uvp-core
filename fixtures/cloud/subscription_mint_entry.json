@@ -7,11 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "subscription_entry",
-      "uid": "fx-subscription-001",
-      "annotations": {
-        "version": "1"
-      }
+      "name": "subscription_entry"
     },
     "spec": {
       "platform": {

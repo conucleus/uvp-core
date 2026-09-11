@@ -15,7 +15,10 @@ highest-risk semantic drift point between cloud UVP and EVM UVP.
 The current delay contract is part of the shared semantic surface:
 
 - `+<positive integer><unit>` is a postfix AST operator.
-- Units are lowercase `s`, `m`, `h`, and `d`; every rule may choose its own value.
+- Units are exactly one lowercase character from `s`, `m`, `h`, `d` (seconds,
+  minutes, hours, days); the integer is a positive literal — no sign, leading
+  zeros, or fractions — and each delay operator chooses its own value (subject
+  to the 30-day per-delay cap).
 - Compiled Cloud AST delay nodes contain `rawDuration` and `durationSeconds`.
 - Runtime evaluation uses the compiled AST and signal timestamps; Cloud adapters
   persist waits in `hookstatus` rather than creating one thread per wait.

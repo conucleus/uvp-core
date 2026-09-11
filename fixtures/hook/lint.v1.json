@@ -1,0 +1,143 @@
+{
+  "schemaVersion": "uvp.hookLintCorpus.v1",
+  "semanticVersion": "uvp.semantic.v1",
+  "specRef": "docs/product/prd_109_core_lint.md",
+  "runtimeContract": "lint 只分析已经通过 semantic validation 的合法表达式；证明服从 uvp.semantic.v1 evaluator 的四值语义与 readyAt 因果（PRD 109 §5）。expectCodes 为期望命中的 lint code 全集；forbiddenMessageSubstrings 断言负回归（如嵌套延时不提示等价折叠）。",
+  "cases": [
+    {
+      "name": "and duplicate direct",
+      "hookName": "DUP",
+      "hook": "buyer::task.a.cmp & task.a.cmp",
+      "expectCodes": ["UVP-L001"]
+    },
+    {
+      "name": "or duplicate direct",
+      "hookName": "DUP",
+      "hook": "buyer::task.a.cmp | task.a.cmp",
+      "expectCodes": ["UVP-L001"]
+    },
+    {
+      "name": "and duplicate with distinct middle operand",
+      "hookName": "DUP",
+      "hook": "buyer::task.a.cmp & task.b.cmp & task.a.cmp",
+      "expectCodes": ["UVP-L001"]
+    },
+    {
+      "name": "or duplicate identical subtrees",
+      "hookName": "DUP",
+      "hook": "buyer::(task.a.cmp & task.b.cmp) | (task.a.cmp & task.b.cmp)",
+      "expectCodes": ["UVP-L001"]
+    },
+    {
+      "name": "impossible direct polarity",
+      "hookName": "BAD",
+      "hook": "buyer::task.a.cmp & ~task.a.cmp",
+      "expectCodes": ["UVP-L002"]
+    },
+    {
+      "name": "impossible reversed polarity",
+      "hookName": "BAD",
+      "hook": "buyer::~task.a.cmp & task.a.cmp",
+      "expectCodes": ["UVP-L002"]
+    },
+    {
+      "name": "impossible delayed positive vs negative guard",
+      "hookName": "BAD",
+      "hook": "buyer::(task.a.cmp +10s) & ~task.a.cmp",
+      "expectCodes": ["UVP-L002"]
+    },
+    {
+      "name": "absorption and form",
+      "hookName": "ABS",
+      "hook": "buyer::task.a.cmp & (task.a.cmp | task.b.cmp)",
+      "expectCodes": ["UVP-L003"]
+    },
+    {
+      "name": "absorption or form",
+      "hookName": "ABS",
+      "hook": "buyer::task.a.cmp | (task.a.cmp & task.b.cmp)",
+      "expectCodes": ["UVP-L003"]
+    },
+    {
+      "name": "dominated delay in and",
+      "hookName": "DELAY",
+      "hook": "buyer::(task.a.cmp +10s) & (task.a.cmp +5s)",
+      "expectCodes": ["UVP-L004"]
+    },
+    {
+      "name": "dominated delay in or",
+      "hookName": "DELAY",
+      "hook": "buyer::(task.a.cmp +10s) | (task.a.cmp +5s)",
+      "expectCodes": ["UVP-L004"]
+    },
+    {
+      "name": "dead or branch",
+      "hookName": "DEAD",
+      "hook": "buyer::(task.a.cmp & ~task.a.cmp) | task.b.cmp",
+      "expectCodes": ["UVP-L002", "UVP-L005"]
+    },
+    {
+      "name": "clean delay with negative guard stays silent",
+      "hookName": "OK",
+      "hook": "buyer::(task.a.cmp +10s) & ~task.b.cmp",
+      "expectCodes": []
+    },
+    {
+      "name": "distinct signals stay silent",
+      "hookName": "OK",
+      "hook": "buyer::task.a.cmp & task.b.cmp",
+      "expectCodes": []
+    },
+    {
+      "name": "negative regression: nested delay is never fold-equated",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +1s) +5s",
+      "expectCodes": [],
+      "forbiddenMessageSubstrings": ["6s", "fold", "equivalent to"]
+    },
+    {
+      "name": "delay implies plain signal: absorption, not delay domination",
+      "hookName": "ABS",
+      "hook": "buyer::(task.a.cmp +10s) & task.a.cmp",
+      "expectCodes": ["UVP-L003"]
+    },
+    {
+      "name": "subscription hook carries no layer-1 diagnostics",
+      "hookName": "SUB",
+      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "expectCodes": []
+    },
+    {
+      "name": "identical delays are duplicate terms, not dominated delays",
+      "hookName": "DUP",
+      "hook": "buyer::(task.a.cmp +10s) & (task.a.cmp +10s)",
+      "expectCodes": ["UVP-L001"]
+    },
+    {
+      "name": "nested delay operand with different base is not grouped",
+      "hookName": "OK",
+      "hook": "buyer::((task.a.cmp +1s) +10s) & (task.a.cmp +5s)",
+      "expectCodes": []
+    }
+  ],
+  "invalidCases": [
+    {
+      "name": "or tautology is a semantic validation rejection, not a lint case",
+      "hookName": "TAUT",
+      "hook": "buyer::task.a.cmp | ~task.a.cmp",
+      "messageContains": "positive signal anchor"
+    },
+    {
+      "name": "non-signal negation is a parser rejection",
+      "hookName": "NEG",
+      "hook": "buyer::~(task.a.cmp & task.b.cmp)",
+      "messageContains": "negation only supports direct signal references"
+    },
+    {
+      "name": "lint shares the hook_name gate with parse_hook",
+      "hookName": "bad.name",
+      "hook": "buyer::task.a.cmp",
+      "messageContains": "hook_name"
+    }
+  ]
+}

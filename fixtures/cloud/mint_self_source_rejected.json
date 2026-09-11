@@ -7,11 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "mint_self_source",
-      "uid": "fx-mintself-001",
-      "annotations": {
-        "version": "1"
-      }
+      "name": "mint_self_source"
     },
     "spec": {
       "platform": {

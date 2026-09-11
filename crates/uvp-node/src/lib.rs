@@ -38,6 +38,24 @@ pub fn replay_json(request_json: String) -> Result<String> {
 }
 
 #[napi]
+/// UVP Core Lint（PRD 109）单 Hook 入口：请求/信封形态与 parse_hook_json
+/// 一致；diagnostics 在 ok:true 的 value 里，lint 不改变语言合法性。
+pub fn lint_hook_json(request_json: String) -> Result<String> {
+    run_json("lintHookJson", || {
+        uvp_hook_dsl::lint_hook_json(&request_json)
+    })
+}
+
+#[napi]
+/// UVP Core Lint（PRD 109）Zhixu 入口：请求 {"definition": <Zhixu>}；
+/// 单 Hook 规则 + 同 Stage 关系规则，与 compile 完全独立。
+pub fn lint_zhixu_json(request_json: String) -> Result<String> {
+    run_json("lintZhixuJson", || {
+        uvp_compiler::lint::lint_zhixu_json(&request_json)
+    })
+}
+
+#[napi]
 pub fn version() -> String {
     uvp_hook_dsl::CORE_VERSION.to_string()
 }
@@ -48,9 +66,32 @@ pub fn semantic_version() -> String {
 }
 
 #[napi]
+/// HookPlan 产物信封版本（uvp.hookPlan.v2）：TS 侧兼容门与 uvp-protocol
+/// compiler 的 HOOK_PLAN_SCHEMA_VERSION 逐字比对，防两轨信封版本漂移。
+pub fn hook_plan_schema_version() -> String {
+    uvp_compiler::HOOK_PLAN_SCHEMA_VERSION.to_string()
+}
+
+#[napi]
 /// 构建指纹（git-<rev>，build.rs 编译期烧入）：TS 侧据此比对当前 uvp-core
 /// 检出 HEAD，识别"版本+语义探针双检都放行但行为已变"的陈旧 dylib。
 /// `no-git-` 前缀表示构建时找不到 git 仓库，宿主侧应拒绝静默通过。
 pub fn build_fingerprint() -> String {
     env!("UVP_BUILD_FINGERPRINT").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn schema_version_exports_match_the_ts_authority_literals() {
+        // TS 兼容门消费 NAPI 导出的逐字面量；Rust 侧钉住两个权威字面量，
+        // 防止导出面与编译器产物 schemaVersion 漂移。
+        assert_eq!(uvp_hook_dsl::SEMANTIC_VERSION, "uvp.semantic.v1");
+        assert_eq!(
+            uvp_compiler::HOOK_PLAN_SCHEMA_VERSION,
+            "uvp.hookPlan.v2",
+            "TS authority literal is uvp.protocol compiler HOOK_PLAN_SCHEMA_VERSION"
+        );
+        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v2");
+    }
 }

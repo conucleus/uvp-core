@@ -17,7 +17,7 @@ struct ProfileFixture {
     #[allow(dead_code)]
     portable: bool,
     input: Value,
-    /// 可选 dock resolution manifest（PRD94 §5.2）：含 zhixu executor 的
+    /// 可选 dock resolution manifest：含 zhixu executor 的
     /// 可运行 fixture 必须内嵌 manifest。
     #[serde(default)]
     resolution_manifest: Option<Value>,
@@ -229,11 +229,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
                 "{}",
                 fixture.name
             );
-            assert_non_empty_string(value, "planId", fixture);
-            assert_non_empty_string(value, "zhixuId", fixture);
-            assert_non_empty_string(value, "version", fixture);
-            assert_word(value, "planId", fixture);
-            assert_word(value, "planHash", fixture);
+            assert_non_empty_string(value, "zhixuName", fixture);
         }
         "cloud" | "cloud_db" => {
             assert_eq!(
@@ -241,17 +237,10 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
                 "{}",
                 fixture.name
             );
-            assert_non_empty_string(value, "planId", fixture);
-            assert_word(value, "planId", fixture);
-            assert_non_empty_string(value, "zhixuId", fixture);
-            assert_non_empty_string(value, "version", fixture);
             assert_non_empty_string(value, "zhixuName", fixture);
         }
         other => panic!("{} has unsupported success target {other:?}", fixture.name),
     }
-
-    assert_word(value, "dockRoutesRoot", fixture);
-    assert_word(value, "dockInterfaceRoot", fixture);
 }
 
 fn assert_non_empty_string(value: &Value, field: &str, fixture: &ProfileFixture) {
@@ -260,17 +249,6 @@ fn assert_non_empty_string(value: &Value, field: &str, fixture: &ProfileFixture)
             .as_str()
             .is_some_and(|text| !text.trim().is_empty()),
         "{} artifact field {field} must be a non-empty string",
-        fixture.name
-    );
-}
-
-fn assert_word(value: &Value, field: &str, fixture: &ProfileFixture) {
-    let word = value[field].as_str().unwrap_or_default();
-    assert!(
-        word.starts_with("0x")
-            && word.len() == 66
-            && word[2..].chars().all(|ch| ch.is_ascii_hexdigit()),
-        "{} artifact field {field} must be a 32-byte 0x-prefixed word, got {word:?}",
         fixture.name
     );
 }
