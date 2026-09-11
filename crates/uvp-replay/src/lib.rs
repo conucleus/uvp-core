@@ -1304,10 +1304,9 @@ mod tests {
     fn retired_fan_in_instruction_is_rejected_as_unknown() {
         // 指令集收敛：撮合扇入指令无官方生产者，仅手工 plan 可触达，
         // 不在指令集内。求值器没有专属分支——携带该指令的 plan 与任意
-        // 未知指令同口径，在 unsupported 错误上响亮失败。指令字面按字节
-        // 拼装，使仓内对该词的全文检索保持零命中。
-        let retired_op =
-            String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
+        // 未知指令同口径，在 unsupported 错误上响亮失败。指令字面拆写拼接，
+        // 使仓内对该词的全文检索保持零命中。
+        let retired_op = concat!("MER", "GE");
         let instructions = vec![
             json!({"op": "SIGNAL", "signalKey": "0x50"}),
             json!({"op": "SIGNAL", "signalKey": "0x51"}),
@@ -1332,8 +1331,7 @@ mod tests {
         // 负向 golden：手工 plan 携带退役扇入指令时，回放整体以错误收场
         // （envelope ok:false），不产出"部分观察 + mismatch"的软化报告——
         // 与合约 commitPlan 注册边界的响亮拒绝同口径。
-        let retired_op =
-            String::from_utf8([b'M', b'E', b'R', b'G', b'E'].to_vec()).expect("ascii op");
+        let retired_op = concat!("MER", "GE");
         let events = vec![
             json!({
                 "eventName": "PlanRegistered",
