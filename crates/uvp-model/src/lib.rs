@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ObjectMeta {
+    /// 作者技术标签：无唯一性/关系语义；跨轨引用一律走 name，
+    /// 名字到实体的解析是各轨权威的事。uid 不是作者可写字段——出现即
+    /// 未知字段。
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -33,10 +34,10 @@ pub struct ZhixuSpec {
     pub nucleation: Nucleation,
     #[serde(default)]
     pub task_patterns: Vec<ZhixuTaskPattern>,
-    /// 目标侧公开的版本化对接接口（PRD94 §3）。`uvp.dock.v1` 子协议；
-    /// 调用方只能引用端口名，不能看到目标内部 stage/signal。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dock_interface: Option<DockInterfaceSource>,
+    /// 目标侧公开的具名对接接口 map：键为接口名。调用方
+    /// 只能引用接口名与端口名，不能看到目标内部 stage/signal。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dock_interface: BTreeMap<String, DockInterfaceSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,8 +92,10 @@ pub struct ZhixuStage {
     pub file_resources: BTreeMap<String, Value>,
 }
 
-/// typed executor（PRD94 §2/§12.1）。
-/// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）。
+/// typed executor。
+/// `supplierID` 在 `supplierType: zhixu` 时由编译器禁止（D001）；
+/// 反向矛盾同样拒绝：`supplierType ≠ zhixu` 时出现 `zhixuExecutorConfig`
+/// 即编译期错误（D001 同罪——键出现在错误的上下文里）。
 /// 未知字段直接拒绝：flatten 透传会静默吞掉拼错字段，
 /// 与 Go 入口的 DisallowUnknownFields 等值；`zhixuExecutorConfig` 内容
 /// 由 dock 模块按 D002 校验。
@@ -107,19 +110,33 @@ pub struct ZhixuExecutor {
         skip_serializing_if = "Option::is_none"
     )]
     pub supplier_id: Option<String>,
-    /// 保持 Value 以便编译器产出带 JSON path / 错误码（D001-D007）的
-    /// 结构化错误，而不是裸 serde 报错。语义权威在 uvp-compiler::dock。
+    /// 保持 Value 以便编译器产出带 JSON path / 错误码（D001-D006、D010、
+    /// D019）的结构化错误，而不是裸 serde 报错。语义权威在 uvp-compiler::dock。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zhixu_executor_config: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selectable_resource: Option<Value>,
 }
 
-/// `spec.dockInterface` source 形状（`uvp.dock.v1`）。
+/// `supplierType` 闭集：与 Go `api/core/v0` supplier.go 的常量、TS compiler
+/// types 的字面量联合同源。executor 经 executorRoutes 进链上承诺，闭集外
+/// 的任意字符串必须在编译期拒绝，而不是烧进承诺后才在消费侧炸开。
+pub const SUPPLIER_TYPES: [&str; 3] = ["individual", "organization", "zhixu"];
+
+/// 精确匹配、不 trim：带首尾空白的变体（" organization "）按闭集外拒绝
+/// 而不是归一化放行——归一化会让产物携带原文、比对侧按精确值分叉。与
+/// Go 侧严格枚举闸（不 trim、空白即拒）同口径。
+pub fn is_known_supplier_type(value: &str) -> bool {
+    SUPPLIER_TYPES.contains(&value)
+}
+
+/// `spec.dockInterface` 下的具名接口。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockInterfaceSource {
-    pub schema_version: String,
+pub struct DockInterfaceSpec {
+    /// `{new, existing}` 的非空子集，无重复；new ⇒ 至少一个 input 端口
+    /// （建单型服务必须有入口）。
+    pub order_modes: Vec<String>,
     #[serde(default)]
     pub inputs: BTreeMap<String, DockInputPortSource>,
     #[serde(default)]
@@ -129,16 +146,8 @@ pub struct DockInterfaceSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockInputPortSource {
-    pub kind: String,
     /// `<task>.<stage>#<receiveHookName>`
     pub hook: String,
-    pub access: DockPortAccessSource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockPortAccessSource {
-    pub policy: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +155,4 @@ pub struct DockPortAccessSource {
 pub struct DockOutputPortSource {
     /// `<source>::<task>.<stage>.<signal>`
     pub signal: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terminal: Option<String>,
 }

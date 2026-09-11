@@ -26,8 +26,13 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 
 - `HookStatusChanged(status=ready)`：合约对 →Ready 先 emit 状态变更再 emit
   `HookReady`；oracle 只以 `HookReady` 观察就绪，ready 状态变更被裁剪。
-- 逐字重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt）：投影
-  重放/重排可能产生重复，重复被吸收，不产生 missing-observed 假阳性。
+- `HookStatusChanged(status=init)`：v0.10 合约不产出（Init 是隐含初值，无
+  观察语义）；携带该状态的输入事件被裁剪——原生入口的输入契约因此不需要
+  适配层预裁 init 观察。
+- 语义重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt 时刻）：
+  投影重放/重排可能重复，重复被吸收，不产生 missing-observed 假阳性。
+  dueAt 按时刻归一化比较（毫秒位数/时区偏移写法不是语义），不同渲染的
+  同一时刻视为重复。
 
 ### 推导（derive，从链上事件补齐 oracle 状态）
 
@@ -39,11 +44,18 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   事实到达即由正常求值自然产生 `HookReady`，无需推导。
 - order-link mint 出生（`triggerOrderFromSignalFromModule`）：出生事实留在
   origin 订单上，本订单不 `_recordSignal` 但 emit `HookReady`，求值路径无事实
-  可依。oracle 据链上 `HookReady` 反推：order-trigger hook 补 runtime
-  ready/readyEmitted 并物化其阶段，同时把该观察记入 observed（接受链上
-  断言；重复的出生 `HookReady` 在合约 `!readyEmitted` 门下不可达，第二次
-  以 missing-observed 暴露流异常）。非 trigger hook 的无信号 `HookReady`
-  不推导，保持 mismatch 暴露真实异常。
+  可依。oracle 据链上 `HookReady` 反推（推导门刻意 **mint-only**）：mint 标记
+  的出生 hook 补 runtime ready/readyEmitted 并物化其阶段，同时把该观察记入
+  observed（接受链上断言）。dock 标记的出生 hook **不接受**断言推导：dock
+  出生事实恒先落本订单（`createDockedOrderFromModule` 内 `_recordSignal` →
+  `SignalSubmitted` 先行），求值路径已可推导其 Ready，链上出现 oracle 未推导
+  的 dock `HookReady` 只能是事实缺失的异常——接受断言会把异常吞成配对成功，
+  该形态保持 missing-observed mismatch 暴露（冻结测试
+  `dock_hook_ready_without_signal_stays_a_mismatch` 钉住）。重复的出生
+  `HookReady` 在合约 `!readyEmitted` 门下不可达，第二次以 missing-observed
+  暴露流异常。非 trigger hook 的无信号 `HookReady` 同样不推导，保持 mismatch
+  暴露真实异常。plan 缺失 v2 结构字段（`orderTriggerKind`、`stageId` 等）在此
+  响亮失败，不回退成"非 trigger"。
 
 ### 消费（consume，回填状态不进 expected）
 
@@ -51,6 +63,18 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   阶段的 watcher 求值据此放行。
 - `OrderMaterialized` / `OrderTriggered` / `OrderLinked`：仅存在性事件，
   无观察语义。
+
+## 观察配对与比对契约
+
+- 配对键：expected 与 observed 按 `(planId, orderId, hookId)` 分桶、桶内按
+  到达序配对。键内字段一律字节精确匹配——编译器身份是大小写敏感的
+  （仅大小写不同的 stage/hook 是两个独立实体），折叠会错配或产生假
+  mismatch。全局下标配对会把不同 hook/订单间合法的事件流交错误配成
+  semantic-mismatch——交错是流布局，不是语义分叉；每个事实键的观察序列
+  只与该键自己的求值历史可比（与合约 `_evaluateAffectedHooks` 的 per-key
+  hookIds 序一致）。
+- `dueAt`：按时刻归一化比较（毫秒位数/时区偏移写法不是语义）；时刻不可
+  解析或单侧缺失时不静默放行。
 
 ## poke 语义
 
@@ -60,9 +84,9 @@ unexpected-observed 假阳性；到期后的 poke 照常重评。
 
 ## 指令集
 
-冻结指令集 `SIGNAL` / `NOT` / `AND` / `OR` / `DELAY` / `MERGE`。`MERGE`
-（撮合扇入，合约 semantic 0.6）按合约 `_mergeValue` 逐字求值：任一在场分支
-即就绪、锚点取在场分支最早到达、操作数限定裸 `SIGNAL` 引用、编码层 arity
-k≥2（k=1 观察入口是 cloud 运行时投递形态，链上无对应物）。权威 DSL
-（uvp.semantic.v1）已退役 MERGE 表达式语法，官方编译器不产出该指令；
-合约仍接受手工 plan 的 `op=Merge`，oracle 必须同口径求值。
+冻结指令集 `SIGNAL` / `NOT` / `AND` / `OR` / `DELAY`：撮合扇入指令不在
+指令集内，合约枚举与编码门同步收口。
+`AND` / `OR` 的编码门要求 arity ≥ 2（k=1 观察入口是 cloud 运行时投递
+形态，链上无对应物，编码层即拒绝）。携带指令集之外指令的 plan 在求值
+期按 unsupported 指令响亮失败——官方编译器只产出冻结集，集外指令没有
+合法生产者；回放不为其保留求值口径，整体以错误收场而非降级 mismatch。

@@ -53,10 +53,26 @@ exports.replay = function replay(request) {
   return unwrap(native.replayJson(JSON.stringify(request)));
 };
 
+exports.lintHook = function lintHook(request) {
+  return unwrap(native.lintHookJson(JSON.stringify(request)));
+};
+
+exports.lintZhixu = function lintZhixu(request) {
+  return unwrap(native.lintZhixuJson(JSON.stringify(request)));
+};
+
 exports.version = function version() {
   return native.version();
 };
 
 exports.semanticVersion = function semanticVersion() {
   return native.semanticVersion();
+};
+
+exports.hookPlanSchemaVersion = function hookPlanSchemaVersion() {
+  return native.hookPlanSchemaVersion();
+};
+
+exports.buildFingerprint = function buildFingerprint() {
+  return native.buildFingerprint();
 };

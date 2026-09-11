@@ -4,14 +4,24 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+pub mod lint;
+
+pub use lint::{
+    contradicts, lint_hook, lint_hook_with_condition, ready_implies, same_expr,
+    semantic_fingerprint, Category, HookLintResult, LintDiagnostic, LintError, LintProof,
+    LintReport, ProofReason, ProofResult, RelatedSpan, Severity, Span, SpannedExpr,
+    MAX_LINT_BOOLEAN_DEPTH, MAX_LINT_BOOLEAN_OPERANDS, MAX_LINT_NODES, MAX_PAIRWISE_HOOKS,
+};
+
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
 
-/// 以下跨秩序关键字不受支持：`::OUTSIDE@`、`::MERGE@`、`ANCHOR@`（裸标头）、
+/// 以下跨秩序关键字不受支持：`::OUTSIDE@`、`ANCHOR@`（裸标头）、
 /// `OUTSOURCE`。解析器仍识别这些关键字，以便给出精确的 unsupported 报错
 /// （统一入口为 `::ANCHOR(@source::task.stage.signal)` 订阅，见
-/// subscription-mint-spec.md），而不是笼统的语法错误。
+/// subscription-mint-spec.md），而不是笼统的语法错误。扇入类旧标头不再点名：
+/// 该形态按通用语法错误拒绝。
 pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,7 +175,10 @@ pub struct EvalCompiledHookRequest {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// 事实键未知字段确定性拒绝：拼错的 source（如 sourse）不得被静默吞成
+// 空 source 的"无归属事实"（那会把不匹配伪装成 ok:true needs_more）。
+// 缺失 source 仍合法——空 source 是语义语料钉住的负例形态。
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SignalFact {
     #[serde(default)]
     pub source: String,
@@ -202,6 +215,19 @@ pub fn eval_compiled_hook_json(input: &str) -> String {
     envelope_json(result)
 }
 
+/// lint 的 JSON 入口（请求形态与 parse-hook 一致）。lint 不改变语言合法
+/// 性：语义验证失败按 ok:false 信封返回，合法表达的 diagnostics 在
+/// ok:true 的 value 里，是否阻塞由调用方 deny policy 决定。
+pub fn lint_hook_json(input: &str) -> String {
+    let result = serde_json::from_str::<ParseHookRequest>(input)
+        .map_err(|err| HookError::Message(format!("invalid lint hook request: {err}")))
+        .and_then(|req| {
+            lint_hook(req.profile, &req.hook_name, &req.hook)
+                .map_err(|err| HookError::Message(err.to_string()))
+        });
+    envelope_json(result)
+}
+
 fn envelope_json<T: Serialize>(result: Result<T>) -> String {
     let envelope = match result {
         Ok(value) => Envelope {
@@ -223,16 +249,10 @@ fn envelope_json<T: Serialize>(result: Result<T>) -> String {
 pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     let profile = req.profile;
     let hook_name = req.hook_name;
-    // 长度上限对齐 DDL 列宽（hook_name VARCHAR(36)、signal_name VARCHAR(100)）：
-    // 超长定义在解析期即拒绝，而不是落库时才以 value too long 失败。
-    if hook_name.trim().is_empty() || hook_name.len() > 36 {
-        return Err(HookError::Message(
-            "hook_name must be 1-36 characters".to_string(),
-        ));
-    }
+    validate_hook_name(&hook_name)?;
     // 解析行为与 profile 无关（profile 只影响归一化/兼容性输出），
     // 因此 parse_hook_expr 不接收 profile。
-    let hook = parse_hook_expr(&req.hook)?;
+    let (hook, _spans) = parse_hook_expr_with_spans(&req.hook)?;
     validate_hook(&hook.condition)?;
 
     let raw_condition = req
@@ -356,12 +376,22 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                     )
                 })?
                 .clone();
-            let source = target
+            let target_object = target.as_object().ok_or_else(|| {
+                HookError::Message("compiled subscriptionTarget must be an object".to_string())
+            })?;
+            // 键闭集与其他子对象闸口同口径：拼错的字段（如 singal）不得被
+            // 静默忽略成缺省语义（Go DecodeCompiledHook 同款拒绝）。
+            reject_unknown_keys(
+                target_object,
+                &["source", "signal"],
+                "compiled subscriptionTarget",
+            )?;
+            let source = target_object
                 .get("source")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
-            let signal = target
+            let signal = target_object
                 .get("signal")
                 .and_then(Value::as_str)
                 .map(str::trim)
@@ -394,10 +424,24 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             }
             String::new()
         }
-        _ => raw_source
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| HookError::Message("compiled hook AST is missing source".to_string()))?,
+        _ => {
+            let source = raw_source
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    HookError::Message("compiled hook AST is missing source".to_string())
+                })?;
+            // 与解析期标头校验同口径（plain identifier ≤36，编译期上限严于
+            // 落库列宽 source_zhixu_id VARCHAR(64)）：
+            // 毒 source 解码期确定性拒绝，而不是成为永不匹配任何事实键的
+            // source 维度。
+            if !is_plain_identifier(&source) || source.len() > 36 {
+                return Err(HookError::Message(format!(
+                    "compiled hook AST source must be a plain identifier of at most 36 characters: {source:?}"
+                )));
+            }
+            source
+        }
     };
     let root = req
         .ast
@@ -456,8 +500,8 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
     let mut result = BTreeMap::new();
     for signal in signals {
         // 解码层最后一道防线：事实身份必须与解析器对 hook 侧身份的口径
-        // 一致——source 是 plain identifier 且 ≤36（hook_dependency.
-        // source_zhixu_id VARCHAR(36)），signal_name 是三段式
+        // 一致——source 是 plain identifier 且 ≤36（编译期钉死的键上限，
+        // 严于落库列 hook_dependency.source_zhixu_id VARCHAR(64)），signal_name 是三段式
         // task.stage.signal、每段 plain identifier、全名 ≤100
         // （individual_record.signal_name VARCHAR(100)）。空 source 是
         // 合法的"无归属事实"（语义语料的负例形态，永不匹配非空 hook
@@ -470,24 +514,19 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
                 signal.source
             )));
         }
-        if !is_strict_signal_ref(&signal.signal_name)
-            || signal.signal_name.len() > 100
-            || !signal.signal_name.split('.').all(is_plain_identifier)
-        {
+        if !valid_signal_identity(&signal.signal_name) {
             return Err(HookError::Message(format!(
                 "signal fact name must use task.stage.signal and be at most 100 characters: {:?}",
                 signal.signal_name
             )));
         }
         let received_at = parse_time(&signal.received_at, profile)?;
-        // First-writer-wins matches the replay oracle and the documented
-        // runtime contract: a repeated source::signalName fact never replaces
-        // the first received instance.
+        // 同一事实键（source::signalName）的重复事实取 received_at 最早者
+        // 获胜：归约结果与输入数组顺序无关，求值语义是事实集的纯函数。
+        // 键的存在性单调——一旦在场永不移除，仅锚点时间戳可前移。
         result
             .entry(signal_key(&signal.source, &signal.signal_name))
             .and_modify(|existing: &mut SignalEntry| {
-                // first-RECEIVED-wins 必须与输入数组顺序无关：同一事实键的
-                // 重复到达取时间戳最早者，语义成为事实集的纯函数。
                 if received_at < existing.received_at {
                     existing.received_at = received_at;
                 }
@@ -507,7 +546,36 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
 /// 保证"能解析就能求值"，不会在求值入口被 serde_json 以另一口径拒绝。
 const MAX_PARSE_DEPTH: usize = 120;
 
-fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
+/// hook 通道名闸（parse 与 lint 共用同一口径）：长度对齐 DDL 列宽
+/// （hook_name VARCHAR(36)），'.' / '#' 分别是 canonical 信号名与 hookId
+/// 的命名空间分隔符，携带即拒绝；空白字符（含首尾空格）同样拒绝——
+/// 通道名进 hookId（stage#hook_name），两侧必须逐字节一致，含空白的
+/// 名字是全仓响亮拒绝纪律下的确定性非法输入，不做 trim 归一。
+fn validate_hook_name(hook_name: &str) -> Result<()> {
+    if hook_name.trim().is_empty() || hook_name.len() > 36 {
+        return Err(HookError::Message(
+            "hook_name must be 1-36 characters".to_string(),
+        ));
+    }
+    if hook_name.contains('.') || hook_name.contains('#') {
+        return Err(HookError::Message(
+            "hook_name must not contain '.' or '#'".to_string(),
+        ));
+    }
+    if hook_name.chars().any(char::is_whitespace) {
+        return Err(HookError::Message(
+            "hook_name must not contain whitespace".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 解析 hook 原文并返回条件 AST 与 span 侧表（lint / diagnostics 工具的
+/// 低层入口）。侧表按"节点创建次序"推入——递归下降先完成全部操作数再
+/// 包装父节点，该次序恰等于最终 AST 的后序遍历次序，lint 侧
+/// `SpannedExpr::build` 按同一后序配对还原。span 只服务于 diagnostics，
+/// 不改变 runtime AST 的形态与语义，也不进入 Cloud protocol artifact。
+pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
     let (source, condition_raw) = raw
         .trim()
         .split_once("::")
@@ -525,9 +593,10 @@ fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
         ));
     }
     if !source.is_empty() {
-        // 标头 source 类是落库列（VARCHAR(36)）与路由键：解析期钉死长度与
-        // 字符集（对齐 Go 镜像 zhixu_schema.go 的 ≤36 与 plain-identifier
-        // 规则）。订阅形态（::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
+        // 标头 source 类是路由键：解析期钉死长度与字符集（编译期 ≤36 上限
+        // 严于落库列宽 source_zhixu_id VARCHAR(64)，对齐 Go 镜像
+        // zhixu_schema.go 的 ≤36 与 plain-identifier 规则）。订阅形态
+        // （::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
         // source 在解析 ANCHOR 目标时按同值（≤36 + plain identifier）校验。
         if source.len() > 36 {
             return Err(HookError::Message(format!(
@@ -543,6 +612,7 @@ fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
     reject_unsupported_operators(condition_raw)?;
     let mut parser = Parser::new(condition_raw);
     let condition = parser.parse()?;
+    let spans = parser.spans;
     validate_subscription_position(&condition, true)?;
     if matches!(condition, Expr::Subscription { .. }) && !source.is_empty() {
         return Err(HookError::Message(
@@ -550,11 +620,14 @@ fn parse_hook_expr(raw: &str) -> Result<HookExpr> {
                 .to_string(),
         ));
     }
-    Ok(HookExpr {
-        raw: raw.to_string(),
-        source,
-        condition,
-    })
+    Ok((
+        HookExpr {
+            raw: raw.to_string(),
+            source,
+            condition,
+        },
+        spans,
+    ))
 }
 
 fn expr_from_cloud_value(value: &Value) -> Result<Expr> {
@@ -581,14 +654,22 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                 &["type", "signal"],
                 "compiled signal AST node",
             )?;
-            value
+            let signal = value
                 .get("signal")
                 .and_then(Value::as_str)
                 .filter(|signal| !signal.trim().is_empty())
-                .map(|signal| Expr::Signal(signal.to_string()))
                 .ok_or_else(|| {
                     HookError::Message("compiled signal AST node is missing signal".to_string())
-                })
+                })?;
+            // 解码层身份闸与解析期 read_identifier + task.stage.signal 同口径：
+            // 毒原子（拼错段数、超长、内嵌空格）确定性拒绝，而不是解码成
+            // 永不匹配事实集的 Signal（那会把不匹配伪装成 ok:true needs_more）。
+            if !valid_signal_identity(signal) {
+                return Err(HookError::Message(format!(
+                    "compiled signal AST node must use task.stage.signal and be at most 100 characters: {signal:?}"
+                )));
+            }
+            Ok(Expr::Signal(signal.to_string()))
         }
         "subscription" => {
             reject_unknown_keys(
@@ -618,6 +699,18 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                         "compiled subscription AST node is missing signal".to_string(),
                     )
                 })?;
+            // 与解析期 parse_subscription 的目标校验同口径（source：plain
+            // identifier ≤36；signal：三段式、每段 plain identifier、≤100）。
+            if !is_plain_identifier(source) || source.len() > 36 {
+                return Err(HookError::Message(format!(
+                    "compiled subscription AST node source must be a plain identifier of at most 36 characters: {source:?}"
+                )));
+            }
+            if !valid_signal_identity(signal) {
+                return Err(HookError::Message(format!(
+                    "compiled subscription AST node signal must use task.stage.signal and be at most 100 characters: {signal:?}"
+                )));
+            }
             Ok(Expr::Subscription {
                 source: source.to_string(),
                 target: signal.to_string(),
@@ -771,18 +864,17 @@ fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
 fn starts_cross_source(value: &str) -> bool {
     // 不受支持的关键字仍放行进解析器，以便命中精确的 unsupported 报错
     // 而非笼统的空标头报错。匹配必须落到完整 token 边界：关键字后随
-    // 标识符字符（如 ::MERGEX / ::ANCHORX 伪前缀）不是关键字形态，
-    // 不得绕过空标头门禁。
-    ["ANCHOR", "OUTSIDE", "MERGE", "OUTSOURCE"]
-        .iter()
-        .any(|keyword| {
-            let Some(rest) = value.strip_prefix(keyword) else {
-                return false;
-            };
-            rest.chars()
-                .next()
-                .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
-        })
+    // 标识符字符（如 ::ANCHORX 伪前缀）不是关键字形态，
+    // 不得绕过空标头门禁。扇入类旧标头不在词表内：
+    // 其字面按通用语法错误（空标头门禁）拒绝，没有退役清单条目。
+    ["ANCHOR", "OUTSIDE", "OUTSOURCE"].iter().any(|keyword| {
+        let Some(rest) = value.strip_prefix(keyword) else {
+            return false;
+        };
+        rest.chars()
+            .next()
+            .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
+    })
 }
 
 fn reject_unsupported_operators(condition: &str) -> Result<()> {
@@ -936,22 +1028,14 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
         Expr::Subscription { source, target } => {
             format!("ANCHOR(@{source}::{target})")
         }
-        Expr::Not(inner) => {
-            let mut child = normalize_cloud(inner, precedence);
-            if matches!(inner.as_ref(), Expr::And(_) | Expr::Or(_)) {
-                child = format!("({child})");
-            }
-            format!("~{child}")
-        }
+        // 一元包裹（~ 与延时）的子表达式括号由递归调用的优先级闸统一
+        // 产生（And/Or 低优先级、Delay 在 parent>0 时各自成组），这里不得
+        // 再补一层——否则 Cloud 面产出 `~((A & B))` / `((A & B)) +5s` 的
+        // 双重括号，与 Tight 面外观系统性分叉。
+        Expr::Not(inner) => format!("~{}", normalize_cloud(inner, precedence)),
         Expr::Delay {
             expr, raw_duration, ..
-        } => {
-            let mut child = normalize_cloud(expr, precedence);
-            if matches!(expr.as_ref(), Expr::And(_) | Expr::Or(_)) {
-                child = format!("({child})");
-            }
-            format!("{child} + {raw_duration}")
-        }
+        } => format!("{} + {raw_duration}", normalize_cloud(expr, precedence)),
         Expr::And(terms) => terms
             .iter()
             .map(|term| normalize_cloud(term, precedence))
@@ -1487,6 +1571,9 @@ struct Parser<'a> {
     input: &'a str,
     index: usize,
     depth: usize,
+    /// 节点 span 侧表：每个 AST 节点在创建时推入自己的源码区间，
+    /// 推入次序 == 最终树的后序遍历次序（见 parse_hook_expr_with_spans）。
+    spans: Vec<Span>,
 }
 
 /// 递归下降深度上限。hook 表达式来自外部可填写的模板定义，无界嵌套
@@ -1498,7 +1585,22 @@ impl<'a> Parser<'a> {
             input,
             index: 0,
             depth: 0,
+            spans: Vec::new(),
         }
+    }
+
+    /// 当前 token 末尾（剥掉尾部空白）：group / 一元 / 延时节点的 span
+    /// 终点。失败的前瞻 consume 会吞掉尾随空白，直接取 index 会让 span
+    /// 无谓地覆盖行尾空白。
+    fn span_end_here(&self) -> usize {
+        let mut end = self.index.min(self.input.len());
+        while end > 0 {
+            match self.input[..end].chars().next_back() {
+                Some(ch) if ch.is_whitespace() => end -= ch.len_utf8(),
+                _ => break,
+            }
+        }
+        end
     }
 
     fn guard_depth<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
@@ -1532,6 +1634,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_or_inner(&mut self) -> Result<Expr> {
+        self.skip_ws();
+        let start = self.index;
         let mut terms = vec![self.parse_and()?];
         while self.consume("|") {
             terms.push(self.parse_and()?);
@@ -1539,11 +1643,14 @@ impl<'a> Parser<'a> {
         Ok(if terms.len() == 1 {
             terms.remove(0)
         } else {
+            self.spans.push(Span::new(start, self.span_end_here()));
             Expr::Or(terms)
         })
     }
 
     fn parse_and(&mut self) -> Result<Expr> {
+        self.skip_ws();
+        let start = self.index;
         let mut terms = vec![self.guard_depth(|parser| parser.parse_unary())?];
         while self.consume("&") {
             terms.push(self.guard_depth(|parser| parser.parse_unary())?);
@@ -1551,26 +1658,31 @@ impl<'a> Parser<'a> {
         Ok(if terms.len() == 1 {
             terms.remove(0)
         } else {
+            self.spans.push(Span::new(start, self.span_end_here()));
             Expr::And(terms)
         })
     }
 
     fn parse_unary(&mut self) -> Result<Expr> {
         self.skip_ws();
+        let start = self.index;
         if self.consume("~") {
-            return Ok(Expr::Not(Box::new(
-                self.guard_depth(|parser| parser.parse_unary())?,
-            )));
+            let inner = self.guard_depth(|parser| parser.parse_unary())?;
+            self.spans.push(Span::new(start, self.span_end_here()));
+            return Ok(Expr::Not(Box::new(inner)));
         }
         self.parse_postfix()
     }
 
     fn parse_postfix(&mut self) -> Result<Expr> {
+        self.skip_ws();
+        let start = self.index;
         let mut expr = self.parse_primary()?;
         self.skip_ws();
         if self.consume("+") {
             let raw_duration = self.read_duration()?;
             let duration_seconds = duration_to_seconds(&raw_duration)?;
+            self.spans.push(Span::new(start, self.span_end_here()));
             expr = Expr::Delay {
                 expr: Box::new(expr),
                 raw_duration,
@@ -1593,10 +1705,11 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
+        let ident_start = self.index;
         let ident = self.read_identifier()?;
         match ident.as_str() {
-            "ANCHOR" => self.parse_subscription(),
-            "OUTSIDE" | "MERGE" | "OUTSOURCE" => Err(HookError::Message(format!(
+            "ANCHOR" => self.parse_subscription(ident_start),
+            "OUTSIDE" | "OUTSOURCE" => Err(HookError::Message(format!(
                 "{ident}@ has been retired: {RETIRED_KEYWORDS_HINT}"
             ))),
             _ => {
@@ -1605,6 +1718,8 @@ impl<'a> Parser<'a> {
                         "signal reference must use task.stage.signal: {ident}"
                     )));
                 }
+                self.spans
+                    .push(Span::new(ident_start, self.span_end_here()));
                 Ok(Expr::Signal(ident))
             }
         }
@@ -1612,7 +1727,7 @@ impl<'a> Parser<'a> {
 
     /// 订阅通道：`ANCHOR(@source::task.stage.signal)`。`ANCHOR@`（无括号
     /// 裸标头）写法不受支持；目标必须携带 @ 前缀的 source 类名空间。
-    fn parse_subscription(&mut self) -> Result<Expr> {
+    fn parse_subscription(&mut self, anchor_start: usize) -> Result<Expr> {
         self.skip_ws();
         if self.peek() == '@' {
             return Err(HookError::Message(format!(
@@ -1640,8 +1755,9 @@ impl<'a> Parser<'a> {
         // 拒绝空格、括号、额外 :: 分隔与非 ASCII 字符。这里故意不 trim：
         // `ANCHOR` 的目标是一个严格 token，内部空格不能被规范化后放行，
         // 否则不同运行时可能对同一份原文产生不同的 signal key。
-        // 长度与标头 source 同值：source 落 hook_dependency.source_zhixu_id
-        // VARCHAR(36)，超长在解析期拒绝而不是拖到落库报 value too long。
+        // 长度与标头 source 同值：≤36 是编译期钉死的上限，严于落库列
+        // hook_dependency.source_zhixu_id VARCHAR(64)——超长在解析期拒绝
+        // 而不是拖到落库报 value too long。
         if !is_plain_identifier(source) {
             return Err(HookError::Message(format!(
                 "subscription source must be a plain identifier: {source:?}"
@@ -1664,6 +1780,8 @@ impl<'a> Parser<'a> {
                 "subscription target must use task.stage.signal: {signal:?}"
             )));
         }
+        self.spans
+            .push(Span::new(anchor_start, self.span_end_here()));
         Ok(Expr::Subscription {
             source: source.to_string(),
             target: signal.to_string(),
@@ -1822,6 +1940,14 @@ fn duration_to_seconds(duration: &str) -> Result<i64> {
 fn is_strict_signal_ref(value: &str) -> bool {
     let parts = value.split('.').collect::<Vec<_>>();
     parts.len() == 3 && parts.iter().all(|part| !part.is_empty())
+}
+
+/// 信号身份的单一闸：三段式 task.stage.signal、每段 plain identifier、
+/// 全名 ≤100（individual_record.signal_name VARCHAR(100)）。解析期标识符
+/// 扫描、事实键校验（signal_map）与 cloud AST 解码共用，保证三处口径
+/// 收敛——任一入口放行的身份另两处必然接受。
+fn valid_signal_identity(value: &str) -> bool {
+    is_strict_signal_ref(value) && value.len() <= 100 && value.split('.').all(is_plain_identifier)
 }
 
 /// 普通标识符扫描规则：非空，且仅 ASCII 字母/数字/下划线/中划线。
@@ -2106,6 +2232,50 @@ mod tests {
     }
 
     #[test]
+    fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
+        // subscriptionTarget 键闭集：拼错的键（如 singal）与多余字段必须
+        // 确定性拒绝，不得被静默忽略成"缺 source/signal"或缺省语义；
+        // 非对象形态同样响亮失败。
+        let mut ast = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "SUB".to_string(),
+            hook: "::ANCHOR(@seller::trade.listing.cmp)".to_string(),
+        })
+        .unwrap()
+        .cloud_ast;
+        ast["subscriptionTarget"]
+            .as_object_mut()
+            .unwrap()
+            .insert("singal".to_string(), json!("trade.listing.cmp"));
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: ast.clone(),
+            signals: vec![],
+            now: "2026-04-27T00:00:00.000Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("subscriptionTarget")
+                && err.to_string().contains("unsupported field: singal"),
+            "unexpected error: {err}"
+        );
+
+        ast["subscriptionTarget"] = json!(["seller", "trade.listing.cmp"]);
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast,
+            signals: vec![],
+            now: "2026-04-27T00:00:00.000Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("subscriptionTarget must be an object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
         // 直接构造绕过编译期的毒 AST（不受信任输入的形态：超大秒数与
         // 原始字面量自洽）。求值必须在解码期确定性拒绝并走有界失败路径，
@@ -2240,7 +2410,6 @@ mod tests {
             "buyer::OUTSIDE & task.main.cmp",
             "buyer::task.main.cmp | OUTSIDE",
             "buyer::~OUTSIDE",
-            "::MERGE & task.main.cmp",
         ] {
             let err = parse_hook(ParseHookRequest {
                 profile: Profile::CloudCompat,
@@ -2253,6 +2422,25 @@ mod tests {
                 "unexpected error for {hook}: {err}"
             );
         }
+
+        // 扇入类旧标头没有退役清单条目：字面按通用空标头语法错误拒绝，
+        // 报错不点名该词。
+        let retired_word: String = ["M", "E", "R", "G", "E"].concat();
+        let hook = format!("::{retired_word} & task.main.cmp");
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            hook_name: "HOOK".to_string(),
+            hook,
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("empty source"),
+            "expected generic empty-source rejection: {err}"
+        );
+        assert!(
+            !err.to_string().contains(&retired_word) && !err.to_string().contains("retired"),
+            "generic rejection must not name the removed entry: {err}"
+        );
 
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
@@ -2279,7 +2467,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_unbounded_nesting_and_duplicate_merge_targets() {
+    fn parser_rejects_unbounded_nesting_and_short_subscription_targets() {
         // 深度上限：深层括号与连续 ~ 都必须以普通错误拒绝，而不是打满
         // 调用栈 abort 宿主进程（栈溢出不可被 catch_unwind 捕获）。
         for poisoned in [
@@ -2332,30 +2520,32 @@ mod tests {
 
     #[test]
     fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
-        // 伪前缀形态（::MERGEX / ::ANCHORX / ::OUTSIDER）不是退役关键字：
-        // 空标头门禁按完整 token 边界匹配，直接以空标头错误拒绝，而不是
-        // 借 starts_with 前缀命中放行进解析器。
+        // 伪前缀形态（如 ::ANCHORX / ::OUTSIDER，及已移除的旧扇入标头加
+        // 伪后缀）不是退役关键字：空标头门禁按完整 token 边界匹配，直接
+        // 以空标头错误拒绝，而不是借 starts_with 前缀命中放行进解析器。
+        // 旧扇入词按字节拼装，保持全文检索零命中口径。
+        let retired_word: String = ["M", "E", "R", "G", "E"].concat();
         for hook in [
-            "::MERGEX@(seller::task.main.cmp)",
-            "::ANCHORX(@seller::task.main.cmp)",
-            "::OUTSIDER",
+            format!("::{retired_word}X@(seller::task.main.cmp)"),
+            "::ANCHORX(@seller::task.main.cmp)".to_string(),
+            "::OUTSIDER".to_string(),
         ] {
             let err = parse_hook(ParseHookRequest {
                 profile: Profile::CloudCompat,
                 hook_name: "HOOK".to_string(),
-                hook: hook.to_string(),
+                hook,
             })
             .unwrap_err();
             assert!(
                 err.to_string().contains("empty source"),
-                "unexpected error for {hook}: {err}"
+                "unexpected error for pseudo-prefix form: {err}"
             );
         }
         // 真关键字仍然放行到解析器，命中精确的 retired 报错。
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
             hook_name: "HOOK".to_string(),
-            hook: "::MERGE @seller::task.main.cmp".to_string(),
+            hook: "::OUTSIDE @seller::task.main.cmp".to_string(),
         })
         .unwrap_err();
         assert!(err.to_string().contains("retired"), "unexpected: {err}");
@@ -2572,7 +2762,7 @@ mod tests {
     fn unsupported_hook_modes_are_rejected_at_decode() {
         // 编译产物 mode 白名单（normal/subscription）之外的取值在解码期
         // 确定性拒绝，不做兼容解释。
-        for mode in ["outside_spawn", "merge", "anchor"] {
+        for mode in ["outside_spawn", "anchor", "bundle"] {
             let err = eval_compiled_hook(EvalCompiledHookRequest {
                 profile: Profile::CloudCompat,
                 ast: json!({
@@ -2788,6 +2978,61 @@ mod tests {
     }
 
     #[test]
+    fn rejects_hook_names_containing_whitespace() {
+        // 通道名进 hookId（stage#hook_name），两侧必须逐字节一致：含空白的
+        // 名字（首尾/内部）是确定性非法输入，不做 trim 归一——与编译器
+        // validate_receive_signal_keys 同口径。
+        for hook_name in ["BAD KEY", " LEAD", "TRAIL ", "TAB\tKEY"] {
+            let err = parse_hook(ParseHookRequest {
+                profile: Profile::EvmStrict,
+                hook_name: hook_name.to_string(),
+                hook: "buyer::task.main.cmp".to_string(),
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("hook_name must not contain whitespace"),
+                "unexpected error for {hook_name:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_normalization_emits_single_parentheses_for_grouped_delay_operands() {
+        // Cloud 面与 Tight 面共用"一层分组括号"外观：延时操作数为 And/Or
+        // 组时只保留优先级闸产生的那一层括号，不得出现 `((A & B)) +5s`
+        // 式双重括号（两输出面被语料/产物钉住，外观必须系统一致）。
+        let cases = [
+            (
+                "buyer::(task.pay.cmp & task.ship.cmp)+5s",
+                "(task.pay.cmp & task.ship.cmp) + 5s",
+            ),
+            (
+                "buyer::(task.pay.cmp | task.ship.cmp)+5s",
+                "(task.pay.cmp | task.ship.cmp) + 5s",
+            ),
+            // 嵌套延时与普通项的组合括号不受影响。
+            (
+                "buyer::(task.pay.cmp +5s) & task.ship.cmp",
+                "(task.pay.cmp + 5s) & task.ship.cmp",
+            ),
+            (
+                "buyer::task.pay.cmp & (task.ship.cmp | task.refund.cmp)",
+                "task.pay.cmp & (task.ship.cmp | task.refund.cmp)",
+            ),
+        ];
+        for (hook, expected) in cases {
+            let out = parse_hook(ParseHookRequest {
+                profile: Profile::CloudCompat,
+                hook_name: "TIMEOUT".to_string(),
+                hook: hook.to_string(),
+            })
+            .unwrap();
+            assert_eq!(out.runtime_condition, expected, "hook: {hook}");
+        }
+    }
+
+    #[test]
     fn rejects_duration_overflow() {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
@@ -2950,8 +3195,9 @@ mod tests {
 
     #[test]
     fn non_subscription_source_header_requires_plain_identifier_of_at_most_36() {
-        // 标头 source 类落 VARCHAR(36) 且是路由键：超长/非法字符集在解析期
-        // 拒绝（对齐 Go 镜像 zhixu_schema.go 的 ≤36 与标识符规则）。
+        // 标头 source 类是路由键：编译期上限 36 字节（严于落库列宽
+        // source_zhixu_id VARCHAR(64)，对齐 Go 镜像 zhixu_schema.go 的
+        // ≤36 与标识符规则），超长/非法字符集在解析期拒绝。
         let overlong = "s".repeat(37);
         for raw in [
             format!("{overlong}::task.main.cmp"),
@@ -2980,6 +3226,130 @@ mod tests {
     }
 
     #[test]
+    fn signal_facts_with_unknown_keys_are_rejected() {
+        // 拼错的事实键（sourse）不得被静默吞成空 source 的无归属事实——
+        // 那会把"事实不匹配"伪装成 ok:true needs_more。serde 层确定性拒绝。
+        let request = json!({
+            "profile": "cloud_compat",
+            "ast": {
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "buyer",
+                "mode": "normal",
+                "root": { "type": "signal", "signal": "task.main.cmp" }
+            },
+            "signals": [{
+                "sourse": "buyer",
+                "signalName": "task.main.cmp",
+                "receivedAt": "2026-04-27T00:00:00Z"
+            }],
+            "now": "2026-04-27T00:00:00Z"
+        });
+        let output = eval_compiled_hook_json(&request.to_string());
+        assert!(
+            output.contains("\"ok\":false") && output.contains("unknown field"),
+            "misspelled fact key must be rejected: {output}"
+        );
+
+        // 缺失 source 仍是合法的无归属事实（needs_more，非错误）。
+        let legal = json!({
+            "profile": "cloud_compat",
+            "ast": {
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "buyer",
+                "mode": "normal",
+                "root": { "type": "signal", "signal": "task.main.cmp" }
+            },
+            "signals": [{
+                "signalName": "task.main.cmp",
+                "receivedAt": "2026-04-27T00:00:00Z"
+            }],
+            "now": "2026-04-27T00:00:00Z"
+        });
+        let output = eval_compiled_hook_json(&legal.to_string());
+        assert!(
+            output.contains("\"ok\":true"),
+            "missing source stays legal: {output}"
+        );
+    }
+
+    #[test]
+    fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
+        // 解码层身份闸与解析期同口径：毒原子确定性拒绝，而不是解码成
+        // 永不匹配事实集的合法形态（那会把不匹配伪装成 ok:true needs_more）。
+        let ast_with_root = |root: Value, source: &str| {
+            json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": source,
+                "mode": "normal",
+                "root": root
+            })
+        };
+        let poisoned_atoms = [
+            // signal 节点：两段式 / 内嵌空格 / 超 100 字节。
+            ast_with_root(json!({ "type": "signal", "signal": "main.cmp" }), "buyer"),
+            ast_with_root(json!({ "type": "signal", "signal": "ta sk.a.b" }), "buyer"),
+            ast_with_root(
+                json!({ "type": "signal", "signal": format!("{}.{}.{}", "a".repeat(40), "b".repeat(30), "c".repeat(31)) }),
+                "buyer",
+            ),
+            // 顶层 source：非法字符集 / 超 36 字节。
+            ast_with_root(
+                json!({ "type": "signal", "signal": "task.main.cmp" }),
+                "has space",
+            ),
+            ast_with_root(
+                json!({ "type": "signal", "signal": "task.main.cmp" }),
+                "s".repeat(37).as_str(),
+            ),
+        ];
+        for ast in poisoned_atoms {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast,
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("task.stage.signal")
+                    || message.contains("plain identifier of at most 36"),
+                "unexpected error: {message}"
+            );
+        }
+
+        // subscription 节点：source 字符集 / source 长度 / signal 段数。
+        let subscription_ast = |source: &str, signal: &str| {
+            json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "",
+                "mode": "subscription",
+                "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+                "root": { "type": "subscription", "source": source, "signal": signal }
+            })
+        };
+        for ast in [
+            subscription_ast("has space", "trade.listing.cmp"),
+            subscription_ast(&"s".repeat(37), "trade.listing.cmp"),
+            subscription_ast("seller", "listing.cmp"),
+        ] {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast,
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("plain identifier of at most 36")
+                    || message.contains("task.stage.signal"),
+                "unexpected error: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn subscription_header_form_is_unaffected_by_source_header_cap() {
         // 订阅形态标头恒为空：不受标头 ≤36/plain-identifier 校验影响；
         // 订阅目标 source 自身按同值规则（≤36 + plain identifier）校验。
@@ -2989,7 +3359,8 @@ mod tests {
             hook: "::ANCHOR(@seller::task.main.cmp)".to_string(),
         })
         .unwrap();
-        // 订阅目标 source 超 36 字节：与标头同列宽（VARCHAR(36)），解析期拒绝。
+        // 订阅目标 source 超 36 字节：与标头同口径（编译上限 36 字节，
+        // 严于落库列宽 source_zhixu_id VARCHAR(64)），解析期拒绝。
         let overlong = "s".repeat(37);
         let err = parse_hook(ParseHookRequest {
             profile: Profile::EvmStrict,

@@ -7,11 +7,7 @@
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "watcher_only_stage",
-      "uid": "fx-watcher-001",
-      "annotations": {
-        "version": "1"
-      }
+      "name": "watcher_only_stage"
     },
     "spec": {
       "platform": {

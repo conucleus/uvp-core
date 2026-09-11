@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "uvp.canonicalJsonCorpus.v1",
+  "authority": "uvp-core uvp-ir::canonical_stringify (serde_json integer number identity; float-form literals rejected at the authority)",
+  "consumers": [
+    "uvp-protocol packages/compiler canonical.ts must reproduce pass cases byte-for-byte and reject the expectReject cases with an equivalent single rejection face"
+  ],
+  "rules": [
+    "The canonical hash-preimage vocabulary is closed over integers: number literals without '.' or 'e' (u64/i64) canonicalize bare, without a decimal point.",
+    "Float-form number literals are rejected outright: any f64 payload — integral floats (100.0), fractions (1.5), exponent spellings (1e2, 2.5e-8, 1e300), and negative zero (-0.0) — fails loudly at the authoritative canonicalizer, listing the offending token. Cross-language float formatting (ryu vs JS Number->String) carries no byte-for-byte alignment obligation; the single rejection face lives in the Rust authority.",
+    "Object keys sort by code point; arrays keep order."
+  ],
+  "cases": [
+    {
+      "name": "integer token stays a bare integer",
+      "input": { "a": 100 },
+      "expectCanonical": "{\"a\":100}"
+    },
+    {
+      "name": "u64 beyond double precision stays an integer",
+      "input": { "a": 9007199254740993 },
+      "expectCanonical": "{\"a\":9007199254740993}"
+    },
+    {
+      "name": "keys sort by code point over integers",
+      "input": { "b": [2, 3], "a": { "x": 1, "w": 2 } },
+      "expectCanonical": "{\"a\":{\"w\":2,\"x\":1},\"b\":[2,3]}"
+    },
+    {
+      "name": "integral float literal is rejected",
+      "input": { "a": 100.0 },
+      "expectReject": "float-form JSON number"
+    },
+    {
+      "name": "fraction float literal is rejected",
+      "input": { "a": 1.5 },
+      "expectReject": "float-form JSON number"
+    },
+    {
+      "name": "exponent spelling is a float and is rejected",
+      "input": { "a": 1e2 },
+      "expectReject": "float-form JSON number"
+    },
+    {
+      "name": "negative zero is a float and is rejected",
+      "input": { "a": -0.0 },
+      "expectReject": "float-form JSON number"
+    },
+    {
+      "name": "small scientific float nested in an array is rejected",
+      "input": { "a": [1, 2.5e-8] },
+      "expectReject": "float-form JSON number"
+    },
+    {
+      "name": "large scientific float nested deep in an object is rejected",
+      "input": { "a": { "b": [1e300] } },
+      "expectReject": "float-form JSON number"
+    }
+  ]
+}

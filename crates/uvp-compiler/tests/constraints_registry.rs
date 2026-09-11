@@ -2,34 +2,46 @@
 //!
 //! 约束注册表 `uvp-protocol/protocol/uvp-constraints.v1.json` 是跨语言接受面
 //! 规则（zhixu / hook-dsl / dock / onchain-plan）的单一出处。本 harness：
-//!   1. 钉住注册表 version + sha256 —— 任何一处改表，三线（TS/Rust/Go）测试同声报警；
+//!   1. 钉住注册表 version，并把实际 sha256 与同目录 meta 文件声明的值比对
+//!      （sha 声明点唯一在 uvp-protocol 仓，改表不同步声明会让三线
+//!      TS/Rust/Go 测试同声报警）；
 //!   2. 对 applies 含 "rust" 的每条 rule 生成边界探针（满足/违反各一）打真 validator
 //!      （uvp_compiler::compile_json / uvp_hook_dsl::parse_hook_json），断言真实错误文案锚点；
 //!   3. rust 线没有探针的新 rule 会让本文件硬失败（防静默漏测）。
 //!
 //! 读不到注册表时硬失败并给出路径/环境变量指引，绝不 skip。
-//! 路径解析：优先环境变量 `UVP_CONSTRAINTS_PATH`；默认相对 crate 目录的
-//! `../../../uvp-protocol/protocol/uvp-constraints.v1.json`（uvp-core 与
-//! uvp-protocol 同父目录的检出布局）。
+//! 路径解析：优先环境变量 `UVP_CONSTRAINTS_PATH`；默认从 crate 目录逐级
+//! 向上寻找 `uvp-protocol/protocol/uvp-constraints.v1.json`——uvp-core 无论
+//! 作为 uvp-eth 子模块检出（uvp-eth/uvp-core、注册表在 uvp-eth/uvp-protocol）
+//! 还是与 uvp-protocol 平级独立检出，都能命中，不绑定单一兄弟目录布局。
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 const CONSTRAINTS_ENV_VAR: &str = "UVP_CONSTRAINTS_PATH";
 const PINNED_VERSION: &str = "uvp.constraints.v1";
-/// sha256(uvp-constraints.v1.json)。改表必须三线同步更新：
-///   uvp-protocol packages/compiler/test/constraints-registry.test.ts
-///   uvp-core      crates/uvp-compiler/tests/constraints_registry.rs
-///   miniprogram   pkg/compiler/validator/constraints_registry_test.go
-const PINNED_SHA256: &str = "3b0a947f84547abcf6433939ca9a1ce53d9b6f1a47dbf6c599df2a4d0bc4b8bd";
+
+const CONSTRAINTS_RELATIVE_PATH: &str = "uvp-protocol/protocol/uvp-constraints.v1.json";
 
 fn default_constraints_path() -> std::path::PathBuf {
-    // 测试进程 cwd = crates/uvp-compiler。
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../uvp-protocol/protocol/uvp-constraints.v1.json")
+    // 从 crate 目录逐级向上扫：第一个持有 uvp-protocol 检出的祖先即布局根。
+    // root 独立收缩——candidate 若用 push/pop 原地拼装，pop 每次只剥一个
+    // 组件，多段相对路径剥不干净会逐轮膨胀成死循环。
+    let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        let candidate = root.join(CONSTRAINTS_RELATIVE_PATH);
+        if candidate.exists() {
+            return candidate;
+        }
+        if !root.pop() {
+            break;
+        }
+    }
+    // 一个不存在的路径也保留：报错信息据此给出布局指引。
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(CONSTRAINTS_RELATIVE_PATH)
 }
 
-fn load_constraints_table() -> (String, Value) {
+fn load_constraints_table() -> (String, Value, std::path::PathBuf) {
     let path = std::env::var(CONSTRAINTS_ENV_VAR)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| default_constraints_path());
@@ -44,7 +56,36 @@ fn load_constraints_table() -> (String, Value) {
     });
     let table: Value = serde_json::from_str(&raw)
         .unwrap_or_else(|err| panic!("[uvp-constraints] 注册表不是合法 JSON：{err}"));
-    (raw, table)
+    (raw, table, path)
+}
+
+/// 注册表内容 sha 的唯一声明点：与注册表同目录的 meta 文件，路径跟随
+/// 注册表的实际命中结果（env 覆盖与逐级向上布局都自然一致）。声明缺失
+/// 会让 sha 比对退化成摆设，读不到/算法不符也硬失败。
+fn load_constraints_meta(registry_path: &std::path::Path) -> Value {
+    let meta_path = registry_path
+        .parent()
+        .expect("registry path has a parent")
+        .join("uvp-constraints.v1.meta.json");
+    let raw = std::fs::read_to_string(&meta_path).unwrap_or_else(|err| {
+        panic!(
+            "[uvp-constraints] 读不到注册表 sha 声明文件（硬失败，不 skip）：{}\n\
+             - 注册表内容 sha 只在 uvp-protocol 仓 protocol/uvp-constraints.v1.meta.json 声明。\n\
+             原始错误：{err}",
+            meta_path.display()
+        )
+    });
+    let meta: Value = serde_json::from_str(&raw)
+        .unwrap_or_else(|err| panic!("[uvp-constraints] sha 声明文件不是合法 JSON：{err}"));
+    let algorithm = meta
+        .get("algorithm")
+        .and_then(Value::as_str)
+        .expect("sha 声明文件携带 algorithm");
+    assert_eq!(
+        algorithm, "sha256",
+        "sha 声明文件 algorithm={algorithm}，本 harness 只实现 sha256"
+    );
+    meta
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +117,17 @@ fn envelope_message(output: &str) -> (bool, String) {
 /// 定义级探针：target=parse（允许未解析 route 的本地编译）。
 fn probe_compile(definition: Value) -> (bool, String) {
     let request = json!({ "target": "parse", "definition": definition });
+    envelope_message(&uvp_compiler::compile_json(&request.to_string()))
+}
+
+/// link 级探针：target=hook_plan + resolution manifest（D009/D020 等
+/// link 期校验的可达路径）。
+fn probe_link(definition: Value, manifest: Value) -> (bool, String) {
+    let request = json!({
+        "target": "hook_plan",
+        "definition": definition,
+        "resolutionManifest": manifest,
+    });
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
 
@@ -112,15 +164,13 @@ fn assert_violate(outcome: (bool, String), anchor: &str, rule: &str) {
 /// 无 zhixu 委托的最小合法定义（定义级探针基底）。
 ///
 /// 阶段必须声明 receiveSignals：零 hook 阶段在链上永不可物化、其信号没有
-/// 钩子可挂（P0-4 物化门），基底自身就得是合法形态。
+/// 钩子可挂（物化门），基底自身就得是合法形态。
 fn base_definition() -> Value {
     json!({
         "apiVersion": "uvp/v0",
         "kind": "Zhixu",
         "metadata": {
-            "name": "constraints_probe",
-            "uid": "zx-constraints-probe",
-            "annotations": { "version": "1.0.0" }
+            "name": "constraints_probe"
         },
         "spec": {
             "platform": { "type": "cloud" },
@@ -146,8 +196,74 @@ fn stage_mut(definition: &mut Value) -> &mut Value {
         .expect("base definition has one stage")
 }
 
-/// 带 uvp.dock.v1 委托 executor 的定义（dock D001-D007 探针基底）。
+/// 发布具名接口的目标定义（目标侧 interface 探针基底 + link 探针的被引用方）。
+/// production_service 只允许 new（建单型服务）。
+fn target_interface_definition() -> Value {
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "constraints_target" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "target-core" },
+            "dockInterface": {
+                "production_service": {
+                    "orderModes": ["new"],
+                    "inputs": {
+                        "execute": { "hook": "main.work#DOCK_ENTER" }
+                    },
+                    "outputs": {
+                        "done": { "signal": "buyer::main.work.cmp" }
+                    }
+                }
+            },
+            "taskPatterns": [
+                { "name": "main", "stages": [
+                    {
+                        "name": "work",
+                        "source": "buyer",
+                        "receiveSignals": {
+                            "DOCK_ENTER": "buyer::main.work.enter",
+                            "SELF": "buyer::main.work.seed"
+                        },
+                        "sendSignals": ["str", "cmp", "seed"],
+                        "executor": { "supplierType": "organization", "supplierID": "target-org" }
+                    }
+                ]}
+            ]
+        }
+    })
+}
+
+fn target_interface_name() -> &'static str {
+    "constraints_target"
+}
+
+/// resolution manifest v2（中性 name→interfaces 目录）：由目标侧编译产物
+/// 组装；真实流程由 Store/发布系统生成。
+fn interface_manifest() -> Value {
+    let target = target_interface_definition();
+    let request = json!({ "target": "parse", "definition": target });
+    let output = uvp_compiler::compile_json(&request.to_string());
+    let (ok, message) = envelope_message(&output);
+    assert!(ok, "target interface definition compiles: {message}");
+    let envelope: Value = serde_json::from_str(&output).expect("envelope");
+    let plan = envelope["value"].clone();
+    json!({
+        "schemaVersion": "uvp.dock.resolution.v2",
+        "definitions": [{
+            "name": target_interface_name(),
+            "interfaces": plan["dockInterface"],
+        }]
+    })
+}
+
+/// 带 zhixu 委托 executor 的定义（调用方 config 探针基底）。
 fn dock_definition() -> Value {
+    dock_definition_with("new")
+}
+
+fn dock_definition_with(mode: &str) -> Value {
     let mut definition = base_definition();
     let stage = stage_mut(&mut definition);
     stage["receiveSignals"] = json!({ "START": "buyer::main.work.cmp" });
@@ -155,14 +271,21 @@ fn dock_definition() -> Value {
     stage["executor"] = json!({
         "supplierType": "zhixu",
         "zhixuExecutorConfig": {
-            "schemaVersion": "uvp.dock.v1",
-            "target": { "zhixu": "zx-target", "version": "1.0.0" },
-            "order": { "idPolicy": "derived-v1" },
-            "inputMap": { "START": "entrance" },
-            "signalMap": { "str": "out_str", "cmp": "out_cmp" }
+            "target": { "zhixu": target_interface_name() },
+            "interface": "production_service",
+            "order": { "mode": mode },
+            "inputMap": { "START": "execute" },
+            "signalMap": { "str": "done" }
         }
     });
     definition
+}
+
+/// 解析后的 config 对象（探针变异入口）。
+fn dock_config_mut(definition: &mut Value) -> &mut Value {
+    definition
+        .pointer_mut("/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig")
+        .expect("dock definition has a zhixuExecutorConfig")
 }
 
 fn signal_map_mut(definition: &mut Value) -> &mut Value {
@@ -242,17 +365,31 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
-        "metadata-uid-max-length".into(),
+        "metadata-uid-not-an-input".into(),
         (
             || probe_compile(base_definition()),
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    d["metadata"]["uid"] = json!(oversize_ascii(65, b'u'));
+                    d["metadata"]["uid"] = json!("zx-constraints-probe");
                     d
                 })
             },
-            "exceeds 64 bytes (global_zhixu.uid)",
+            "unknown field `uid`",
+        ),
+    ));
+    probes.push((
+        "metadata-name-slug-shape".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["metadata"]["name"] = json!("Constraints_Probe");
+                    d
+                })
+            },
+            "must match ^[a-z][a-z0-9_-]{0,99}$",
         ),
     ));
     probes.push((
@@ -309,6 +446,48 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 })
             },
             "must be a plain identifier (ASCII letters, digits, '_' or '-')",
+        ),
+    ));
+    probes.push((
+        "task-pattern-name-charset".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["spec"]["taskPatterns"][0]["name"] = json!("1main");
+                    d
+                })
+            },
+            "must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'",
+        ),
+    ));
+    probes.push((
+        "stage-name-charset".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["name"] = json!("work shop");
+                    d
+                })
+            },
+            "must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'",
+        ),
+    ));
+    probes.push((
+        "executor-supplier-type-closed-enum".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["executor"]["supplierType"] = json!("org");
+                    d
+                })
+            },
+            "supplierType must be one of",
         ),
     ));
     probes.push((
@@ -414,52 +593,29 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
-    // --- dock 级 ---
+    // --- dock 级（调用方 config）---
     probes.push((
-        "dock-schema-version-closed-enum".into(),
+        "dock-order-mode-closed-enum".into(),
         (
             || probe_compile(dock_definition()),
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    *d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/schemaVersion",
-                    )
-                    .expect("schemaVersion path") = json!("uvp.dock.v2");
+                    dock_config_mut(&mut d)["order"]["mode"] = json!("reused");
                     d
                 })
             },
-            "D002",
+            "must be \"new\" or \"existing\"",
         ),
     ));
     probes.push((
-        "dock-order-id-policy-closed-enum".into(),
+        "dock-target-name-slug".into(),
         (
             || probe_compile(dock_definition()),
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    *d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/order/idPolicy",
-                    )
-                    .expect("idPolicy path") = json!("sequential-v1");
-                    d
-                })
-            },
-            "D004",
-        ),
-    ));
-    probes.push((
-        "dock-target-version-exact".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    *d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/target/version",
-                    )
-                    .expect("version path") = json!("latest");
+                    dock_config_mut(&mut d)["target"]["zhixu"] = json!("");
                     d
                 })
             },
@@ -487,7 +643,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    signal_map_mut(&mut d)[oversize_ascii(27, b'a')] = json!("out_x");
+                    signal_map_mut(&mut d)[oversize_ascii(27, b'a')] = json!("done");
                     d
                 })
             },
@@ -501,7 +657,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = dock_definition();
-                    signal_map_mut(&mut d)["bad.key"] = json!("out_x");
+                    signal_map_mut(&mut d)["bad.key"] = json!("done");
                     d
                 })
             },
@@ -527,11 +683,102 @@ fn rust_probes() -> Vec<(String, Probe)> {
                     d.pointer_mut(
                         "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap",
                     )
-                    .expect("signalMap path")["s12345"] = json!("out_x");
+                    .expect("signalMap path")["s12345"] = json!("done");
                     d
                 })
             },
             "exceeds 100 (individual_record.signal_name)",
+        ),
+    ));
+    probes.push((
+        "dock-at-least-one-mapping".into(),
+        (
+            || probe_compile(dock_definition()),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    let config = dock_config_mut(&mut d).as_object_mut().unwrap();
+                    config.remove("inputMap");
+                    config.remove("signalMap");
+                    d
+                })
+            },
+            "at least one of inputMap/signalMap must bind a port",
+        ),
+    ));
+    probes.push((
+        "dock-new-mode-single-input-binding".into(),
+        (
+            || probe_compile(dock_definition()),
+            || {
+                probe_compile({
+                    let mut d = dock_definition();
+                    let stage = stage_mut(&mut d);
+                    stage["receiveSignals"]["ALSO"] = json!("buyer::main.work.cmp");
+                    dock_config_mut(&mut d)["inputMap"]["ALSO"] = json!("execute");
+                    d
+                })
+            },
+            "exactly one inputMap binding",
+        ),
+    ));
+
+    // --- dock 级（目标侧接口形状）---
+    probes.push((
+        "dock-interface-name-pattern".into(),
+        (
+            || probe_compile(target_interface_definition()),
+            || {
+                probe_compile({
+                    let mut d = target_interface_definition();
+                    let dock = d["spec"]["dockInterface"].as_object_mut().unwrap();
+                    let spec = dock.remove("production_service").unwrap();
+                    dock.insert("ProductionService".to_string(), spec);
+                    d
+                })
+            },
+            "interface name must match ^[a-z][a-z0-9_]{0,31}$",
+        ),
+    ));
+    probes.push((
+        "dock-interface-order-modes".into(),
+        (
+            || probe_compile(target_interface_definition()),
+            || {
+                probe_compile({
+                    let mut d = target_interface_definition();
+                    d["spec"]["dockInterface"]["production_service"]["orderModes"] = json!([]);
+                    d
+                })
+            },
+            "orderModes must be a non-empty subset of {new, existing}",
+        ),
+    ));
+
+    // --- dock 级（link 期）---
+    probes.push((
+        "dock-order-mode-allowed-by-interface".into(),
+        (
+            || probe_link(dock_definition_with("new"), interface_manifest()),
+            || probe_link(dock_definition_with("existing"), interface_manifest()),
+            "allows orderModes",
+        ),
+    ));
+
+    // --- dock 级（D013 出生 hook 语法结构）---
+    probes.push((
+        "dock-birth-hook-single-atom-syntax".into(),
+        (
+            || probe_compile(target_interface_definition()),
+            || {
+                probe_compile({
+                    let mut d = target_interface_definition();
+                    d["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_ENTER"] =
+                        json!("buyer::main.work.enter & buyer::main.work.enter");
+                    d
+                })
+            },
+            "D013",
         ),
     ));
 
@@ -544,7 +791,8 @@ fn rust_probes() -> Vec<(String, Probe)> {
 
 #[test]
 fn constraints_registry_is_pinned() {
-    let (raw, table) = load_constraints_table();
+    let (raw, table, registry_path) = load_constraints_table();
+    let meta = load_constraints_meta(&registry_path);
     assert_eq!(
         table
             .get("version")
@@ -555,16 +803,20 @@ fn constraints_registry_is_pinned() {
     );
     let digest = Sha256::digest(raw.as_bytes());
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let declared = meta
+        .get("contentSha256")
+        .and_then(Value::as_str)
+        .expect("sha 声明文件携带 contentSha256");
     assert_eq!(
-        hex, PINNED_SHA256,
-        "约束注册表内容被修改：请逐条核对规则后同步更新三线 harness 的 sha256 钉\
-         （uvp-protocol packages/compiler、uvp-core crates/uvp-compiler、Go pkg/compiler/validator）"
+        hex, declared,
+        "约束注册表内容与 meta 声明的 sha256 不一致：请逐条核对规则后，\
+         在 uvp-protocol 仓同一提交里更新 protocol/uvp-constraints.v1.meta.json 的 contentSha256"
     );
 }
 
 #[test]
 fn every_rust_rule_has_a_probe() {
-    let (_, table) = load_constraints_table();
+    let (_, table, _) = load_constraints_table();
     let rules = table
         .get("rules")
         .and_then(Value::as_array)
@@ -609,5 +861,54 @@ fn constraints_registry_probes_rust_line() {
         assert_satisfy(outcome, &rule);
         let outcome = violate();
         assert_violate(outcome, anchor, &rule);
+    }
+}
+
+/// 拒绝面×实现线镜像状态矩阵（雏形）的形状闸：每行必须携带唯一 id、
+/// surface 真源描述与三线 mirrors 状态（mirrored / inherit-ffi / none
+/// 前缀）。矩阵不驱动探针，但形状劣化（缺线、状态词表外）必须在此
+/// 响亮失败，不让矩阵退化成自由文本注释堆。
+#[test]
+fn rejection_surface_matrix_is_well_formed() {
+    let (_, table, _) = load_constraints_table();
+    let surfaces = table
+        .get("rejectionSurfaces")
+        .and_then(Value::as_array)
+        .expect("registry carries rejectionSurfaces array");
+    assert!(
+        !surfaces.is_empty(),
+        "拒绝面矩阵为空：合约拒绝面真源与镜像债没有单一出处可对账"
+    );
+    let mut ids = std::collections::BTreeSet::new();
+    for surface in surfaces {
+        let id = surface
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("rejection surface carries id");
+        assert!(ids.insert(id.to_string()), "duplicate surface id {id}");
+        assert!(
+            surface
+                .get("surface")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty()),
+            "surface {id} must describe the on-chain rejection source"
+        );
+        let mirrors = surface
+            .get("mirrors")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("surface {id} carries mirrors for all three lines"));
+        for line in ["rust", "go", "ts"] {
+            let status = mirrors
+                .get(line)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("surface {id} carries mirror status for {line}"));
+            let known = ["mirrored", "inherit-ffi", "none"]
+                .iter()
+                .any(|prefix| status.starts_with(prefix));
+            assert!(
+                known,
+                "surface {id} line {line} status {status:?} outside the status vocabulary"
+            );
+        }
     }
 }
