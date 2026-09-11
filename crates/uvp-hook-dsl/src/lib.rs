@@ -521,14 +521,12 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
             )));
         }
         let received_at = parse_time(&signal.received_at, profile)?;
-        // First-writer-wins matches the replay oracle and the documented
-        // runtime contract: a repeated source::signalName fact never replaces
-        // the first received instance.
+        // 同一事实键（source::signalName）的重复事实取 received_at 最早者
+        // 获胜：归约结果与输入数组顺序无关，求值语义是事实集的纯函数。
+        // 键的存在性单调——一旦在场永不移除，仅锚点时间戳可前移。
         result
             .entry(signal_key(&signal.source, &signal.signal_name))
             .and_modify(|existing: &mut SignalEntry| {
-                // first-RECEIVED-wins 必须与输入数组顺序无关：同一事实键的
-                // 重复到达取时间戳最早者，语义成为事实集的纯函数。
                 if received_at < existing.received_at {
                     existing.received_at = received_at;
                 }

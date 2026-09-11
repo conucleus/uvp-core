@@ -38,7 +38,6 @@ pub struct ZhixuLintReport {
 // FFI/NAPI 请求信封：未知字段确定性拒绝（与 compile 入口同口径）。
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LintZhixuRequest {
-    #[serde(alias = "zhixu")]
     pub definition: Value,
 }
 

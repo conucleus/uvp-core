@@ -195,8 +195,8 @@ pub fn ready_implies(a: &Expr, b: &Expr) -> ProofResult {
 /// * AND ready ⇒ 每个成员 ready ⇒ 任一成员所蕴含的都成立；
 /// * Delay ready ⇒ 内层 ready；
 /// * 同一内层的 d1 ≥ d2 延时：长延时就绪 ⇒ 短延时必已就绪（就绪时刻
-///   t+d1 ≥ t+d2，且事实集只会增长——first-writer-wins 的事实模型下
-///   信号存在性单调）；
+///   t+d1 ≥ t+d2，且事实集只会增长——重复事实取最早 received_at 的
+///   事实模型下信号存在性单调）；
 /// * OR ready ⇒ 某个成员 ready：只有**每个**成员都蕴含同一目标时才可
 ///   下结论（无论获胜分支是谁）；
 /// * `Not` / `Signal` / `Subscription` 不分解（负向就绪不蕴含任何正向
@@ -302,7 +302,7 @@ fn intersect_branch_sets(
 }
 
 /// 表达式 Ready 时被**强制在场**的信号集（信号存在性单调：一旦在场
-/// 即保持，与 evaluator 的 first-writer-wins 事实模型一致）。
+/// 即保持，与 evaluator 的"重复事实取最早 received_at"事实模型一致）。
 ///
 /// * Signal → 自身；Delay 透传；AND 取并集（每个成员都 ready）；
 /// * OR 取交集——无论哪个分支获胜都必须强制该信号，才可下结论。

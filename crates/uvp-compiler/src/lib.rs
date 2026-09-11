@@ -17,9 +17,11 @@ pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
 /// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
 /// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
 pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
-/// G-18：UVPStateMachine._signalStageId 在每次信号提交时线性扫描
-/// signalCapabilities，无上限则单次提交 gas 随 plan 规模无界增长。
-/// 256 使扫描 gas 低于 ~5k。TS 侧 onchain-hook-plan.ts 的
+/// sendSignals 能力表规模上限：UVPPlanMetadataModule 逐条写存储注册
+/// signalCapabilities（合约注册边界同值 revert TooManySignalCapabilities），
+/// 无上限则注册 gas 随 plan 规模无界增长。信号提交侧的归属读取走
+/// metadata 属主索引单键查询，gas 不随表规模变化——上限守护的是注册
+/// 循环，不是热路径。TS 侧 onchain-hook-plan.ts 的
 /// MAX_SIGNAL_CAPABILITIES 在编译+反序列化两边界同值同文案；Rust 是语义
 /// 权威，此值即上限的唯一出处，TS 必须镜像。
 const MAX_SIGNAL_CAPABILITIES: usize = 256;
@@ -41,7 +43,6 @@ type Result<T> = std::result::Result<T, CompilerError>;
 pub struct CompileRequest {
     #[serde(default = "default_target")]
     pub target: String,
-    #[serde(alias = "zhixu")]
     pub definition: Value,
     /// Dock resolution manifest：由 Store/发布系统或离线
     /// lock 文件提供；含 zhixu executor 的可运行编译必须提供，否则返回
@@ -1431,7 +1432,7 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     // signalCapabilities 长度，与 TS signalCapabilityCountIssues 同口径。
     if capabilities.len() > MAX_SIGNAL_CAPABILITIES {
         return Err(CompilerError::Issues(format!(
-            "signal capabilities {} exceed the documented limit {} (UVPStateMachine._signalStageId linearly scans capabilities per signal submission; unbounded plan-controlled gas)",
+            "signal capabilities {} exceed the documented limit {} (UVPPlanMetadataModule registers each capability with a storage write; unbounded plan-controlled registration gas)",
             capabilities.len(),
             MAX_SIGNAL_CAPABILITIES
         )));
@@ -1738,8 +1739,8 @@ mod tests {
 
     #[test]
     fn send_signals_total_is_capped_at_256() {
-        // G-18 镜像：hook_plan 与 cloud 共用 build_signal_capabilities，
-        // 两侧同值同文案；256 条放行、257 条拒绝。
+        // 能力表规模闸：hook_plan 与 cloud 共用 build_signal_capabilities，
+        // 与 TS 编译+反序列化边界同值同文案；256 条放行、257 条拒绝。
         let definition_with = |count: usize| {
             let signals: Vec<String> = (0..count).map(|index| format!("sig{index:03}")).collect();
             json!({

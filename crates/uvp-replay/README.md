@@ -67,7 +67,9 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 ## 观察配对与比对契约
 
 - 配对键：expected 与 observed 按 `(planId, orderId, hookId)` 分桶、桶内按
-  到达序配对。全局下标配对会把不同 hook/订单间合法的事件流交错误配成
+  到达序配对。键内字段一律字节精确匹配——编译器身份是大小写敏感的
+  （仅大小写不同的 stage/hook 是两个独立实体），折叠会错配或产生假
+  mismatch。全局下标配对会把不同 hook/订单间合法的事件流交错误配成
   semantic-mismatch——交错是流布局，不是语义分叉；每个事实键的观察序列
   只与该键自己的求值历史可比（与合约 `_evaluateAffectedHooks` 的 per-key
   hookIds 序一致）。

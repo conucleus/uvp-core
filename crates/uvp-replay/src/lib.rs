@@ -965,7 +965,9 @@ fn chain_event_to_expected_observation(event: &Value) -> Result<Value> {
 }
 
 /// 观察配对契约：expected/observed 按 (planId, orderId, hookId) 分桶、桶内
-/// 按到达序配对。全局下标配对会把不同 hook/订单间合法的事件流交错误配成
+/// 按到达序配对。键内字段一律字节精确匹配——编译器身份是大小写敏感的
+/// （仅大小写不同的 stage/hook 是两个独立实体），折叠会错配或产生假
+/// mismatch。全局下标配对会把不同 hook/订单间合法的事件流交错误配成
 /// semantic-mismatch——交错是流布局，不是语义分叉。与合约
 /// `_evaluateAffectedHooks` 的 per-key hookIds 序一致：每个事实键的观察
 /// 序列只与该键自己的求值历史可比。
@@ -1039,8 +1041,7 @@ fn hook_observation_key(observation: &Value) -> String {
         observation
             .get("hookId")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_lowercase(),
+            .unwrap_or_default(),
     )
 }
 
@@ -1055,7 +1056,7 @@ fn same_hook_observation(expected: &Value, observed: &Value) -> bool {
             field_eq(expected, observed, "planId")
                 && field_eq(expected, observed, "zhixuId")
                 && field_eq(expected, observed, "orderId")
-                && field_lower_eq(expected, observed, "hookId")
+                && field_eq(expected, observed, "hookId")
                 && field_eq(expected, observed, "stageIdentifier")
                 && field_eq(expected, observed, "hookName")
         }
@@ -1063,7 +1064,7 @@ fn same_hook_observation(expected: &Value, observed: &Value) -> bool {
             field_eq(expected, observed, "planId")
                 && field_eq(expected, observed, "zhixuId")
                 && field_eq(expected, observed, "orderId")
-                && field_lower_eq(expected, observed, "hookId")
+                && field_eq(expected, observed, "hookId")
                 && field_eq(expected, observed, "status")
                 && same_due_at(
                     expected.get("dueAt").and_then(Value::as_str),
@@ -1106,7 +1107,7 @@ fn find_hook(plan: &Value, hook_id: &str) -> Result<Value> {
         .find(|hook| {
             hook.get("hookId")
                 .and_then(Value::as_str)
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(hook_id))
+                .is_some_and(|candidate| candidate == hook_id)
         })
         .cloned()
         .ok_or_else(|| ReplayError::Message(format!("chain oracle missing hook {hook_id}")))
@@ -1174,13 +1175,6 @@ fn min_non_zero(left: i64, right: i64) -> i64 {
 
 fn field_eq(left: &Value, right: &Value, key: &str) -> bool {
     left.get(key) == right.get(key)
-}
-
-fn field_lower_eq(left: &Value, right: &Value, key: &str) -> bool {
-    left.get(key)
-        .and_then(Value::as_str)
-        .zip(right.get(key).and_then(Value::as_str))
-        .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
 fn value_str<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
@@ -2608,6 +2602,31 @@ mod tests {
         );
         assert_eq!(result["expected"].as_array().map(Vec::len), Some(2));
         assert_eq!(result["observed"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn case_distinct_hook_ids_stay_separate() {
+        // 编译器身份大小写敏感（Main/main 两个 stage 合法共存），回放侧
+        // 分桶与逐字段比较同口径字节精确：仅大小写不同的 hookId 是两个
+        // 独立实体，不得折叠进同一桶或互相配对。
+        let upper = json!({
+            "eventName": "HookReady",
+            "planId": "0x01",
+            "orderId": "order-1",
+            "hookId": "task.Main#GO",
+            "stageIdentifier": "task.Main",
+            "hookName": "GO"
+        });
+        let lower = json!({
+            "eventName": "HookReady",
+            "planId": "0x01",
+            "orderId": "order-1",
+            "hookId": "task.main#GO",
+            "stageIdentifier": "task.main",
+            "hookName": "GO"
+        });
+        assert_ne!(hook_observation_key(&upper), hook_observation_key(&lower));
+        assert!(!same_hook_observation(&upper, &lower));
     }
 
     #[test]
