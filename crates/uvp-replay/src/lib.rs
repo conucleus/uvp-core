@@ -129,7 +129,17 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                     })?;
                 order.materialized_stages.insert(stage_id.to_string(), true);
             }
-            "OrderMaterialized" | "OrderTriggered" | "OrderLinked" => {}
+            // OrderTriggered 被记录为出生事务标记（outside 出生事实与其同
+            // 事务；order-link 出生不 _recordSignal，见 record_signal_and_evaluate
+            // 的出生通道判别）。
+            "OrderTriggered" => {
+                let order_key = order_key(value_str(event, "planId")?, value_str(event, "orderId")?);
+                state.order_trigger_tx.insert(
+                    order_key,
+                    value_str(event, "transactionHash")?.to_string(),
+                );
+            }
+            "OrderMaterialized" | "OrderLinked" => {}
             other => {
                 return Err(ReplayError::Message(format!(
                     "unsupported chain-mode value {other}"
@@ -151,6 +161,12 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
 struct OracleState {
     plans: BTreeMap<String, Value>,
     orders: BTreeMap<String, OracleOrderState>,
+    /// OrderTriggered 事务哈希（order_key → tx）：出生事务标记。outside
+    /// 出生（`triggerOrderFromOutsideFor`）的 OrderTriggered 与出生事实
+    /// `_recordSignal` 同事务；order-link 出生
+    /// （`triggerOrderFromSignalFromModule`）只发 OrderTriggered +
+    /// HookReady、不 `_recordSignal`——本表是两者在事件流上的判别面。
+    order_trigger_tx: BTreeMap<String, String>,
 }
 
 /// 链上可观察事件（HookReady/HookStatusChanged）的吸收口。真实事件流与
@@ -320,7 +336,11 @@ struct EvalValue {
     value: bool,
     wait: bool,
     cancel: bool,
-    due_at: i64,
+    /// 等待期限（Wait 状态的到期时刻）。`None` = 无期限（就绪/取消/缺席
+    /// 归约的产物）。显式 Option 区分"无 due"与 epoch 0——用 0 兼作哨兵
+    /// 会让 iso_from_seconds(0) 丢期限、poke 资格闸把 due 判永不合资格，
+    /// 且与核心求值器 waits 的 Option 口径在 due==0 边界分叉。
+    due_at: Option<i64>,
     /// 正向锚点（事实到达时刻 / 延时到期时刻）。`None` = 无锚（缺席信号
     /// 的否定就绪等伪就绪）。显式 Option 区分"无锚"与 epoch 0——用 0 兼作
     /// 哨兵会让 epoch 0 提交的事实被 DELAY 误报结构性错误。
@@ -402,6 +422,20 @@ fn record_signal_and_evaluate(state: &mut OracleState, event: &Value) -> Result<
     if order.signals.contains_key(&signal_key) {
         return Ok(Vec::new());
     }
+    // 出生通道判别（镜像合约 _recordSignal 的 evaluateOrderTriggerHooks
+    // 标志）：出生事实写入只发生在订单创建事务内——outside 出生
+    // （OrderTriggered 与出生 _recordSignal 同事务）与 dock 出生（无
+    // OrderTriggered，entrance 事实是本订单首条信号）；order-link 出生不
+    // _recordSignal，其 OrderTriggered 事务内没有信号，订单后续收到的第
+    // 一条普通信号不得误判为出生通道。普通信号提交（含 dock input 模块
+    // 写/回写/派生写回）一律不是出生通道。
+    let signal_tx = value_str(event, "transactionHash")?;
+    let is_first_signal = order.signals.is_empty();
+    let order_link_born = state
+        .order_trigger_tx
+        .get(&order_key)
+        .is_some_and(|trigger_tx| trigger_tx != signal_tx);
+    let birth_channel = is_first_signal && !order_link_born;
     order.signals.insert(
         signal_key.clone(),
         json!({
@@ -429,12 +463,19 @@ fn record_signal_and_evaluate(state: &mut OracleState, event: &Value) -> Result<
         .collect::<Result<Vec<_>>>()?;
     let mut observations = Vec::new();
     // 与合约 `_evaluateAffectedHooks` 相同的两遍顺序：先 trigger 后普通
-    // watcher，保证出生/物化边先于同键观察者求值。
+    // watcher，保证出生/物化边先于同键观察者求值。出生求值范围同口径
+    // （evaluateOrderTriggerHooks）：order-trigger（mint/dock）hook 只在
+    // 出生事务内求值——普通信号不再推进它们，否则订单 Y（由事实 K2 铸
+    // 出）内普通提交另一出生线事实 K1 会被 oracle 推 Ready 并物化 Y 并
+    // 未由此出生的阶段，而链上已不再这么做（凭空 observed）。watcher
+    // 两条路径都照常求值。
     let mut trigger_hooks = Vec::new();
     let mut watcher_hooks = Vec::new();
     for hook in hooks {
         if hook_is_order_trigger(&hook)? {
-            trigger_hooks.push(hook);
+            if birth_channel {
+                trigger_hooks.push(hook);
+            }
         } else {
             watcher_hooks.push(hook);
         }
@@ -615,7 +656,7 @@ fn evaluate_hook(order: &mut OracleOrderState, hook: &Value, now: &str) -> Resul
         next.status = "cxl".to_string();
     } else if result.wait {
         next.status = "wait".to_string();
-        next.due_at = iso_from_seconds(result.due_at);
+        next.due_at = result.due_at.and_then(iso_from_seconds);
     } else if result.value {
         next.status = "ready".to_string();
     }
@@ -761,7 +802,7 @@ fn signal_value(order: &OracleOrderState, signal_key: &str) -> Result<EvalValue>
         value: true,
         wait: false,
         cancel: false,
-        due_at: 0,
+        due_at: None,
         anchor_at: Some(submitted_at),
     })
 }
@@ -771,7 +812,7 @@ fn false_value() -> EvalValue {
         value: false,
         wait: false,
         cancel: false,
-        due_at: 0,
+        due_at: None,
         anchor_at: None,
     }
 }
@@ -782,7 +823,7 @@ fn not_value(value: EvalValue) -> EvalValue {
             value: false,
             wait: false,
             cancel: true,
-            due_at: 0,
+            due_at: None,
             anchor_at: None,
         };
     }
@@ -790,12 +831,22 @@ fn not_value(value: EvalValue) -> EvalValue {
         value: true,
         wait: false,
         cancel: false,
-        due_at: 0,
+        due_at: None,
         anchor_at: None,
     }
 }
 
 fn delay_value(value: EvalValue, delay_seconds: i64, now: &str) -> Result<EvalValue> {
+    // 回放解码镜像合约注册门（UVPPlanRegistration._validateHook 对
+    // delaySeconds == 0 revert InvalidInstruction；链上 uint64 无负值，回放
+    // 的手工 plan 是 i64，≤0 一并拒绝）：负值会把锚点回拨、0 值恒等，
+    // 都是确定性非法输入，不做宽容解释。在线入口（uvp-hook-dsl 解码层
+    // "duration must be positive"）同口径。
+    if delay_seconds <= 0 {
+        return Err(ReplayError::Message(
+            "malformed instruction plan: DELAY delaySeconds must be positive".to_string(),
+        ));
+    }
     if value.cancel || !value.value {
         return Ok(value);
     }
@@ -818,7 +869,7 @@ fn delay_value(value: EvalValue, delay_seconds: i64, now: &str) -> Result<EvalVa
             value: false,
             wait: true,
             cancel: false,
-            due_at,
+            due_at: Some(due_at),
             anchor_at: value.anchor_at,
         });
     }
@@ -826,7 +877,7 @@ fn delay_value(value: EvalValue, delay_seconds: i64, now: &str) -> Result<EvalVa
         value: true,
         wait: false,
         cancel: false,
-        due_at: 0,
+        due_at: None,
         // 锚点推进（链式延时语义）：延时到期时刻本身成为新的锚点，
         // 使 `(A+5s)+10s` 的外层延时从 A+5s 起算，与生产求值器一致。
         anchor_at: Some(due_at),
@@ -839,7 +890,7 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: false,
             wait: false,
             cancel: true,
-            due_at: 0,
+            due_at: None,
             anchor_at: None,
         };
     }
@@ -848,7 +899,7 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: true,
             wait: false,
             cancel: false,
-            due_at: 0,
+            due_at: None,
             anchor_at: max_anchor(left.anchor_at, right.anchor_at),
         };
     }
@@ -857,7 +908,7 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: false,
             wait: true,
             cancel: false,
-            due_at: left.due_at.max(right.due_at),
+            due_at: max_due(left.due_at, right.due_at),
             anchor_at: max_anchor(left.anchor_at, right.anchor_at),
         };
     }
@@ -882,7 +933,7 @@ fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: true,
             wait: false,
             cancel: false,
-            due_at: 0,
+            due_at: None,
             anchor_at: anchor,
         };
     }
@@ -891,7 +942,7 @@ fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: false,
             wait: true,
             cancel: false,
-            due_at: min_non_zero(left.due_at, right.due_at),
+            due_at: min_due(left.due_at, right.due_at),
             anchor_at: min_anchor(left.anchor_at, right.anchor_at),
         };
     }
@@ -900,7 +951,7 @@ fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: false,
             wait: false,
             cancel: true,
-            due_at: 0,
+            due_at: None,
             anchor_at: None,
         };
     }
@@ -918,6 +969,28 @@ fn max_anchor(left: Option<i64>, right: Option<i64>) -> Option<i64> {
 
 /// 可用锚点取较早者；双侧无锚返回 None（OR 的"最早成熟时刻"口径）。
 fn min_anchor(left: Option<i64>, right: Option<i64>) -> Option<i64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
+}
+
+/// 可用 due 取较晚者；无 due 侧（就绪/取消归约的产物）不参与（AND 等待
+/// 的归约口径，与核心求值器 Expr::And 的 waits.max() 同形：waits 只收集
+/// Some 的 ready_at）。替代旧 0 哨兵的裸 max——那会把"无 due"折成
+/// epoch 0 参与比较。
+fn max_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
+}
+
+/// 可用 due 取较早者；无 due 侧让位（OR 等待的归约口径，与核心求值器
+/// Expr::Or 的 waits.min() 同形）。替代 min_non_zero 的哨兵特判。
+fn min_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),
         (Some(only), None) | (None, Some(only)) => Some(only),
@@ -1153,24 +1226,13 @@ fn seconds_from_iso(value: &str) -> Result<i64> {
 }
 
 fn iso_from_seconds(value: i64) -> Option<String> {
-    if value == 0 {
-        return None;
-    }
+    // 0 不再是"无 due"哨兵（区分已移至 EvalValue::due_at 的显式 Option）：
+    // epoch 0 的等待期限照常渲染，poke 资格闸按存在性判断。
     Some(
         Utc.timestamp_opt(value, 0)
             .single()?
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     )
-}
-
-fn min_non_zero(left: i64, right: i64) -> i64 {
-    if left == 0 {
-        return right;
-    }
-    if right == 0 {
-        return left;
-    }
-    left.min(right)
 }
 
 fn field_eq(left: &Value, right: &Value, key: &str) -> bool {
@@ -1239,14 +1301,14 @@ mod tests {
             value: true,
             wait: false,
             cancel: false,
-            due_at: 0,
+            due_at: None,
             anchor_at: Some(100),
         };
         let right = EvalValue {
             value: true,
             wait: false,
             cancel: false,
-            due_at: 0,
+            due_at: None,
             anchor_at: Some(5),
         };
         let combined = or_value(left, right);
@@ -1262,14 +1324,14 @@ mod tests {
             value: true,
             wait: false,
             cancel: false,
-            due_at: 0,
+            due_at: None,
             anchor_at: Some(1000),
         };
         let waiting = EvalValue {
             value: false,
             wait: true,
             cancel: false,
-            due_at: 110,
+            due_at: Some(110),
             anchor_at: Some(10),
         };
         let combined = or_value(ready, waiting);
@@ -1745,6 +1807,367 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_signals_do_not_advance_order_trigger_hooks() {
+        // 镜像合约 _evaluateAffectedHooks 的 evaluateOrderTriggerHooks 出生
+        // 求值范围：order-trigger（mint/dock）hook 只在出生事务内求值。订单
+        // 由事实 K1 出生（首条信号 = 出生通道，H1 照常 Ready）；随后普通提
+        // 交另一出生线事实 K2——链上已不再对 H2 求值，oracle 若仍推 H2
+        // Ready 会产出凭空 observed（阶段也被错误物化）。
+        let plan = json!({
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "compiledHooks": [
+                {
+                    "hookId": "birth.one#ENTER",
+                    "stageId": "birth.one",
+                    "stageIdentifier": "birth.one",
+                    "hookName": "ENTER",
+                    "orderTriggerKind": "mint",
+                    "emitReady": true,
+                    "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                },
+                {
+                    "hookId": "birth.two#ENTER",
+                    "stageId": "birth.two",
+                    "stageIdentifier": "birth.two",
+                    "hookName": "ENTER",
+                    "orderTriggerKind": "mint",
+                    "emitReady": true,
+                    "instructions": [{"op": "SIGNAL", "signalKey": "0x51"}]
+                }
+            ],
+            "dependencyIndex": {
+                "0x50": ["birth.one#ENTER"],
+                "0x51": ["birth.two#ENTER"]
+            }
+        });
+        let events = vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": plan
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-x",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }),
+            // 出生事务：首条信号是出生事实，H1 求值照常（出生通道）。
+            json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-x",
+                "sourceId": "0x30",
+                "signalId": "0x40",
+                "signalKey": "0x50",
+                "senderId": "relayer",
+                "submittedAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "HookReady",
+                "blockNumber": 3,
+                "logIndex": 1,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-x",
+                "hookId": "birth.one#ENTER",
+                "stageIdentifier": "birth.one",
+                "hookName": "ENTER"
+            }),
+            // 普通事务：K2 是另一条出生线的事实。链上跳过 H2，不发任何
+            // 观察——oracle 也不得推 H2。
+            json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": 4,
+                "logIndex": 0,
+                "transactionHash": "0x04",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-x",
+                "sourceId": "0x31",
+                "signalId": "0x41",
+                "signalKey": "0x51",
+                "senderId": "relayer",
+                "submittedAt": "2026-04-27T00:00:20.000Z"
+            }),
+        ];
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result["mismatches"].as_array().map(Vec::len),
+            Some(0),
+            "ordinary signals must not advance order-trigger hooks: {}",
+            result["mismatches"]
+        );
+        let order = &result["state"]["orders"]["0x01::order-x"];
+        assert_eq!(order["hookStatuses"]["birth.two#ENTER"], json!(null));
+        assert_eq!(order["materializedStages"]["birth.two"], json!(null));
+        assert_eq!(order["materializedStages"]["birth.one"], true);
+    }
+
+    #[test]
+    fn order_link_born_orders_take_ordinary_signals_only() {
+        // order-link 出生不 _recordSignal：OrderTriggered 事务内没有信号，
+        // 订单后续收到的第一条信号已是普通信号——不是出生通道，不得推进
+        // 其它 mint hook。出生断言本身仍由 mint-only 推导门（HookReady 反
+        // 推 H1）承载。
+        let plan = json!({
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "compiledHooks": [
+                {
+                    "hookId": "birth.one#ENTER",
+                    "stageId": "birth.one",
+                    "stageIdentifier": "birth.one",
+                    "hookName": "ENTER",
+                    "orderTriggerKind": "mint",
+                    "emitReady": true,
+                    "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                },
+                {
+                    "hookId": "birth.two#ENTER",
+                    "stageId": "birth.two",
+                    "stageIdentifier": "birth.two",
+                    "hookName": "ENTER",
+                    "orderTriggerKind": "mint",
+                    "emitReady": true,
+                    "instructions": [{"op": "SIGNAL", "signalKey": "0x51"}]
+                }
+            ],
+            "dependencyIndex": {
+                "0x50": ["birth.one#ENTER"],
+                "0x51": ["birth.two#ENTER"]
+            }
+        });
+        let events = vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": plan
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-y",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }),
+            // order-link 出生：OrderTriggered + HookReady 同事务、无信号。
+            json!({
+                "eventName": "OrderTriggered",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "orderId": "order-y",
+                "triggerStageId": "birth.one",
+                "triggerHookId": "birth.one#ENTER",
+                "sourceId": "0x30",
+                "signalId": "0x40",
+                "submitter": "relayer"
+            }),
+            json!({
+                "eventName": "HookReady",
+                "blockNumber": 3,
+                "logIndex": 1,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-y",
+                "hookId": "birth.one#ENTER",
+                "stageIdentifier": "birth.one",
+                "hookName": "ENTER"
+            }),
+            // 订单的首条信号（K2）在 OrderTriggered 事务之外到达：普通信
+            // 号，H2 不被推进；链上也不发观察。
+            json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": 4,
+                "logIndex": 0,
+                "transactionHash": "0x04",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-y",
+                "sourceId": "0x31",
+                "signalId": "0x41",
+                "signalKey": "0x51",
+                "senderId": "relayer",
+                "submittedAt": "2026-04-27T00:00:20.000Z"
+            }),
+        ];
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result["mismatches"].as_array().map(Vec::len),
+            Some(0),
+            "order-link born orders take ordinary signals only: {}",
+            result["mismatches"]
+        );
+        let order = &result["state"]["orders"]["0x01::order-y"];
+        assert_eq!(order["hookStatuses"]["birth.two#ENTER"], json!(null));
+        assert_eq!(order["materializedStages"]["birth.two"], json!(null));
+    }
+
+    #[test]
+    fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
+        // 合约 _evaluateHook 对 wait→wait 仅 dueAt 变化也重复发
+        // HookStatusChanged（previousDueAt != nextDueAt 即发）：OR 最早到期
+        // 分支后到会把 due 前移。expected 吸收门只吸收"同 status 同 dueAt"
+        // 的重复，observed 在 dueAt 变化时照常重发——两条 wait 观察按到达
+        // 序配对，不得误报 semantic-mismatch。
+        let plan = json!({
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "compiledHooks": [{
+                "hookId": "flow.pay#TIMEOUT",
+                "stageId": "flow.pay",
+                "stageIdentifier": "flow.pay",
+                "hookName": "TIMEOUT",
+                "orderTriggerKind": "none",
+                "emitReady": true,
+                "instructions": [
+                    {"op": "SIGNAL", "signalKey": "0x50"},
+                    {"op": "DELAY", "delaySeconds": 30},
+                    {"op": "SIGNAL", "signalKey": "0x51"},
+                    {"op": "DELAY", "delaySeconds": 5},
+                    {"op": "OR", "arity": 2}
+                ]
+            }],
+            "dependencyIndex": {
+                "0x50": ["flow.pay#TIMEOUT"],
+                "0x51": ["flow.pay#TIMEOUT"]
+            }
+        });
+        let events = vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": plan
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-w",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "StageMaterialized",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "orderId": "order-w",
+                "stageId": "flow.pay"
+            }),
+            json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": 4,
+                "logIndex": 0,
+                "transactionHash": "0x04",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-w",
+                "sourceId": "0x30",
+                "signalId": "0x40",
+                "signalKey": "0x50",
+                "senderId": "executor",
+                "submittedAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "HookStatusChanged",
+                "blockNumber": 4,
+                "logIndex": 1,
+                "transactionHash": "0x04",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-w",
+                "hookId": "flow.pay#TIMEOUT",
+                "status": "wait",
+                "dueAt": "2026-04-27T00:00:30.000Z"
+            }),
+            // 第二条事实在 00:00:10 到达：OR 最早到期前移到 00:00:15——
+            // 仅 dueAt 变化，合约重复发 wait 观察。
+            json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": 5,
+                "logIndex": 0,
+                "transactionHash": "0x05",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-w",
+                "sourceId": "0x31",
+                "signalId": "0x41",
+                "signalKey": "0x51",
+                "senderId": "executor",
+                "submittedAt": "2026-04-27T00:00:10.000Z"
+            }),
+            json!({
+                "eventName": "HookStatusChanged",
+                "blockNumber": 5,
+                "logIndex": 1,
+                "transactionHash": "0x05",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-w",
+                "hookId": "flow.pay#TIMEOUT",
+                "status": "wait",
+                "dueAt": "2026-04-27T00:00:15.000Z"
+            }),
+        ];
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result["mismatches"].as_array().map(Vec::len),
+            Some(0),
+            "dueAt-only wait re-emissions must pair cleanly: {}",
+            result["mismatches"]
+        );
+        assert_eq!(result["expected"].as_array().map(Vec::len), Some(2));
+        assert_eq!(result["observed"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
     fn poke_before_due_or_not_waiting_is_skipped() {
         // 对齐合约 pokeTimer：非 wait / 未到期的 poke 直接跳过，不产生
         // unexpected-observed 假阳性；到期后重评照常发生。
@@ -1929,7 +2352,7 @@ mod tests {
             value: true,
             wait: false,
             cancel: false,
-            due_at: 0,
+            due_at: None,
             anchor_at: Some(i64::MAX),
         };
         let error = delay_value(anchored, 30 * 24 * 60 * 60, "2026-04-27T00:00:00Z").unwrap_err();
@@ -3015,7 +3438,7 @@ mod tests {
         let delayed = delay_value(anchored, 10, "1970-01-01T00:00:05.000Z")
             .expect("epoch-0 anchor must be usable by DELAY");
         assert!(delayed.wait);
-        assert_eq!(delayed.due_at, 10);
+        assert_eq!(delayed.due_at, Some(10));
 
         // 无锚伪就绪 + DELAY：结构性错误照旧（哨兵区分不改变该拒绝面）。
         let not_ready = not_value(false_value());
@@ -3028,5 +3451,166 @@ mod tests {
                 .contains("DELAY requires a positively anchored operand"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn non_positive_delay_seconds_is_rejected_at_replay_decode() {
+        // 回放解码镜像合约注册门（delaySeconds == 0 revert
+        // InvalidInstruction）与在线入口（uvp-hook-dsl 解码层 positive 门）：
+        // 手工 plan 的 0 值延时恒等、负值回拨锚点，都是确定性非法输入。
+        let anchored = EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: None,
+            anchor_at: Some(1000),
+        };
+        for delay_seconds in [0i64, -3] {
+            let error = delay_value(anchored, delay_seconds, "2026-04-27T00:00:00Z").unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("DELAY delaySeconds must be positive"),
+                "delaySeconds={delay_seconds}: {error}"
+            );
+        }
+        // 指令流入口同口径：SIGNAL + DELAY(0) 在 evaluate_instructions
+        // 响亮失败，不产出"恒等延时"的观察。
+        let instructions = vec![
+            json!({"op": "SIGNAL", "signalKey": "0x50"}),
+            json!({"op": "DELAY", "delaySeconds": 0}),
+        ];
+        let error = evaluate_instructions(
+            &OracleOrderState::default(),
+            &instructions,
+            "2026-04-27T00:00:00Z",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("DELAY delaySeconds must be positive"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn epoch_zero_due_is_persisted_and_poke_eligible() {
+        // due_at 的显式存在性口径：epoch 0 的等待期限必须照常渲染并让
+        // poke 资格闸放行——旧 0 哨兵把 due 折成 None，等待行永久脱离
+        // poke 认领。锚点取 1969-12-31T23:59:55Z + 5s 延时 → due 恰为
+        // epoch 0。
+        let events = vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": {
+                    "planId": "0x01",
+                    "zhixuId": "demo",
+                    "compiledHooks": [{
+                        "hookId": "flow.start#WAIT",
+                        "stageId": "flow.start",
+                        "stageIdentifier": "flow.start",
+                        "hookName": "WAIT",
+                        "orderTriggerKind": "none",
+                        "emitReady": true,
+                        "instructions": [
+                            {"op": "SIGNAL", "signalKey": "0x50"},
+                            {"op": "DELAY", "delaySeconds": 5}
+                        ]
+                    }],
+                    "dependencyIndex": { "0x50": ["flow.start#WAIT"] }
+                }
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-1",
+                "registeredAt": "1969-12-31T23:59:50.000Z"
+            }),
+            json!({
+                "eventName": "SignalSubmitted",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-1",
+                "sourceId": "0x30",
+                "signalId": "0x40",
+                "signalKey": "0x50",
+                "senderId": "seller",
+                "submittedAt": "1969-12-31T23:59:55.000Z"
+            }),
+            json!({
+                "eventName": "HookStatusChanged",
+                "blockNumber": 3,
+                "logIndex": 1,
+                "transactionHash": "0x03",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-1",
+                "hookId": "flow.start#WAIT",
+                "status": "wait",
+                "dueAt": "1970-01-01T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "TimerPoked",
+                "blockNumber": 4,
+                "logIndex": 0,
+                "transactionHash": "0x04",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-1",
+                "hookId": "flow.start#WAIT",
+                "pokedAt": "1970-01-01T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "HookReady",
+                "blockNumber": 4,
+                "logIndex": 1,
+                "transactionHash": "0x04",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-1",
+                "hookId": "flow.start#WAIT",
+                "stageIdentifier": "flow.start",
+                "hookName": "WAIT"
+            }),
+        ];
+        let result = replay_chain_events(
+            events,
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result["mismatches"].as_array().map(Vec::len),
+            Some(0),
+            "epoch-0 due must replay without mismatch: {}",
+            result["mismatches"]
+        );
+        // wait 观察携带渲染后的 epoch-0 dueAt（不是缺席）。
+        let observed = result["observed"].as_array().unwrap();
+        let wait = observed
+            .iter()
+            .find(|item| item["status"] == "wait")
+            .expect("wait observation with the epoch-0 dueAt");
+        assert_eq!(wait["dueAt"], "1970-01-01T00:00:00.000Z");
+        // epoch 0 的 poke 合资格：重评后就绪。
+        assert!(
+            observed.iter().any(|item| item["eventName"] == "HookReady"),
+            "poke at epoch 0 must make the hook ready: {observed:?}"
+        );
+        let order = &result["state"]["orders"]["0x01::order-1"];
+        assert_eq!(order["hookStatuses"]["flow.start#WAIT"]["status"], "ready");
     }
 }

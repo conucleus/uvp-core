@@ -389,20 +389,33 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             let source = target_object
                 .get("source")
                 .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
+                .filter(|value| !value.trim().is_empty());
             let signal = target_object
                 .get("signal")
                 .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            match (source, signal) {
-                (Some(source), Some(signal)) => (source.to_string(), signal.to_string()),
+                .filter(|value| !value.trim().is_empty());
+            let (source, signal) = match (source, signal) {
+                (Some(source), Some(signal)) => (source, signal),
                 _ => return Err(HookError::Message(
                     "compiled subscription hook AST is missing subscriptionTarget.source/.signal"
                         .to_string(),
                 )),
+            };
+            // 与 root 订阅节点（expr_from_cloud_value）同口径按原文校验：
+            // trim 只用于"缺失"判定，身份闸吃原文——先 trim 再校验会把
+            // " seller" 洗白成 "seller"，架空身份闸并骗过下方与 root 的
+            // 一致性比对（毒身份经归一后放行）。
+            if !is_plain_identifier(source) || source.len() > 36 {
+                return Err(HookError::Message(format!(
+                    "compiled subscriptionTarget source must be a plain identifier of at most 36 characters: {source:?}"
+                )));
             }
+            if !valid_signal_identity(signal) {
+                return Err(HookError::Message(format!(
+                    "compiled subscriptionTarget signal must use task.stage.signal and be at most 100 characters: {signal:?}"
+                )));
+            }
+            (source.to_string(), signal.to_string())
         } else {
             if ast_object.contains_key("subscriptionTarget") {
                 return Err(HookError::Message(
@@ -413,11 +426,16 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         };
     let now = parse_time(&req.now, req.profile)?;
     // 订阅钩子标头恒为空：投递目标由阶段静态执行器决定，路由由接收方锚定
-    // 状态与对接记录裁决，因此仅 subscription 模式允许空 source。
-    let raw_source = req.ast.get("source").and_then(Value::as_str).map(str::trim);
+    // 状态与对接记录裁决，因此仅 subscription 模式允许空 source。字段类型
+    // 与 mint/route 同走 optional_ast_str 纪律：在场且非字符串（含布尔/
+    // 数字/对象）确定性报错，None/null 视为空——订阅模式下非字符串 source
+    // 被 `and_then(as_str)` 吞成 None 再折成 "" 放行，是毒 AST 的静默通道。
+    let raw_source = optional_ast_str(ast_object, "source")?;
     let source = match mode {
         "subscription" => {
-            if !raw_source.unwrap_or_default().is_empty() {
+            // 按原文判空：纯空白串不是编译器产出的空 source，而是毒值，
+            // 不做 trim 归一后放行。
+            if !raw_source.is_empty() {
                 return Err(HookError::Message(
                     "compiled subscription hook AST source must be empty".to_string(),
                 ));
@@ -425,16 +443,17 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             String::new()
         }
         _ => {
-            let source = raw_source
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| {
-                    HookError::Message("compiled hook AST is missing source".to_string())
-                })?;
+            if raw_source.trim().is_empty() {
+                return Err(HookError::Message(
+                    "compiled hook AST is missing source".to_string(),
+                ));
+            }
+            let source = raw_source.to_string();
             // 与解析期标头校验同口径（plain identifier ≤36，编译期上限严于
-            // 落库列宽 source_zhixu_id VARCHAR(64)）：
-            // 毒 source 解码期确定性拒绝，而不是成为永不匹配任何事实键的
-            // source 维度。
+            // 落库列宽 source_zhixu_id VARCHAR(64)），且与节点层身份闸同样
+            // 吃原文（trim 只用于缺失判定）：毒 source（" buyer"）解码期
+            // 确定性拒绝，而不是被 trim 洗白放行、或成为永不匹配任何事实
+            // 键的 source 维度。
             if !is_plain_identifier(&source) || source.len() > 36 {
                 return Err(HookError::Message(format!(
                     "compiled hook AST source must be a plain identifier of at most 36 characters: {source:?}"
@@ -1098,6 +1117,38 @@ fn extract_dependencies(hook: &HookExpr, _profile: Profile) -> Vec<Dependency> {
     dedupe_dependencies(deps)
 }
 
+/// 收集延时操作数子树内的全部正向事实锚点，及其"从操作数根到该事实的
+/// 累计延时"（路径上 Delay 节点的时长之和）。延时节点自身的 timer 依赖
+/// 由 collect_dependencies 的 Delay 分支产出；此处只为外层延时计算
+/// "操作数成熟时刻距事实到达的偏移"。否定子树不产生正向锚（与
+/// validate_anchors 的口径一致：延时要求正锚）。
+fn collect_positive_anchors(
+    expr: &Expr,
+    source: &str,
+    offset: i64,
+    out: &mut Vec<(String, String, i64)>,
+) {
+    match expr {
+        Expr::Signal(signal) => out.push((source.to_string(), signal.clone(), offset)),
+        // 解析期位置约束下订阅不可出现在延时操作数内；按 Signal 同形处理
+        // 保持与正向依赖收集同口径。
+        Expr::Subscription { source, target } => {
+            out.push((source.clone(), target.clone(), offset));
+        }
+        Expr::Not(_) => {}
+        Expr::Delay {
+            expr,
+            duration_seconds,
+            ..
+        } => collect_positive_anchors(expr, source, offset + duration_seconds, out),
+        Expr::And(terms) | Expr::Or(terms) => {
+            for term in terms {
+                collect_positive_anchors(term, source, offset, out);
+            }
+        }
+    }
+}
+
 fn collect_dependencies(expr: &Expr, source: &str, negated: bool, out: &mut Vec<Dependency>) {
     match expr {
         Expr::Signal(signal) => out.push(Dependency {
@@ -1126,17 +1177,20 @@ fn collect_dependencies(expr: &Expr, source: &str, negated: bool, out: &mut Vec<
         } => {
             collect_dependencies(expr, source, negated, out);
             if !negated {
-                let mut inner = Vec::new();
-                collect_dependencies(expr, source, false, &mut inner);
-                for dep in inner
-                    .into_iter()
-                    .filter(|dep| dep.kind == DependencyKind::Positive)
-                {
+                // 链式延时的外层 timer 必须基于内层到期累计：(A+5s)+10s 的
+                // 真实到期是 A+15s——只按本层时长出 timer(A,10s) 会把最终
+                // 到期低估一个内层延时。内层延时节点自己的 timer（如
+                // timer(A,5s) 的中间 poke 期限）由上方递归照常产出，与求值
+                // 器的分段等待口径一致（内层到期前上浮内层 due，poke 后
+                // 本层再按自身时长推进）。
+                let mut inner_anchors = Vec::new();
+                collect_positive_anchors(expr, source, 0, &mut inner_anchors);
+                for (anchor_source, signal_name, inner_offset) in inner_anchors {
                     out.push(Dependency {
                         kind: DependencyKind::Timer,
-                        source: dep.source,
-                        signal_name: dep.signal_name,
-                        delay_seconds: Some(*duration_seconds),
+                        source: anchor_source,
+                        signal_name,
+                        delay_seconds: Some(inner_offset + duration_seconds),
                     });
                 }
             }
@@ -3392,6 +3446,196 @@ mod tests {
             err.to_string()
                 .contains("subscription entries must use an empty source header"),
             "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn top_level_source_identity_is_validated_on_the_raw_text() {
+        // 解码层身份闸吃原文（trim 只用于缺失判定）：与节点层
+        // expr_from_cloud_value 同口径。" buyer" 经 trim 洗白后通过身份闸，
+        // 是被架空的毒身份通道——两侧必须在同一原文上拒绝。
+        let ast_with_root = |root: Value, source: Value| {
+            json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": source,
+                "mode": "normal",
+                "root": root
+            })
+        };
+        for source in [
+            json!(" buyer"),
+            json!("buyer "),
+            json!("buy er"),
+            json!(5),
+            json!(true),
+        ] {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast: ast_with_root(json!({ "type": "signal", "signal": "task.main.cmp" }), source.clone()),
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("plain identifier of at most 36")
+                    || message.contains("must be a string"),
+                "poison source {source:?}: {message}"
+            );
+        }
+        // null 与缺席等同（Go 零值解码同口径）：normal 模式按缺失拒绝。
+        let err = eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            ast: ast_with_root(
+                json!({ "type": "signal", "signal": "task.main.cmp" }),
+                Value::Null,
+            ),
+            signals: vec![],
+            now: "2026-04-27T00:00:00Z".to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("missing source"),
+            "null source: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn subscription_mode_rejects_non_string_and_whitespace_source() {
+        // 订阅模式标头恒空：非字符串 source 不得被 as_str 吞成 None 再折
+        // 成 "" 放行（毒 AST 的静默通道）；纯空白串也不是编译器产出的空
+        // source，按原文非空拒绝，不做 trim 归一。
+        let subscription_ast = |source: Value| {
+            json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": source,
+                "mode": "subscription",
+                "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+                "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+            })
+        };
+        for source in [json!(5), json!(" "), json!("\tbuyer")] {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast: subscription_ast(source.clone()),
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("must be a string") || message.contains("must be empty"),
+                "poison subscription source {source:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
+        // subscriptionTarget.source/signal 与 root 订阅节点同口径按原文校验：
+        // 先 trim 再比对会让 " seller" 折叠成 "seller" 骗过一致性检查。
+        let target_ast = |target: Value| {
+            json!({
+                "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+                "source": "",
+                "mode": "subscription",
+                "subscriptionTarget": target,
+                "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+            })
+        };
+        for target in [
+            json!({ "source": " seller", "signal": "trade.listing.cmp" }),
+            json!({ "source": "seller ", "signal": "trade.listing.cmp" }),
+            json!({ "source": "has space", "signal": "trade.listing.cmp" }),
+            json!({ "source": "seller", "signal": " trade.listing.cmp" }),
+            json!({ "source": "seller", "signal": "listing.cmp" }),
+        ] {
+            let err = eval_compiled_hook(EvalCompiledHookRequest {
+                profile: Profile::CloudCompat,
+                ast: target_ast(target.clone()),
+                signals: vec![],
+                now: "2026-04-27T00:00:00Z".to_string(),
+            })
+            .unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("plain identifier of at most 36")
+                    || message.contains("task.stage.signal")
+                    || message.contains("does not match"),
+                "poison subscriptionTarget {target:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn chained_delay_timers_accumulate_inner_expiry() {
+        // 链式延时口径：(A+5s)+10s 的外层 timer 必须按内层到期累计——
+        // timer(A,15) 是最终到期；timer(A,5) 是内层延时自己的中间 poke
+        // 期限（与求值器分段等待语义一致），不再产出低估的 timer(A,10)。
+        let out = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "NESTED".to_string(),
+            hook: "buyer::(task.a.cmp +5s) +10s".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            out.dependencies,
+            vec![
+                Dependency {
+                    kind: DependencyKind::Positive,
+                    source: "buyer".to_string(),
+                    signal_name: "task.a.cmp".to_string(),
+                    delay_seconds: None,
+                },
+                Dependency {
+                    kind: DependencyKind::Timer,
+                    source: "buyer".to_string(),
+                    signal_name: "task.a.cmp".to_string(),
+                    delay_seconds: Some(5),
+                },
+                Dependency {
+                    kind: DependencyKind::Timer,
+                    source: "buyer".to_string(),
+                    signal_name: "task.a.cmp".to_string(),
+                    delay_seconds: Some(15),
+                },
+            ]
+        );
+
+        // 三层链：((A+1s)+2s)+3s → 中间期限 1、3，最终到期 6。
+        let out = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "CHAIN".to_string(),
+            hook: "buyer::((task.a.cmp +1s) +2s) +3s".to_string(),
+        })
+        .unwrap();
+        let timers = out
+            .dependencies
+            .iter()
+            .filter(|dep| dep.kind == DependencyKind::Timer)
+            .map(|dep| dep.delay_seconds.unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(timers, vec![1, 3, 6]);
+
+        // 否定子树不产生 timer 锚：(A & ~B)+5s 只对 A 出 timer。
+        let out = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "GUARD".to_string(),
+            hook: "buyer::(task.a.cmp & ~task.b.cmp) +5s".to_string(),
+        })
+        .unwrap();
+        let timers = out
+            .dependencies
+            .iter()
+            .filter(|dep| dep.kind == DependencyKind::Timer)
+            .map(|dep| (dep.signal_name.clone(), dep.delay_seconds.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            timers,
+            vec![("task.a.cmp".to_string(), 5)],
+            "negated operands must not anchor timers: {:?}",
+            out.dependencies
         );
     }
 }

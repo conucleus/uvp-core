@@ -358,7 +358,16 @@ pub fn parse_zhixu_executor_config(
             ));
             continue;
         }
-        if !stage.send_signals.contains(signal_name) {
+        // D006 存在性与引用面同口径：按展开后的全名比较（crate::
+        // declares_signal_expanding_to）——裸名 key 展开为
+        // <task>.<stage>.<key>，canonical 显式自指声明的信号即可被裸名
+        // key 引用命中；裸名精确匹配会把 canonical 声明判成"声明即不可
+        // 投递"。
+        if !crate::declares_signal_expanding_to(
+            &stage.send_signals,
+            stage_identifier,
+            &format!("{stage_identifier}.{signal_name}"),
+        ) {
             issues.push(DockIssue::new(
                 "D006",
                 format!("{path}.signalMap.{signal_name}"),
@@ -831,7 +840,16 @@ pub fn compile_dock_interface(
                 ));
                 continue;
             }
-            if !stage.send_signals.contains(&signal_name) {
+            // D014 的存在性按展开后的全名统一比较（crate::
+            // declares_signal_expanding_to）：裸名声明展开为
+            // <task>.<stage>.<signal>，canonical 三段式（强制自指）本身即
+            // 全名——只比第三段会把 canonical 声明误判为悬空引用。
+            let full_signal_name = format!("{stage_identifier}.{signal_name}");
+            if !crate::declares_signal_expanding_to(
+                &stage.send_signals,
+                &stage_identifier,
+                &full_signal_name,
+            ) {
                 issues.push(DockIssue::new(
                     "D014",
                     format!("{path}.signal"),
@@ -1512,15 +1530,23 @@ pub fn link_dock_routes(
             });
         }
 
-        // D012：被绑定接口同一 source seam——双侧同口径：
-        // input 侧从接口声明的 input 端口 source 观测（被绑定接口的全部
-        // input 端口都参与：它们是同一接缝的投递邮箱），output 侧从
-        // route-bound 输出端口的 canonical signal 前缀观测。两侧并集必须
-        // 恰好一个 seam——input 端口 source 与接口 seam 不一致（跨源寻址）
-        // 在此编译期拒绝。
+        // D012：被绑定接口同一 source seam——双侧同口径、双侧都只看本
+        // route 实际绑定的端口（文法 §8.4/规格 §2.4：seam 是"同一条 route
+        // 引用的全部 input/output 端口"必须来自的同一个目标 source）：
+        // input 侧从 route 绑定的 input 端口 source 观测，output 侧从
+        // route 绑定的输出端口 canonical signal 前缀观测。接口声明但未被
+        // 本 route 绑定的端口不属于这条执行通道（可由其他 route 另行
+        // 绑定），不得参与 seam。两侧并集必须恰好一个 seam——绑定端口
+        // 跨源寻址在此编译期拒绝。
         let mut seams = BTreeSet::new();
-        for input in &interface.inputs {
-            seams.insert(input.source.clone());
+        for input in &resolved_inputs {
+            if let Some(port) = interface
+                .inputs
+                .iter()
+                .find(|port| port.port == input.target_port)
+            {
+                seams.insert(port.source.clone());
+            }
         }
         for output in &resolved_outputs {
             if let Some(port) = interface
@@ -1538,7 +1564,7 @@ pub fn link_dock_routes(
                 "D012",
                 &path,
                 format!(
-                    "the bound interface must expose a single target source seam across input port sources and route-bound output signal prefixes, found {seams:?}"
+                    "the bound interface must expose a single target source seam across route-bound input port sources and route-bound output signal prefixes, found {seams:?}"
                 ),
             ));
             issues.extend(route_issues);
@@ -1882,9 +1908,11 @@ mod tests {
         link_dock_routes("local", &unlinked, &manifest)
             .expect("single-seam interface on both sides links");
 
-        // input 侧内部跨源：两个 input 端口来自不同 source 类（被绑定接口
-        // 的全部 input 端口都参与 seam 观测，无需被本 route 逐个绑定）。
-        let inputs_cross = json!({
+        // 未绑定的跨源 input 端口不参与 seam（文法 §8.4：seam 只覆盖本
+        // route 引用的端口）：接口另有一个 beta 源端口，但本 route 只绑定
+        // execute——照常链接。旧行为（被绑定接口的全部 input 端口都参与
+        // 观测）会把该形态误拒。
+        let unbound_cross = json!({
             "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
             "definitions": [{
                 "name": "target_def",
@@ -1899,8 +1927,28 @@ mod tests {
                 }],
             }]
         });
-        let manifest = parse_resolution_manifest(&inputs_cross).unwrap();
-        let issues = link_dock_routes("local", &unlinked, &manifest).unwrap_err();
+        let manifest = parse_resolution_manifest(&unbound_cross).unwrap();
+        link_dock_routes("local", &unlinked, &manifest)
+            .expect("unbound cross-source input port must not join the seam");
+
+        // route 绑定的两个 input 端口跨源（existing 模式允许 0..N 条 input
+        // 绑定）：同一执行通道内混入两个 source 类，D012 拒绝。
+        let inputs_cross_unlinked = vec![UnlinkedDockRoute {
+            stage_identifier: "local.stage".to_string(),
+            stage_source: "local-src".to_string(),
+            config: ZhixuExecutorConfig {
+                target_name: Some("target_def".to_string()),
+                interface_name: "svc".to_string(),
+                order_mode: ORDER_MODE_EXISTING.to_string(),
+                input_map: BTreeMap::from([
+                    ("ENTER".to_string(), "execute".to_string()),
+                    ("AUDIT".to_string(), "audit".to_string()),
+                ]),
+                signal_map: BTreeMap::new(),
+            },
+        }];
+        let manifest = parse_resolution_manifest(&unbound_cross).unwrap();
+        let issues = link_dock_routes("local", &inputs_cross_unlinked, &manifest).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D012"
                 && issue.message.contains("input port sources")

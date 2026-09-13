@@ -444,6 +444,12 @@ fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     if definition.spec.platform.platform_type.trim().is_empty() {
         issues.push("spec.platform must be an object with a non-empty type".to_string());
     }
+    // 文法两册 §2.2 都声明 spec.nucleation.id 必填：字段缺失由 serde 必填
+    // 闸拒绝，此处钉住空白值——与 stage.source 的非空白闸同纪律（空白 id
+    // 是确定性非法输入，不 trim 归一放行；该字段同时作用于云/链两轨）。
+    if definition.spec.nucleation.id.trim().is_empty() {
+        issues.push("spec.nucleation.id must be non-empty".to_string());
+    }
     if definition.spec.task_patterns.is_empty() {
         issues.push("spec.taskPatterns must contain at least one task pattern".to_string());
     }
@@ -1159,7 +1165,11 @@ fn validate_hook_dependency_references(
             ));
             continue;
         }
-        if !referenced_stage.stage.send_signals.contains(&signal_name) {
+        if !declares_signal_expanding_to(
+            &referenced_stage.stage.send_signals,
+            &referenced_stage.stage_identifier,
+            &dependency.signal_name,
+        ) {
             // 目标 stage 未声明 sendSignals 时任何引用都是悬空引用：文档要求
             // 引用存在，放行会把死依赖从编译期推迟为运行期静默 init。
             issues.push(format!(
@@ -1168,6 +1178,29 @@ fn validate_hook_dependency_references(
         }
     }
     issues
+}
+
+/// sendSignals 声明是否展开为给定的全名（task.stage.signal）：裸名展开为
+/// 声明阶段前缀 + 信号名；canonical 三段式（强制自指，见
+/// parse_signal_capability）本身就是全名。引用存在性（本函数）、
+/// capability 去重与 D014 一律按展开后的全名统一比较——只比第三段会把
+/// canonical 声明判成悬空引用（"声明即死"）。`<target>::<signal>`
+/// triggerOrigin 声明不参与该比较：它声明的是跨源触发能力（relation=1，
+/// 合约消费），不是本阶段 current 事实。
+pub(crate) fn declares_signal_expanding_to(
+    send_signals: &[String],
+    stage_identifier: &str,
+    full_signal_name: &str,
+) -> bool {
+    send_signals.iter().any(|declared| {
+        if declared.contains("::") {
+            return false;
+        }
+        if declared == full_signal_name {
+            return true;
+        }
+        !declared.contains('.') && format!("{stage_identifier}.{declared}") == full_signal_name
+    })
 }
 
 fn parse_signal_reference(signal_name: &str) -> Option<(String, String)> {
@@ -1409,6 +1442,15 @@ fn build_dependency_index(compiled_hooks: &[Value]) -> Value {
 fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     let mut capabilities = Vec::new();
     let mut seen = BTreeSet::new();
+    // E16 镜像（合约 UVPPlanMetadataModule._registerSignalCapabilities 的
+    // DuplicateCurrentOrderSignalCapability / TS onchain-hook-plan 的
+    // duplicateCurrentOrderFactKeyIssues）：relation=current 的事实键
+    // (targetSource, targetSignalName) 在 plan 内唯一属主——跨阶段双属主
+    // 会让链上 _currentOrderFactStages 后写覆盖先写、_signalStageId 归属
+    // 二义，注册边界 revert；编译期按同一展开后的全名同口径拒绝。
+    // triggerOrigin（relation=1）不在此列：合约与 TS 预检都允许跨阶段
+    // 声明同一触发源能力。
+    let mut current_order_owners: BTreeMap<(String, String), String> = BTreeMap::new();
     for entry in entries {
         for declared_signal in &entry.stage.send_signals {
             let capability = parse_signal_capability(entry, declared_signal)?;
@@ -1424,6 +1466,21 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
                     "{}.sendSignals contains duplicate capability {}",
                     entry.stage_identifier, declared_signal
                 )));
+            }
+            if value_str(&capability, "targetOrderRelation") == "current" {
+                let fact_key = (
+                    value_str(&capability, "targetSource").to_string(),
+                    value_str(&capability, "targetSignalName").to_string(),
+                );
+                if let Some(owner) = current_order_owners.get(&fact_key) {
+                    if *owner != entry.stage_identifier {
+                        return Err(CompilerError::Issues(format!(
+                            "{}.sendSignals declares the current-order fact key ({}, {}) already owned by {}: one capability has one owner (UVPPlanMetadataModule reverts DuplicateCurrentOrderSignalCapability at finalizePlan; declare the fact key on a single stage)",
+                            entry.stage_identifier, fact_key.0, fact_key.1, owner
+                        )));
+                    }
+                }
+                current_order_owners.insert(fact_key, entry.stage_identifier.clone());
             }
             capabilities.push(capability);
         }
@@ -1484,6 +1541,17 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<
             return Err(CompilerError::Issues(format!(
                 "{}.sendSignals contains invalid canonical signal {:?}: expected task.stage.signal with identifier-grammar segments",
                 entry.stage_identifier, declared_signal
+            )));
+        }
+        // 三段式只是显式自指形态：task.stage 前缀必须落在声明阶段自身。
+        // 指向别处命名空间的 canonical 声明会与目标阶段的裸名声明展开成
+        // 同一 (targetSource, signal) capability——双属主绕过"一事一能力"，
+        // 链上 _signalStageId 归属二义（E16 注册边界 revert
+        // DuplicateCurrentOrderSignalCapability），编译期同口径拒绝。
+        if !declared_signal.starts_with(&format!("{}.", entry.stage_identifier)) {
+            return Err(CompilerError::Issues(format!(
+                "{}.sendSignals contains canonical signal {:?} that does not address the declaring stage: expected {}.<signal> (the three-part form is an explicit self-reference; bare names expand to the same capability)",
+                entry.stage_identifier, declared_signal, entry.stage_identifier
             )));
         }
         declared_signal.to_string()
@@ -2191,6 +2259,46 @@ mod tests {
             error.to_string().contains("individual_record.signal_name"),
             "{}",
             error.to_string()
+        );
+    }
+
+    #[test]
+    fn signal_map_keys_match_expanded_full_signal_names() {
+        // D006 存在性与 D014/引用面同口径：按展开后的全名比较（crate::
+        // declares_signal_expanding_to）——裸名 key 展开为
+        // <task>.<stage>.<key>，canonical 显式自指声明的信号即可被裸名
+        // key 引用命中；裸名精确匹配会把 canonical 声明判成"声明即不可
+        // 投递"。
+        let target = target_payment_definition();
+        let manifest = manifest_for(&target);
+
+        // ① signalMap 裸名 key 引用 canonical 自指声明：key "str" 展开后与
+        // settlement.execute_payment.str 同一全名，链接照常。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] =
+            json!(["cmp", "err", "cxl", "settlement.execute_payment.str"]);
+        let plan = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+            .expect("canonical self-reference declaration must be deliverable via a bare signalMap key");
+        assert_eq!(
+            plan["dockRoutes"][0]["outputBindings"],
+            json!([
+                { "signal": "cmp", "port": "completed" },
+                { "signal": "err", "port": "failed" },
+                { "signal": "str", "port": "started" }
+            ])
+        );
+
+        // ② 展开后仍无主的 key：sendSignals 里的裸名 cmp 不展开成
+        // settlement.execute_payment.str，D006 悬空引用照拒。
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] = json!(["cmp", "err", "cxl"]);
+        let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+            .expect_err("dangling signalMap key must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("D006")
+                && message.contains("key is not a sendSignals signal of stage settlement.execute_payment"),
+            "{message}"
         );
     }
 
@@ -3333,6 +3441,113 @@ mod tests {
         assert!(
             !error.to_string().contains("duplicate capability"),
             "whitespace variant must fail on charset, not duplicate: {error}"
+        );
+    }
+
+    #[test]
+    fn canonical_send_signals_are_explicit_self_references() {
+        // 互锁修复：三段式 canonical 声明只是显式自指形态——前缀必须落在
+        // 声明阶段自身；引用存在性 / capability 去重 / D014 一律按展开后
+        // 的全名统一比较，canonical 声明不再"声明即死"。
+
+        // ① canonical 自指声明通过编译，settle 的裸名形态引用
+        // （payment::payment_flow.init.str）命中同一全名——修复前引用
+        // 校验只比第三段裸名，canonical 声明被判悬空引用。
+        let mut definition = target_payment_definition();
+        definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
+            json!(["payment_flow.init.str"]);
+        let plan = compile_zhixu_hook_plan(&definition, None, true)
+            .expect("canonical self-reference declaration compiles");
+        let capability = plan["signalCapabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|capability| capability["declaredSignal"] == json!("payment_flow.init.str"))
+            .expect("capability carries the canonical declaration");
+        assert_eq!(capability["targetSignalName"], json!("payment_flow.init.str"));
+        assert_eq!(capability["targetSource"], json!("payment"));
+        assert_eq!(capability["targetOrderRelation"], json!("current"));
+
+        // ② 双属主反例：阶段 A 裸名 + 阶段 B 三段式指向 A 的命名空间 →
+        // 相同 (targetSource, signal) capability 双属主（绕过一事一能力、
+        // 链上 _signalStageId 归属二义）——canonical 分支的前缀闸拒绝。
+        let mut dual = target_payment_definition();
+        dual["spec"]["taskPatterns"].as_array_mut().unwrap().push(json!({
+            "name": "mirror",
+            "stages": [{
+                "name": "echo",
+                "source": "payment",
+                "receiveSignals": { "GO": "payment::payment_flow.init.str" },
+                "sendSignals": ["payment_flow.init.str"],
+                "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+            }]
+        }));
+        let error = compile_zhixu_hook_plan(&dual, None, true)
+            .expect_err("canonical declaration addressing another stage must fail");
+        assert!(
+            error.to_string().contains("does not address the declaring stage"),
+            "unexpected error: {error}"
+        );
+        let error = compile_cloud_artifact(&dual, None, true)
+            .expect_err("cloud target must reject the same shape");
+        assert!(
+            error.to_string().contains("does not address the declaring stage"),
+            "cloud: {error}"
+        );
+
+        // ③ 裸名与自指 canonical 是同一 capability 的两种写法：同报
+        // duplicate（展开后的全名统一比较）。
+        let mut both = target_payment_definition();
+        both["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
+            json!(["str", "payment_flow.init.str"]);
+        let error = compile_zhixu_hook_plan(&both, None, true)
+            .expect_err("bare + canonical self-reference must collide");
+        assert!(
+            error.to_string().contains("duplicate capability"),
+            "unexpected error: {error}"
+        );
+
+        // ④ D014：输出端口引用 canonical 声明的信号按全名解析照常编译
+        // （target_payment_definition 的 started 端口即
+        // payment::payment_flow.init.str）。
+        let mut target = target_payment_definition();
+        target["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
+            json!(["payment_flow.init.str"]);
+        compile_zhixu_hook_plan(&target, None, true)
+            .expect("D014 resolves canonical declarations by expanded full name");
+    }
+
+    #[test]
+    fn nucleation_id_must_be_non_blank() {
+        // 文法两册 §2.2：spec.nucleation.id 必填——字段缺失由 serde 必填闸
+        // 拒绝（presence），空白值在此响亮拒绝（与 stage.source 同纪律，
+        // 不 trim 归一放行）；云/链两 target 同口径。
+        for blank in ["", "   ", "\t"] {
+            let mut definition = target_payment_definition();
+            definition["spec"]["nucleation"]["id"] = json!(blank);
+            let error = compile_zhixu_hook_plan(&definition, None, true)
+                .expect_err("blank nucleation.id must fail");
+            assert!(
+                error.to_string().contains("spec.nucleation.id must be non-empty"),
+                "unexpected error: {error}"
+            );
+            let error = compile_cloud_artifact(&definition, None, true)
+                .expect_err("cloud target must reject the same shape");
+            assert!(
+                error.to_string().contains("spec.nucleation.id must be non-empty"),
+                "cloud: {error}"
+            );
+        }
+        let mut missing = target_payment_definition();
+        missing["spec"]
+            .as_object_mut()
+            .unwrap()
+            .remove("nucleation");
+        let error = compile_zhixu_hook_plan(&missing, None, true)
+            .expect_err("missing nucleation must fail at the serde required-field gate");
+        assert!(
+            error.to_string().contains("nucleation"),
+            "unexpected error: {error}"
         );
     }
 
