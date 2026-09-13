@@ -15,7 +15,7 @@
 //! Hook 关系规则（L020–L022）在 `uvp-compiler` 层，因为只有编译层看得到
 //! Zhixu / Stage / hook 集合。跨 signal 业务公理（Layer 3）v1 完全不支持。
 
-use crate::{normalize_tight, Expr, HookError, Profile, SEMANTIC_VERSION};
+use crate::{ast::normalize_tight, Expr, HookError, Profile, SEMANTIC_VERSION};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -478,9 +478,9 @@ pub fn lint_hook_with_condition(
     hook_name: &str,
     hook: &str,
 ) -> Result<HookLintResult, LintError> {
-    crate::validate_hook_name(hook_name)?;
-    let (hook_expr, spans) = crate::parse_hook_expr_with_spans(hook)?;
-    crate::validate_hook(&hook_expr.condition)?;
+    crate::parser::validate_hook_name(hook_name)?;
+    let (hook_expr, spans) = crate::parser::parse_hook_expr_with_spans(hook)?;
+    crate::ast::validate_hook(&hook_expr.condition)?;
     let normalized_expression = format!(
         "{}::{}",
         hook_expr.source,

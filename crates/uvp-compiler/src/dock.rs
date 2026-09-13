@@ -178,7 +178,7 @@ pub fn parse_zhixu_executor_config(
             match target.get("zhixu").and_then(Value::as_str) {
                 Some(name) => {
                     let name = name.trim();
-                    if !crate::is_name_slug(name) {
+                    if !crate::validate::is_name_slug(name) {
                         issues.push(DockIssue::new(
                             "D003",
                             format!("{path}.target.zhixu"),
@@ -363,7 +363,7 @@ pub fn parse_zhixu_executor_config(
         // <task>.<stage>.<key>，canonical 显式自指声明的信号即可被裸名
         // key 引用命中；裸名精确匹配会把 canonical 声明判成"声明即不可
         // 投递"。
-        if !crate::declares_signal_expanding_to(
+        if !crate::validate::declares_signal_expanding_to(
             &stage.send_signals,
             stage_identifier,
             &format!("{stage_identifier}.{signal_name}"),
@@ -845,7 +845,7 @@ pub fn compile_dock_interface(
             // <task>.<stage>.<signal>，canonical 三段式（强制自指）本身即
             // 全名——只比第三段会把 canonical 声明误判为悬空引用。
             let full_signal_name = format!("{stage_identifier}.{signal_name}");
-            if !crate::declares_signal_expanding_to(
+            if !crate::validate::declares_signal_expanding_to(
                 &stage.send_signals,
                 &stage_identifier,
                 &full_signal_name,
@@ -1026,7 +1026,7 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
             ));
             continue;
         }
-        if !crate::is_name_slug(&name) {
+        if !crate::validate::is_name_slug(&name) {
             issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.name"),
@@ -1075,7 +1075,7 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
                         .unwrap_or_default()
                         .trim()
                         .to_string();
-                    if !crate::is_name_slug(&edge_target) {
+                    if !crate::validate::is_name_slug(&edge_target) {
                         issues.push(DockIssue::new(
                             "D008",
                             format!("{edge_path}.target"),
