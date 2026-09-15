@@ -15,7 +15,7 @@
 //! Hook 关系规则（L020–L022）在 `uvp-compiler` 层，因为只有编译层看得到
 //! Zhixu / Stage / hook 集合。跨 signal 业务公理（Layer 3）v1 完全不支持。
 
-use crate::{normalize_tight, Expr, HookError, Profile, SEMANTIC_VERSION};
+use crate::{ast::normalize_tight, Expr, HookError, Profile, SEMANTIC_VERSION};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -478,9 +478,9 @@ pub fn lint_hook_with_condition(
     hook_name: &str,
     hook: &str,
 ) -> Result<HookLintResult, LintError> {
-    crate::validate_hook_name(hook_name)?;
-    let (hook_expr, spans) = crate::parse_hook_expr_with_spans(hook)?;
-    crate::validate_hook(&hook_expr.condition)?;
+    crate::parser::validate_hook_name(hook_name)?;
+    let (hook_expr, spans) = crate::parser::parse_hook_expr_with_spans(hook)?;
+    crate::ast::validate_hook(&hook_expr.condition)?;
     let normalized_expression = format!(
         "{}::{}",
         hook_expr.source,
@@ -779,7 +779,12 @@ fn lint_dominated_delays(group: &SpannedExpr, hook_name: &str, out: &mut Vec<Lin
             continue;
         }
         // AND：最长延时支配（较短冗余）；OR：最短延时支配（较长冗余）。
-        // min/max_by_key 并列时取第一个——其余并列项由同一支配证明覆盖。
+        // std 的 min_by_key/max_by_key 并列时取最后一个遍历项——被支配项
+        // 存在时长并列的孪生（部分重复形态，如 (A+10s)|(A+10s)|(A+5s)）
+        // 时，支配者必须按严格时长差选取：AND 严格长于被支配项、OR 严格
+        // 短于被支配项。时长相同的孪生既不是支配者（会产出 "`A+10s` is
+        // dominated by `A+10s`" 的自引诊断，且与 L001 的相同子树报告重复），
+        // 也不归 L004 报告；无严格支配者（纯重复组）时整组让位给 L001。
         let dominated_index = if is_and {
             durations
                 .iter()
@@ -797,18 +802,37 @@ fn lint_dominated_delays(group: &SpannedExpr, hook_name: &str, out: &mut Vec<Lin
             continue;
         };
         let dominated = members[dominated_index];
+        let dominated_duration = match &dominated.expr {
+            Expr::Delay {
+                duration_seconds, ..
+            } => *duration_seconds,
+            _ => 0,
+        };
+        let strictly_dominates = |candidate: i64| {
+            if is_and {
+                candidate > dominated_duration
+            } else {
+                candidate < dominated_duration
+            }
+        };
         let dominator = members
             .iter()
             .enumerate()
-            .filter(|(index, _)| *index != dominated_index)
+            .filter(|(index, member)| {
+                *index != dominated_index
+                    && matches!(&member.expr,
+                        Expr::Delay { duration_seconds, .. } if strictly_dominates(*duration_seconds))
+            })
             .map(|(_, member)| member)
             .max_by_key(|member| match &member.expr {
                 Expr::Delay {
                     duration_seconds, ..
                 } => *duration_seconds,
                 _ => 0,
-            })
-            .expect("members has at least two entries");
+            });
+        let Some(dominator) = dominator else {
+            continue;
+        };
         out.push(LintDiagnostic {
             code: "UVP-L004",
             severity: Severity::Warning,

@@ -31,8 +31,11 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   适配层预裁 init 观察。
 - 语义重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt 时刻）：
   投影重放/重排可能重复，重复被吸收，不产生 missing-observed 假阳性。
-  dueAt 按时刻归一化比较（毫秒位数/时区偏移写法不是语义），不同渲染的
-  同一时刻视为重复。
+  dueAt 按时刻归一化比较（毫秒位数/时区写法不是语义），不同渲染的
+  同一时刻视为重复。wait→wait 仅 dueAt 变化不是重复：合约
+  `_evaluateHook` 对 `previousDueAt != nextDueAt` 照常重复发
+  `HookStatusChanged`，oracle 的 observed 面同口径重发，多条不同 dueAt
+  的 wait 观察按到达序一一配对。
 
 ### 推导（derive，从链上事件补齐 oracle 状态）
 
@@ -61,8 +64,30 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 
 - `StageMaterialized`：链上物化事实回填 `materializedStages`，后续依赖该
   阶段的 watcher 求值据此放行。
-- `OrderMaterialized` / `OrderTriggered` / `OrderLinked`：仅存在性事件，
-  无观察语义。
+- `OrderTriggered`：出生事务标记（order → 事务哈希）。它与
+  `record_signal_and_evaluate` 的出生通道判别配合（见下），不是观察。
+- `OrderMaterialized` / `OrderLinked`：仅存在性事件，无观察语义。
+
+## 出生求值范围（mint-scope）
+
+镜像合约 `_evaluateAffectedHooks` 的 `evaluateOrderTriggerHooks` 标志：
+order-trigger（mint/dock）hook 只在出生事务内求值；普通信号提交（含
+dock input 模块写、dock output 回写、派生写回）不推进它们——否则订单 Y
+（由事实 K2 铸出）内普通提交另一出生线事实 K1，会把 Y 的 K1-mint 钩子
+推 Ready 并物化 Y 并未由此出生的阶段，链上已不再这么做。
+
+事件流上的出生通道判别（`record_signal_and_evaluate`）：
+
+- 首条 `SignalSubmitted`（该订单此前无任何事实）且非 order-link 出生 →
+  出生通道。outside 出生（`OrderTriggered` 与出生事实同事务）与 dock
+  出生（无 `OrderTriggered`，entrance 事实即首条信号）都落在这里。
+- `OrderTriggered` 已见且其事务内没有信号 → order-link 出生
+  （`_markTriggerHookReady` 直接置位、不 `_recordSignal`）：该订单后续
+  收到的任何信号（含首条）都是普通信号，不推进 order-trigger hook；
+  出生断言由 mint-only 推导门（`HookReady` 反推）承载。
+- 第二条及以后的 `SignalSubmitted` 恒为普通信号。
+
+watcher hook 在两条路径都照常求值。
 
 ## 观察配对与比对契约
 

@@ -345,6 +345,48 @@
             "kind": "timer",
             "source": "buyer",
             "signalName": "task.a.cmp",
+            "delaySeconds": 15
+          }
+        ]
+      }
+    },
+    {
+      "name": "outer delay over an and operand accumulates per-fact offsets",
+      "profile": "evm_strict",
+      "hookName": "STACK",
+      "hook": "buyer::((task.a.cmp +5s) & task.b.cmp) +10s",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "(task.a.cmp+5s&task.b.cmp)+10s",
+        "normalizedExpression": "buyer::(task.a.cmp+5s&task.b.cmp)+10s",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.b.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.a.cmp",
+            "delaySeconds": 5
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.a.cmp",
+            "delaySeconds": 15
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.b.cmp",
             "delaySeconds": 10
           }
         ]

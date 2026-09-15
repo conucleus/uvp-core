@@ -50,12 +50,12 @@ pub struct LintZhixuRequest {
 /// 语义验证失败（非合法 DSL）返回 `Err`——lint 只分析已通过 semantic
 /// validation 的正常 Hook（PRD §4.2），这不是 diagnostic。
 pub fn lint_zhixu(definition: &ZhixuDefinition) -> Result<ZhixuLintReport, LintError> {
-    let issues = crate::validate_zhixu_shape(definition);
+    let issues = crate::validate::validate_zhixu_shape(definition);
     if !issues.is_empty() {
         return Err(LintError::Message(issues.join("; ")));
     }
-    let stage_entries =
-        crate::flatten_stages(definition).map_err(|err| LintError::Message(err.to_string()))?;
+    let stage_entries = crate::lower::flatten_stages(definition)
+        .map_err(|err| LintError::Message(err.to_string()))?;
 
     let mut diagnostics = Vec::new();
     for entry in &stage_entries {
