@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: uvp-core-ci-.github
+  cancel-in-progress: false
+
 jobs:
   rust:
     runs-on: ubuntu-latest
