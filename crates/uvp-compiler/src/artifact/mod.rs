@@ -17,7 +17,7 @@ use crate::validate::{
     validate_receive_signal_references, validate_stage_executors, validate_subscription_delegation,
     validate_zhixu_shape,
 };
-use crate::{CompilerError, Result};
+use crate::{join_issues_bounded, CompilerError, Result};
 
 /// HookPlan 产物信封版本（TS 权威 uvp-protocol compiler types 的
 /// HOOK_PLAN_SCHEMA_VERSION 镜像）。pub 供 uvp-node NAPI 导出
@@ -47,7 +47,7 @@ pub fn compile_zhixu_hook_plan(
         .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
     let issues = validate_zhixu_shape(&definition);
     if !issues.is_empty() {
-        return Err(CompilerError::Issues(issues.join("; ")));
+        return Err(CompilerError::Issues(join_issues_bounded(&issues)));
     }
 
     let stage_entries = flatten_stages(&definition)?;
@@ -85,7 +85,10 @@ pub fn compile_zhixu_hook_plan(
         &stage_entries,
         &dock_entrance_hook_ids(&dock_state),
     ));
-    validation_issues.extend(validate_mint_anchors(&stage_entries));
+    validation_issues.extend(validate_mint_anchors(
+        &stage_entries,
+        &dock_state.entrance_fact_keys,
+    ));
     validation_issues.extend(validate_subscription_delegation(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(
@@ -93,7 +96,9 @@ pub fn compile_zhixu_hook_plan(
         &dock_state.input_port_hook_ids,
     ));
     if !validation_issues.is_empty() {
-        return Err(CompilerError::Issues(validation_issues.join("; ")));
+        return Err(CompilerError::Issues(join_issues_bounded(
+            &validation_issues,
+        )));
     }
 
     let platform = normalize_platform_value(&definition.spec.platform)?;
@@ -136,7 +141,7 @@ pub fn compile_cloud_artifact(
         .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
     let issues = validate_zhixu_shape(&definition);
     if !issues.is_empty() {
-        return Err(CompilerError::Issues(issues.join("; ")));
+        return Err(CompilerError::Issues(join_issues_bounded(&issues)));
     }
 
     let stage_entries = flatten_stages(&definition)?;
@@ -165,7 +170,10 @@ pub fn compile_cloud_artifact(
         &stage_entries,
         &selected_stage_bindings,
     ));
-    validation_issues.extend(validate_mint_anchors(&stage_entries));
+    validation_issues.extend(validate_mint_anchors(
+        &stage_entries,
+        &dock_state.entrance_fact_keys,
+    ));
     validation_issues.extend(validate_subscription_delegation(&stage_entries));
     // 与 hook_plan 目标共用同一组校验：同一份定义不允许"一个 target 收、
     // 另一个放"，否则 Go 主链路会拿到被 hook_plan 拒绝的定义的产物。
@@ -178,7 +186,9 @@ pub fn compile_cloud_artifact(
     // cloud 产物供 Go 主链路消费，不得放行 hook_plan 已拒绝的声明。
     build_signal_capabilities(&stage_entries)?;
     if !validation_issues.is_empty() {
-        return Err(CompilerError::Issues(validation_issues.join("; ")));
+        return Err(CompilerError::Issues(join_issues_bounded(
+            &validation_issues,
+        )));
     }
     let platform = normalize_platform_value(&definition.spec.platform)?;
     let mut stages = Vec::new();

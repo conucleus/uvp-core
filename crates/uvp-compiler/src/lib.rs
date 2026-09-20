@@ -36,6 +36,33 @@ pub enum CompilerError {
     Issues(String),
 }
 
+/// 编译错误串上限（M31）：issues 的条数与单条长度都随 plan 输入无界
+/// 增长（毒定义可造出数百条 issue × 长路径），错误串经 FFI/NAPI 信封
+/// 外发——在拼装边界截断并标注被省略的条数，保留头部诊断。
+pub(crate) const MAX_ISSUES_STRING_BYTES: usize = 16 * 1024;
+
+pub(crate) fn join_issues_bounded(issues: &[String]) -> String {
+    let mut out = String::new();
+    let mut remaining = issues.len();
+    for issue in issues {
+        remaining -= 1;
+        let piece = if out.is_empty() {
+            issue.clone()
+        } else {
+            format!("; {issue}")
+        };
+        if out.len() + piece.len() > MAX_ISSUES_STRING_BYTES {
+            out.push_str(&format!(
+                "; …({} issues truncated: error string capped at {MAX_ISSUES_STRING_BYTES} bytes)",
+                remaining + 1
+            ));
+            return out;
+        }
+        out.push_str(&piece);
+    }
+    out
+}
+
 type Result<T> = std::result::Result<T, CompilerError>;
 
 #[derive(Debug, Deserialize)]

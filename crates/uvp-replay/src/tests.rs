@@ -2319,3 +2319,482 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
     let order = &result["state"]["orders"]["0x01::order-1"];
     assert_eq!(order["hookStatuses"]["flow.start#WAIT"]["status"], "ready");
 }
+
+// ------------------------------------------------------------------
+// M27 镜像补齐：注册门（30d 上限 / 根正锚 / NOT 裸操作数 / 深度 120）、
+// 重复 OrderRegistered 吸收、非整数 blockNumber、dueAt 渲染响亮失败。
+// ------------------------------------------------------------------
+
+/// 单 watcher 钩子的最小 plan（注册门探针基底：orderTriggerKind=none）。
+fn watcher_plan(hook_id: &str, instructions: Value) -> Value {
+    json!({
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "compiledHooks": [{
+            "hookId": hook_id,
+            "stageId": "flow.pay",
+            "stageIdentifier": "flow.pay",
+            "hookName": "TIMEOUT",
+            "orderTriggerKind": "none",
+            "emitReady": true,
+            "instructions": instructions,
+        }],
+        "dependencyIndex": { "0x50": [hook_id] }
+    })
+}
+
+fn plan_registered_event(plan: Value) -> Value {
+    json!({
+        "eventName": "PlanRegistered",
+        "blockNumber": 1,
+        "logIndex": 0,
+        "transactionHash": "0x01",
+        "plan": plan
+    })
+}
+
+#[test]
+fn delay_cap_30d_is_enforced_at_registration() {
+    // 合约 MAX_HOOK_DELAY_SECONDS = 30 days = 2592000s：超限在 commitPlan
+    // 即 revert HookDelayTooLong——"合约不可能的 plan"在回放注册门响亮
+    // 失败，不产出远期 wait 的软化观察。
+    let over = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 2592001 }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(over)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("exceeds the maximum allowed delay of 2592000s (30d)"),
+        "{error}"
+    );
+
+    // 边界值 2592000 恰在限内：注册放行。
+    let at_limit = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 2592000 }
+        ]),
+    );
+    replay_chain_events(
+        vec![plan_registered_event(at_limit)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a 30d delay sits exactly at the contract cap and must register");
+}
+
+#[test]
+fn root_without_positive_anchor_is_rejected_at_registration() {
+    // 纯否定条件（~A）：value=true 时 anchorAt 无源，合约注册边界按
+    // hasPosAnchor[0] 拒绝——镜像同口径。
+    let plan = watcher_plan(
+        "flow.pay#GUARD",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(plan)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("no positive signal anchor at the root"),
+        "{error}"
+    );
+}
+
+#[test]
+fn not_on_composite_operand_is_rejected_at_registration() {
+    // ~(A&B)：NOT 的操作数必须是裸 SIGNAL——组合否定的取消/锚点语义与
+    // 编译器产物形态分叉，合约 _validateHook 注册边界拒绝。
+    let plan = watcher_plan(
+        "flow.pay#COMPOSITE_NOT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "AND", "arity": 2 },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(plan)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("applies NOT to a non-bare-SIGNAL operand"),
+        "{error}"
+    );
+
+    // 对照：NOT 直接作用于裸 SIGNAL 合法（A&~B 的负依赖形态）。
+    let plan = watcher_plan(
+        "flow.pay#GUARD",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "NOT" },
+            { "op": "AND", "arity": 2 }
+        ]),
+    );
+    replay_chain_events(
+        vec![plan_registered_event(plan)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("NOT over a bare SIGNAL is the compiler-produced negative-dependency shape");
+}
+
+#[test]
+fn instruction_depth_cap_120_is_enforced_at_registration() {
+    // 深度闸镜像 MAX_PARSE_DEPTH=120 / Go MaxASTDepth=120：逐槽计数
+    // （SIGNAL=0，组合=操作数最大深度+1）。121 层嵌套超限拒绝，120 层
+    // 恰在限内。
+    let nested_and_plan = |levels: usize| {
+        let mut instructions = vec![json!({ "op": "SIGNAL", "signalKey": "0x50" })];
+        for _ in 0..levels {
+            instructions.push(json!({ "op": "SIGNAL", "signalKey": "0x50" }));
+            instructions.push(json!({ "op": "AND", "arity": 2 }));
+        }
+        watcher_plan("flow.pay#DEEP", Value::Array(instructions))
+    };
+    let error = replay_chain_events(
+        vec![plan_registered_event(nested_and_plan(121))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("instruction nesting exceeds the maximum depth of 120"),
+        "{error}"
+    );
+    replay_chain_events(
+        vec![plan_registered_event(nested_and_plan(120))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("nesting depth exactly 120 sits at the cap and must register");
+}
+
+#[test]
+fn duplicate_order_registered_is_absorbed_without_resetting_state() {
+    // 合约对重复注册 revert OrderAlreadyRegistered：订单在链上恰注册一次，
+    // 事件流中的重复 OrderRegistered 是投影重放——吸收并保留已积累状态，
+    // 不得清空重放（清空会把已验证的出生事实吞成空洞）。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    let mut events = vec![
+        plan_registered_event(plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x30",
+            "signalId": "0x40",
+            "signalKey": "0x50",
+            "senderId": "sender",
+            "submittedAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 3,
+            "logIndex": 1,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "flow.start#BIRTH",
+            "stageIdentifier": "flow.start",
+            "hookName": "START"
+        }),
+    ];
+    // 重发的 OrderRegistered（同键同身份）落在事实之后。
+    events.push(json!({
+        "eventName": "OrderRegistered",
+        "blockNumber": 4,
+        "logIndex": 0,
+        "transactionHash": "0x04",
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "orderId": "order-1",
+        "registeredAt": "2026-04-27T00:00:00.000Z"
+    }));
+    let result = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a re-emitted OrderRegistered must be absorbed");
+    assert_eq!(result["mismatches"].as_array().map(Vec::len), Some(0));
+    let order = &result["state"]["orders"]["0x01::order-1"];
+    assert_eq!(
+        order["signals"].as_object().map(serde_json::Map::len),
+        Some(1),
+        "absorbed re-registration must keep accumulated signals: {order}"
+    );
+    assert_eq!(order["hookStatuses"]["flow.start#BIRTH"]["status"], "ready");
+
+    // 同键不同 zhixu：身份矛盾的事件流，响亮失败。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    let events = vec![
+        plan_registered_event(plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "impostor",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:01.000Z"
+        }),
+    ];
+    let error = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("carries a different zhixuId"),
+        "{error}"
+    );
+}
+
+#[test]
+fn non_integer_block_number_fails_loudly_at_sorting() {
+    // 排序键非整数（字符串/浮点/缺失）不得折 0 静默重排：排序前响亮
+    // 报错，保住事件流的因果序判定。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    for bad_block in [json!("later"), json!(1.5), Value::Null] {
+        let mut event = plan_registered_event(plan.clone());
+        event["blockNumber"] = bad_block;
+        let error = replay_chain_events(
+            vec![event],
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("blockNumber must be an integer")
+                && error
+                    .to_string()
+                    .contains("refuses to fold a non-integer to 0"),
+            "{error}"
+        );
+    }
+    // 缺失字段同口径（value_i64 对缺失报 must be an integer）。
+    let mut event = plan_registered_event(plan);
+    event.as_object_mut().unwrap().remove("blockNumber");
+    let error = replay_chain_events(
+        vec![event],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("blockNumber must be an integer"),
+        "{error}"
+    );
+    // sort=false 时不消费排序键，非整数不在此门（调用方自报因果序）。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    let mut event = plan_registered_event(plan);
+    event["blockNumber"] = json!("later");
+    replay_chain_events(
+        vec![event],
+        &ReplayOptions {
+            sort: Some(false),
+            strict: Some(true),
+        },
+    )
+    .expect("unsorted replays take the caller-asserted order and skip the sort-key gate");
+}
+
+#[test]
+fn unrenderable_due_at_fails_loudly_instead_of_folding_to_permanent_wait() {
+    // 渲染失败折 None 会把等待行变成无期限永久 wait（poke 资格闸按存在性
+    // 判永不合资格）——确定性毒输入响亮失败。
+    let error = render_due_at(8_210_866_176_000).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to fold to an undated permanent wait"),
+        "{error}"
+    );
+    // epoch 0 是真实期限，照常渲染（既有口径不回退）。
+    assert_eq!(render_due_at(0).unwrap(), "1970-01-01T00:00:00.000Z");
+}
+
+// ------------------------------------------------------------------
+// M28：Rust 编译产物（无指令轨）直连回放的空洞 PASS 断层。
+// ------------------------------------------------------------------
+
+#[test]
+fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
+    // Rust 编译产物（uvp-core hook_plan）不携带 instructions（指令轨归
+    // TS 编译器），dependencyIndex 的键也是 source::task.stage.signal 而
+    // 非链上 signalKey——直连回放时链上信号找不到可求值钩子，旧行为是
+    // observed=0/expected=0/mismatches=0 的空洞 PASS。注册门按合约
+    // InvalidHook 同口径要求每个钩子携带非空 instructions，断层在
+    // PlanRegistered 即响亮失败。
+    let rust_shaped_plan = json!({
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "compiledHooks": [{
+            "hookId": "flow.pay#OBSERVE",
+            "stageIdentifier": "flow.pay",
+            "hookName": "OBSERVE",
+            "orderTriggerKind": "none",
+            "emitReady": true,
+            "dependencies": [{ "source": "buyer", "signalName": "flow.pay.ack" }]
+        }],
+        "dependencyIndex": { "buyer::flow.pay.ack": ["flow.pay#OBSERVE"] }
+    });
+    let events = vec![
+        plan_registered_event(rust_shaped_plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x30",
+            "signalId": "0x40",
+            "signalKey": "0x50",
+            "senderId": "sender",
+            "submittedAt": "2026-04-27T00:00:00.000Z"
+        }),
+    ];
+    let error = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("flow.pay#OBSERVE")
+            && message.contains("missing instructions")
+            && message.contains("cannot be replayed"),
+        "{message}"
+    );
+
+    // 空指令数组同罪（合约 InvalidHook：instructions.length == 0）。
+    let empty_track = json!({
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "compiledHooks": [{
+            "hookId": "flow.pay#OBSERVE",
+            "stageId": "flow.pay",
+            "stageIdentifier": "flow.pay",
+            "hookName": "OBSERVE",
+            "orderTriggerKind": "none",
+            "emitReady": true,
+            "instructions": []
+        }],
+        "dependencyIndex": { "0x50": ["flow.pay#OBSERVE"] }
+    });
+    let error = replay_chain_events(
+        vec![plan_registered_event(empty_track)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("carries no instructions"),
+        "{error}"
+    );
+}

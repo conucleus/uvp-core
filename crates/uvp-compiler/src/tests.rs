@@ -2165,6 +2165,84 @@ fn rejects_receive_signal_keys_with_separators() {
 }
 
 #[test]
+fn send_signal_combined_length_counts_canonical_full_name_exactly() {
+    // 对拍 Go validateDDLDimensions（dimensions.go）：canonical 三段式声明
+    // 本身即全名，按原文精确计长；裸名才拼 stage 前缀。旧公式对三段式
+    // 再拼一次 stage 前缀，把 task.stage 段重复计入——恰 100 字节的合法
+    // canonical 名被误拒，两侧结论必须一致。
+    let stage_name = "s".repeat(48);
+    let canonical_at_limit = format!("t.{}.{}", stage_name, "x".repeat(49));
+    assert_eq!(canonical_at_limit.len(), 100);
+    let canonical_over_limit = format!("t.{}.{}", stage_name, "x".repeat(50));
+    assert_eq!(canonical_over_limit.len(), 101);
+    // stage 标识符 "t.<48 字节>" = 50 字节：裸名组合边界 50+1+49=100。
+    let bare_at_limit = "y".repeat(49);
+    let bare_over_limit = "y".repeat(50);
+
+    let definition_with = |signals: Vec<String>| {
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "dimension-parity" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "core" },
+                "taskPatterns": [{
+                    "name": "t",
+                    "stages": [{
+                        "name": stage_name,
+                        "source": "parity",
+                        "receiveSignals": {
+                            "PUBLISH": format!("parity::t.{stage_name}.seed")
+                        },
+                        "sendSignals": signals,
+                        "executor": {
+                            "supplierType": "organization",
+                            "supplierID": "parity-executor"
+                        }
+                    }]
+                }]
+            }
+        })
+    };
+
+    // 恰 100 字节的 canonical 三段式：列宽边界内，两个 target 都放行
+    // （Go 侧 full = len(signal) = 100，同结论）。
+    let signals = vec!["seed".to_string(), canonical_at_limit];
+    compile_zhixu_hook_plan(&definition_with(signals.clone()), None, true)
+        .expect("100-byte canonical sendSignal sits exactly at the column width");
+    compile_cloud_artifact(&definition_with(signals), None, true)
+        .expect("100-byte canonical sendSignal sits exactly at the column width (cloud)");
+
+    // 101 字节的 canonical 三段式：两侧都拒。
+    let signals = vec!["seed".to_string(), canonical_over_limit];
+    for target in ["hook_plan", "cloud"] {
+        let result = if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition_with(signals.clone()), None, true)
+        } else {
+            compile_cloud_artifact(&definition_with(signals.clone()), None, true)
+        };
+        let error = result.expect_err("101-byte canonical sendSignal exceeds the column width");
+        assert!(
+            error.to_string().contains("exceeds 100 bytes combined"),
+            "{target}: {error}"
+        );
+    }
+
+    // 裸名（无 '.'）：Go 同款拼 stage 前缀——组合恰 100 放行、101 拒。
+    let signals = vec!["seed".to_string(), bare_at_limit];
+    compile_zhixu_hook_plan(&definition_with(signals), None, true)
+        .expect("bare name combining to exactly 100 bytes is at the column width");
+    let signals = vec!["seed".to_string(), bare_over_limit];
+    let error = compile_zhixu_hook_plan(&definition_with(signals), None, true)
+        .expect_err("bare name combining past 100 bytes must fail");
+    assert!(
+        error.to_string().contains("exceeds 100 bytes combined"),
+        "{error}"
+    );
+}
+
+#[test]
 fn rejects_mutual_mint_subscription_cycle() {
     // A↔B 互订：无界代铸环，编译期拒绝（含 cloud/hook_plan 两个 target）。
     let definition = mint_definitions(&[
@@ -2429,4 +2507,273 @@ fn mint_definitions(stages: &[(&str, Value)]) -> Value {
                 .collect::<Vec<_>>()
         }
     })
+}
+
+#[test]
+fn rejects_mint_birth_key_colliding_with_dock_entrance_key() {
+    // U2 出生通道键并集查重：mint 阶段的 ANCHOR 出生事实键与本地
+    // dockInterface entrance 端口（orderModes 含 new）的 atom 事实键相同
+    // ——同一事实同时是 mint 出生入口与 dock 出生锚，outside 开放提交与
+    // dock 建单竞争同一事实的出生通道，编译期与协议侧同义拒绝（两个
+    // target 同口径）。
+    let mut definition = target_payment_definition();
+    // payment_service[new].inputs.execute 的 atom 是
+    // payment::payment_flow.init.execute——mint 阶段订阅同一事实。
+    definition["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "buyer",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.init.execute)" }),
+                &["ack"],
+            )]
+        }));
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("mint birth key colliding with a dock entrance key must fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("payment::payment_flow.init.execute")
+            && message.contains("dock entrance port(s) (payment_service.execute)")
+            && message.contains("mint stage(s) (orchard.retail)")
+            && message.contains("出生通道键并集查重"),
+        "unexpected error: {message}"
+    );
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("cloud target must reject the colliding birth channel key too");
+    assert!(
+        error
+            .to_string()
+            .contains("出生通道键并集查重：mint 出生键 ∪ dock entrance 键内不得重复"),
+        "unexpected error: {error}"
+    );
+
+    // 正例对照：mint 出生键指向本 plan 内另一事实（settle.cmp），与
+    // entrance 键不相交——并集无重复，照常编译。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "buyer",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.settle.cmp)" }),
+                &["ack"],
+            )]
+        }));
+    compile_zhixu_hook_plan(&definition, None, true)
+        .expect("a mint birth key disjoint from dock entrance keys must compile");
+    compile_cloud_artifact(&definition, None, true)
+        .expect("a mint birth key disjoint from dock entrance keys must compile (cloud)");
+}
+
+#[test]
+fn rejects_dock_entrance_key_published_twice_across_new_interfaces() {
+    // U2 并集查重的 dock∪dock 面：两个 new 型接口的 input 端口引用同一
+    // stage 上 atom 相同的两个 mailbox hook——hooks_claimed 只封同一 hook
+    // 引用重复发布，不同 hook 名承载同一 atom 的事实键仍构成出生通道键
+    // 重复，按并集规则拒绝。
+    let mut definition = target_payment_definition();
+    // 第二个接收通道与 DOCK_EXECUTE 同 atom。
+    definition["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_EXECUTE_2"] =
+        json!("payment::payment_flow.init.execute");
+    definition["spec"]["dockInterface"]["payment_retry"] = json!({
+        "orderModes": ["new"],
+        "inputs": {
+            "execute": { "hook": "payment_flow.init#DOCK_EXECUTE_2" }
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("the same entrance fact key published by two new-mode ports must fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("payment::payment_flow.init.execute")
+            && message
+                .contains("dock entrance port(s) (payment_retry.execute, payment_service.execute)")
+            && message.contains("出生通道键并集查重"),
+        "unexpected error: {message}"
+    );
+
+    // 对照：第二接口是 existing 型——其 input 端口不是出生锚，不进并集。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_EXECUTE_2"] =
+        json!("payment::payment_flow.init.execute");
+    definition["spec"]["dockInterface"]["payment_retry"] = json!({
+        "orderModes": ["existing"],
+        "inputs": {
+            "execute": { "hook": "payment_flow.init#DOCK_EXECUTE_2" }
+        }
+    });
+    compile_zhixu_hook_plan(&definition, None, true)
+        .expect("existing-mode input ports are not birth anchors and stay outside the union");
+}
+
+// ------------------------------------------------------------------
+// M31：定义/接口/manifest 计数上限与错误串截断。
+// ------------------------------------------------------------------
+
+/// 计数闸探针基底：shape 层合法的最小 stage（后续校验不跑——计数错误在
+/// validate_zhixu_shape 即返回）。
+fn counted_stage_value(name: &str, receive_keys: &[&str]) -> Value {
+    let receive_signals: serde_json::Map<String, Value> = receive_keys
+        .iter()
+        .map(|key| (key.to_string(), json!("src::count.task.seed")))
+        .collect();
+    json!({
+        "name": name,
+        "source": "src",
+        "receiveSignals": receive_signals,
+        "sendSignals": ["seed"],
+        "executor": { "supplierType": "organization", "supplierID": "counter" }
+    })
+}
+
+fn counted_definition(tasks: Vec<(String, Vec<Value>)>) -> Value {
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "counted" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": tasks
+                .into_iter()
+                .map(|(name, stages)| json!({ "name": name, "stages": stages }))
+                .collect::<Vec<_>>()
+        }
+    })
+}
+
+#[test]
+fn rejects_definition_counts_beyond_limits() {
+    // taskPatterns > 64。
+    let tasks = (0..65)
+        .map(|index| (format!("t{index}"), vec![counted_stage_value("s0", &[])]))
+        .collect();
+    let error = compile_zhixu_hook_plan(&counted_definition(tasks), None, true)
+        .expect_err("65 task patterns exceed the cap");
+    assert!(
+        error.to_string().contains("65 task patterns, limit is 64"),
+        "{error}"
+    );
+
+    // 摊平阶段总数 > 256（60 task × 5 stage = 300，task 数在限内）。
+    let tasks = (0..60)
+        .map(|index| {
+            (
+                format!("t{index}"),
+                (0..5)
+                    .map(|stage| counted_stage_value(&format!("s{stage}"), &[]))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let error = compile_zhixu_hook_plan(&counted_definition(tasks), None, true)
+        .expect_err("300 flattened stages exceed the cap");
+    assert!(
+        error
+            .to_string()
+            .contains("flattens to 300 stages across taskPatterns, limit is 256"),
+        "{error}"
+    );
+
+    // receiveSignals 通道总数 > 512（256 stage × 3 通道 = 768，其余在限内）。
+    let stages = (0..256)
+        .map(|stage| counted_stage_value(&format!("s{stage:03}"), &["a1", "a2", "a3"]))
+        .collect::<Vec<_>>();
+    let error = compile_zhixu_hook_plan(
+        &counted_definition(vec![("t".to_string(), stages)]),
+        None,
+        true,
+    )
+    .expect_err("768 receiveSignals channels exceed the cap");
+    assert!(
+        error
+            .to_string()
+            .contains("declares 768 receiveSignals channels (compiled hooks) across taskPatterns, limit is 512"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rejects_interface_with_too_many_ports() {
+    // D016（声明面计数闸）：单接口 inputs+outputs > 64。
+    let mut definition = target_payment_definition();
+    let mut inputs = serde_json::Map::new();
+    for index in 0..65 {
+        inputs.insert(
+            format!("p{index:02}"),
+            json!({ "hook": "payment_flow.init#DOCK_EXECUTE" }),
+        );
+    }
+    definition["spec"]["dockInterface"]["wide"] = json!({
+        "orderModes": ["existing"],
+        "inputs": inputs,
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("a 65-port interface exceeds the cap");
+    let message = error.to_string();
+    assert!(
+        message.contains("D016")
+            && message.contains("exposes 65 ports (65 inputs + 0 outputs), limit is 64"),
+        "{message}"
+    );
+}
+
+#[test]
+fn manifest_rejects_too_many_definitions() {
+    // D008（manifest 计数闸）：definitions 条目 > 256——发布方数据错误的
+    // 规模面在解析期收口。
+    let definitions = (0..257)
+        .map(|index| json!({ "name": format!("d{index}") }))
+        .collect::<Vec<_>>();
+    let manifest = json!({
+        "schemaVersion": crate::dock::DOCK_RESOLUTION_SCHEMA_VERSION,
+        "definitions": definitions,
+    });
+    let issues = crate::dock::parse_resolution_manifest(&manifest).unwrap_err();
+    assert!(
+        issues.iter().any(|issue| issue.code == "D008"
+            && issue
+                .message
+                .contains("carries 257 definitions, limit is 256")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn error_string_is_truncated_at_the_boundary() {
+    // 毒定义（每个 stage 一条 source 字符集错误 × 256 个 stage）产出远超
+    // 16KB 的 issues——错误串在拼装边界截断并标注省略条数，FFI/NAPI 信封
+    // 不随 plan 输入无界膨胀。
+    let stages = (0..256)
+        .map(|index| {
+            json!({
+                "name": format!("s{index:03}"),
+                "source": "bad source",
+                "receiveSignals": { "PUBLISH": "src::count.task.seed" },
+                "sendSignals": ["seed"],
+                "executor": { "supplierType": "organization", "supplierID": "counter" }
+            })
+        })
+        .collect::<Vec<_>>();
+    let definition = counted_definition(vec![("count".to_string(), stages)]);
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("256 invalid-source stages must fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("issues truncated: error string capped at 16384 bytes"),
+        "{message}"
+    );
+    assert!(
+        message.len() <= crate::MAX_ISSUES_STRING_BYTES + 200,
+        "truncated error string must stay bounded: {}",
+        message.len()
+    );
 }

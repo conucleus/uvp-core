@@ -49,6 +49,15 @@ pub const MAX_SIGNAL_MAP_KEY_LENGTH: usize = 26;
 /// stage 标识符 + "." + signalMap key 的组合长度按同值钉死。
 pub const MAX_SIGNAL_NAME_BYTES: usize = 100;
 
+/// 单接口端口数（inputs+outputs）上限：D016 的 route 绑定数上限
+/// （8/16）只约束单条 route，接口侧端口可被多条 route 跨定义绑定——
+/// 端口计数无闸时声明面规模随 plan 输入无界增长（M31 计数闸）。
+pub const MAX_INTERFACE_PORTS: usize = 64;
+
+/// resolution manifest 的 definitions 条目上限：manifest 是发布方数据，
+/// 计数无闸时毒 manifest 可让 link 期的图规模无界增长（M31 计数闸）。
+pub const MAX_MANIFEST_DEFINITIONS: usize = 256;
+
 /// order.mode 与接口 orderModes 的闭集取值。
 pub const ORDER_MODE_NEW: &str = "new";
 pub const ORDER_MODE_EXISTING: &str = "existing";
@@ -606,6 +615,18 @@ pub struct InterfaceDeclaration {
     pub outputs: Vec<InterfacePortOutput>,
 }
 
+/// 编译本地 `spec.dockInterface` 的产物：中性接口声明 + entrance 出生
+/// 事实键（U2 出生通道键并集查重的 dock 侧输入）。entrance 键只从本地
+/// 接口编译收集——manifest 侧接口是远端目标的声明面，不参与本 plan 的
+/// 出生通道键并集。
+#[derive(Debug, Clone)]
+pub struct CompiledInterfaces {
+    pub declarations: Vec<InterfaceDeclaration>,
+    /// (source, task.stage.signal) → 发布该出生键的 entrance input 端口
+    /// 路径（`<interface>.<port>`；同键被多个端口发布时逐一列出）。
+    pub entrance_fact_keys: BTreeMap<(String, String), Vec<String>>,
+}
+
 impl InterfaceDeclaration {
     fn to_json(&self) -> Value {
         let inputs = Map::from_iter(self.inputs.iter().map(|port| {
@@ -630,11 +651,12 @@ impl InterfaceDeclaration {
 
 /// 编译目标定义的 `spec.dockInterface`（D013/D014、D021/D022、D025）。
 /// 产物是中性声明：接口名/orderModes/inputs/outputs 原文，不含任何
-/// 哈希或身份字段。
+/// 哈希或身份字段；entrance 端口（orderModes 含 new 的接口的 input
+/// 端口）的 atom 事实键随产物携带，供出生通道键并集查重消费。
 pub fn compile_dock_interface(
     dock: &BTreeMap<String, DockInterfaceSpec>,
     entries: &[(String, ZhixuStage)],
-) -> DockResult<Vec<InterfaceDeclaration>> {
+) -> DockResult<CompiledInterfaces> {
     let mut issues = Vec::new();
 
     let stages_by_identifier: BTreeMap<&str, &ZhixuStage> = entries
@@ -645,6 +667,7 @@ pub fn compile_dock_interface(
     // 让外部投递出现两条可寻址路径。
     let mut hooks_claimed: BTreeMap<String, String> = BTreeMap::new();
     let mut interfaces = Vec::new();
+    let mut entrance_fact_keys: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
 
     for (interface_name, spec) in dock {
         let base_path = format!("spec.dockInterface.{interface_name}");
@@ -664,9 +687,26 @@ pub fn compile_dock_interface(
             ));
             continue;
         }
+        // D016（声明面计数闸）：单接口端口总数（inputs+outputs）上限。
+        if spec.inputs.len() + spec.outputs.len() > MAX_INTERFACE_PORTS {
+            issues.push(DockIssue::new(
+                "D016",
+                &base_path,
+                format!(
+                    "interface exposes {} ports ({} inputs + {} outputs), limit is {MAX_INTERFACE_PORTS}",
+                    spec.inputs.len() + spec.outputs.len(),
+                    spec.inputs.len(),
+                    spec.outputs.len()
+                ),
+            ));
+            continue;
+        }
 
         let mut inputs = Vec::new();
         let mut outputs = Vec::new();
+        // entrance 端口 atom 的事实键（接口级收集；仅在接口 orderModes 含
+        // new 时并入出生键集合——与 entrance_hook_ids 同一判定）。
+        let mut entrance_atoms: Vec<(String, String, String)> = Vec::new();
 
         for (port_name, port) in &spec.inputs {
             let path = format!("{base_path}.inputs.{port_name}");
@@ -789,6 +829,11 @@ pub fn compile_dock_interface(
                 ));
                 continue;
             }
+            entrance_atoms.push((
+                port_name.clone(),
+                dependency.source.clone(),
+                dependency.signal_name.clone(),
+            ));
 
             inputs.push(InterfacePortInput {
                 port: port_name.clone(),
@@ -873,6 +918,14 @@ pub fn compile_dock_interface(
             ));
             continue;
         }
+        if spec.order_modes.iter().any(|m| m == ORDER_MODE_NEW) {
+            for (port_name, atom_source, atom_signal) in entrance_atoms {
+                entrance_fact_keys
+                    .entry((atom_source, atom_signal))
+                    .or_default()
+                    .push(format!("{interface_name}.{port_name}"));
+            }
+        }
 
         interfaces.push(InterfaceDeclaration {
             name: interface_name.clone(),
@@ -887,7 +940,10 @@ pub fn compile_dock_interface(
     }
     // 接口按名排序（BTreeMap 迭代已按名升序，此处显式钉住口径）。
     interfaces.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(interfaces)
+    Ok(CompiledInterfaces {
+        declarations: interfaces,
+        entrance_fact_keys,
+    })
 }
 
 /// 目标定义全部接口的中性声明产物（接口名升序数组）。
@@ -988,13 +1044,25 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
     }
     let mut targets = Vec::new();
     let mut names_seen = BTreeSet::new();
-    for (index, entry) in value
+    let definitions = value
         .get("definitions")
         .and_then(Value::as_array)
-        .unwrap_or(&Vec::new())
-        .iter()
-        .enumerate()
-    {
+        .cloned()
+        .unwrap_or_default();
+    // D008（manifest 计数闸）：definitions 条目数上限——发布方数据错误
+    // 的规模面在解析期收口，不给 link 期留下无界图。
+    if definitions.len() > MAX_MANIFEST_DEFINITIONS {
+        issues.push(DockIssue::new(
+            "D008",
+            "resolutionManifest.definitions",
+            format!(
+                "manifest carries {} definitions, limit is {MAX_MANIFEST_DEFINITIONS}",
+                definitions.len()
+            ),
+        ));
+        return Err(issues);
+    }
+    for (index, entry) in definitions.iter().enumerate() {
         let path = format!("resolutionManifest.definitions[{index}]");
         // 条目级键闭集与 interface/dockEdges 闸口同口径：拼错的字段（如
         // interface 单数、dockEdgess）被静默吸收会让发布方数据错误以缺省

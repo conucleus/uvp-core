@@ -2,19 +2,17 @@
 //! 输入（对接接口/路由链接的权威实现在 `crate::dock` 模块）。
 
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uvp_model::{ZhixuDefinition, ZhixuStage};
 
 use crate::{dock, CompilerError, Result};
 
 fn issues_from_dock(issues: &[dock::DockIssue]) -> CompilerError {
-    CompilerError::Issues(
-        issues
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; "),
-    )
+    let messages = issues
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>();
+    CompilerError::Issues(crate::join_issues_bounded(&messages))
 }
 
 /// 一次编译中的 dock 状态：接口声明、未链接/已链接 route、hook 标记输入。
@@ -31,6 +29,10 @@ pub(crate) struct DockState {
     /// 可作为 new 模式出生锚的 input 端口（orderModes 含 new 的接口）
     /// 引用的本地 hook：编译为 orderTriggerKind=dock。
     pub(crate) entrance_hook_ids: BTreeSet<String>,
+    /// entrance 端口 atom 的事实键 (source, task.stage.signal) → 发布端口
+    /// 路径：U2 出生通道键并集查重（mint 出生键 ∪ dock entrance 键）的
+    /// dock 侧输入。
+    pub(crate) entrance_fact_keys: BTreeMap<(String, String), Vec<String>>,
 }
 
 pub(crate) fn compile_dock_state(
@@ -70,12 +72,12 @@ pub(crate) fn compile_dock_state(
         )
     };
     let input_port_hook_ids = interfaces
-        .as_deref()
-        .map(dock::input_port_hook_ids)
+        .as_ref()
+        .map(|compiled| dock::input_port_hook_ids(&compiled.declarations))
         .unwrap_or_default();
     let entrance_hook_ids = interfaces
-        .as_deref()
-        .map(dock::entrance_hook_ids)
+        .as_ref()
+        .map(|compiled| dock::entrance_hook_ids(&compiled.declarations))
         .unwrap_or_default();
 
     let routes = if static_routes.is_empty() {
@@ -100,12 +102,19 @@ pub(crate) fn compile_dock_state(
         .iter()
         .map(|route| route.to_json())
         .collect::<Vec<_>>();
+    let interface_json = interfaces
+        .as_ref()
+        .map(|compiled| dock::interface_declarations_json(&compiled.declarations));
+    let entrance_fact_keys = interfaces
+        .map(|compiled| compiled.entrance_fact_keys)
+        .unwrap_or_default();
     Ok(DockState {
-        interface_json: interfaces.as_deref().map(dock::interface_declarations_json),
+        interface_json,
         routes_json,
         unresolved_json,
         input_port_hook_ids,
         entrance_hook_ids,
+        entrance_fact_keys,
     })
 }
 

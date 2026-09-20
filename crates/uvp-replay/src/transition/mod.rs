@@ -6,9 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::facts::{find_hook, order_key, HookRuntime, OracleOrderState, OracleState};
 use crate::snapshot::{base_hook_observation, chain_event_to_expected_observation, same_due_at};
-use crate::{
-    chain_event_id, iso_from_seconds, seconds_from_iso, value_i64, value_str, ReplayError, Result,
-};
+use crate::{chain_event_id, seconds_from_iso, value_i64, value_str, ReplayError, Result};
 
 /// 链上可观察事件（HookReady/HookStatusChanged）的吸收口。真实事件流与
 /// oracle 模型存在两类系统性分叉，规则如下（与 crate README 同步）：
@@ -386,7 +384,7 @@ pub(crate) fn evaluate_hook(
         next.status = "cxl".to_string();
     } else if result.wait {
         next.status = "wait".to_string();
-        next.due_at = result.due_at.and_then(iso_from_seconds);
+        next.due_at = result.due_at.map(crate::render_due_at).transpose()?;
     } else if result.value {
         next.status = "ready".to_string();
     }

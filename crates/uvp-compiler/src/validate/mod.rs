@@ -24,6 +24,20 @@ const MAX_SIGNAL_NAME_BYTES: usize = 100;
 /// 不承担任何语义判断（非唯一、不参与关系推断）。
 const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
 
+// 定义内计数上限（M31 资源闸）：列宽族只约束单个标识符的长度，计数
+// 维度无闸时 plan 控制的输入可以让编译期的校验/产物规模无界增长。取值
+// 对真实计划留有余量，且不与合约侧同族上限打架（能力表 256、依赖键
+// 1024、selector 绑定 128）。
+/// 单定义 taskPatterns 数上限。
+const MAX_TASK_PATTERNS: usize = 64;
+/// 单定义摊平后的阶段总数上限（每阶段至少编译一个 hook、最多声明一份
+/// 能力表——256 与 MAX_SIGNAL_CAPABILITIES 同量级）。
+const MAX_STAGE_ENTRIES: usize = 256;
+/// 单定义 receiveSignals 通道（编译产物 hooks）总数上限：链上每个 hook
+/// 注册进 plan.hookIds，512 恰为合约 MAX_PLAN_DEPENDENCIES=1024 的一半，
+/// 给每钩平均 ≥2 个依赖键的余量。
+const MAX_HOOKS: usize = 512;
+
 pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     let mut issues = Vec::new();
     if definition.api_version != "uvp/v0" {
@@ -60,6 +74,35 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
     }
     if definition.spec.task_patterns.is_empty() {
         issues.push("spec.taskPatterns must contain at least one task pattern".to_string());
+    }
+    if definition.spec.task_patterns.len() > MAX_TASK_PATTERNS {
+        issues.push(format!(
+            "spec.taskPatterns contains {} task patterns, limit is {MAX_TASK_PATTERNS}",
+            definition.spec.task_patterns.len()
+        ));
+    }
+    let stage_total: usize = definition
+        .spec
+        .task_patterns
+        .iter()
+        .map(|task| task.stages.len())
+        .sum();
+    if stage_total > MAX_STAGE_ENTRIES {
+        issues.push(format!(
+            "definition flattens to {stage_total} stages across taskPatterns, limit is {MAX_STAGE_ENTRIES}"
+        ));
+    }
+    let hook_total: usize = definition
+        .spec
+        .task_patterns
+        .iter()
+        .flat_map(|task| task.stages.iter())
+        .map(|stage| stage.receive_signals.len())
+        .sum();
+    if hook_total > MAX_HOOKS {
+        issues.push(format!(
+            "definition declares {hook_total} receiveSignals channels (compiled hooks) across taskPatterns, limit is {MAX_HOOKS}"
+        ));
     }
     for (task_index, task) in definition.spec.task_patterns.iter().enumerate() {
         if !valid_identifier_part(&task.name) {
@@ -129,9 +172,17 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
             }
             // sendSignals 组合维度（individual_record.signal_name）：stage
             // 标识符本身合法不等于组合合法，超限在编译期报确定性错误而不是
-            // 落库时 value too long（Go 镜像 validateDDLDimensions 同款）。
+            // 落库时 value too long。组合长度按 Go validateDDLDimensions
+            // 的全名精确计：canonical 三段式声明本身即全名，按原文精确计
+            // 长；裸名才拼 stage 前缀——三段式再拼一次前缀会把 task.stage
+            // 段重复计入，误拒真实 ≤100 的合法声明。
             for signal in &stage.send_signals {
-                if stage_identifier.len() + 1 + signal.len() > MAX_SIGNAL_NAME_BYTES {
+                let full_name_bytes = if signal.contains('.') {
+                    signal.len()
+                } else {
+                    stage_identifier.len() + 1 + signal.len()
+                };
+                if full_name_bytes > MAX_SIGNAL_NAME_BYTES {
                     issues.push(format!(
                         "spec.taskPatterns[{task_index}].stages[{stage_index}] ({stage_identifier:?}) sendSignal {signal:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)"
                     ));
@@ -329,7 +380,10 @@ pub(crate) fn validate_subscription_delegation(entries: &[StageEntry]) -> Vec<St
     issues
 }
 
-pub(crate) fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
+pub(crate) fn validate_mint_anchors(
+    entries: &[StageEntry],
+    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
+) -> Vec<String> {
     let mut issues = Vec::new();
     // 编译期固定五件事（模-1/模-2 裁决）：
     // 1) mint 取值合法（当前仅 per-fact）；
@@ -415,8 +469,12 @@ pub(crate) fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     }
     // 5) 防跨源代铸环（源类级统一环检测，直连自环已在上面按条上报）。
     issues.extend(validate_mint_subscription_cycles(entries));
-    // 6) 一事一单：同一事实至多被一个 mint 阶段声明为出生入口。
-    issues.extend(validate_mint_signal_key_uniqueness(entries));
+    // 6) 出生通道键并集查重（U2）：mint 出生键 ∪ dock entrance 键内
+    //    不得重复——跨通道重复同样拒绝。
+    issues.extend(validate_birth_channel_key_uniqueness(
+        entries,
+        entrance_fact_keys,
+    ));
     issues
 }
 
@@ -457,12 +515,20 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
     }
 }
 
-/// 一事一单：同一 (source, signal) 事实键至多被一个 mint（per-fact 订阅
-/// 铸单）阶段声明为出生入口。两个及以上 mint 阶段声明同一事实时，云轨会
-/// 按阶段各铸一单、链上一事实物化多单，三线回放对"该事实对应哪个订单"
-/// 发散；需要多阶段消费同一事实的场合走正常 hook 依赖（普通 receive
-/// hook），不铸单。
-fn validate_mint_signal_key_uniqueness(entries: &[StageEntry]) -> Vec<String> {
+/// 出生通道键并集查重（U2，与协议侧 Solidity/TS 同义规则）：同一 plan
+/// 内，出生通道键的并集——mint 阶段 ANCHOR 订阅的出生事实键
+/// (source, task.stage.signal) ∪ dockInterface entrance 端口（orderModes
+/// 含 new 的接口的 input 端口）atom 的事实键——内不得重复。
+/// - mint∪mint：一事一单（一事实多 mint 各铸一单，"该事实对应哪个订单"
+///   三线发散）；
+/// - mint∪dock / dock∪dock：同一事实既是 mint 出生入口又是 dock
+///   entrance 出生锚（或被多个 entrance 端口重复发布）时，outside 开放
+///   提交与 dock 建单竞争同一事实的出生通道，订单号从事实纯函数派生
+///   会让两条通道互相顶替——协议侧注册边界同义拒绝，编译期同口径收口。
+fn validate_birth_channel_key_uniqueness(
+    entries: &[StageEntry],
+    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
+) -> Vec<String> {
     let mut stages_by_key: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
     for entry in entries {
         if entry.stage.mint.is_none() {
@@ -482,15 +548,38 @@ fn validate_mint_signal_key_uniqueness(entries: &[StageEntry]) -> Vec<String> {
                 .insert(entry.stage_identifier.as_str());
         }
     }
-    stages_by_key
-        .into_iter()
-        .filter_map(|((source, signal), stages)| {
-            if stages.len() < 2 {
+    let mut keys: BTreeSet<&(String, String)> = stages_by_key.keys().collect();
+    keys.extend(entrance_fact_keys.keys());
+    keys.into_iter()
+        .filter_map(|key| {
+            let stages: Vec<&str> = stages_by_key
+                .get(key)
+                .map(|stages| stages.iter().copied().collect())
+                .unwrap_or_default();
+            let ports: Vec<&str> = entrance_fact_keys
+                .get(key)
+                .map(|ports| ports.iter().map(String::as_str).collect())
+                .unwrap_or_default();
+            if stages.len() + ports.len() < 2 {
                 return None;
             }
-            let stages = stages.into_iter().collect::<Vec<_>>().join(", ");
+            let (source, signal) = (&key.0, &key.1);
+            if ports.is_empty() {
+                let stages = stages.join(", ");
+                return Some(format!(
+                    "{source}::{signal} is declared as the birth entry by multiple mint stages ({stages}): one fact mints at most one order (一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖)"
+                ));
+            }
+            let mut claimants = Vec::new();
+            if !stages.is_empty() {
+                claimants.push(format!("mint stage(s) ({})", stages.join(", ")));
+            }
+            if ports.len() > 1 || !stages.is_empty() {
+                claimants.push(format!("dock entrance port(s) ({})", ports.join(", ")));
+            }
             Some(format!(
-                "{source}::{signal} is declared as the birth entry by multiple mint stages ({stages}): one fact mints at most one order (一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖)"
+                "{source}::{signal} is declared as a birth channel by both {}: one fact keys at most one birth channel in the plan (出生通道键并集查重：mint 出生键 ∪ dock entrance 键内不得重复)",
+                claimants.join(" and ")
             ))
         })
         .collect()
