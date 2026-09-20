@@ -2019,6 +2019,126 @@
           }
         }
       }
+    },
+    {
+      "name": "timer poke replays after canonical reordering",
+      "events": [
+        {
+          "eventName": "TimerPoked",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+          "dueAt": "2026-04-27T00:00:05.000Z",
+          "pokedAt": "2026-04-27T00:00:06.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 7,
+          "logIndex": 0,
+          "transactionHash": "0x26",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+          "stageIdentifier": "task.main",
+          "hookName": "TIMEOUT"
+        },
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+            "zhixuId": "corpus-replay-reorder",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c12",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT",
+                "orderTriggerKind": "none",
+                "emitReady": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d12",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e12",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f12"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f12": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b12"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d12",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e12",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f12",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a12::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f12",
+        "senderId": "pay-executor",
+        "eventId": "3:0:0x23",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged",
+          "HookReady"
+        ],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a12::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b12": "ready"
+          }
+        }
+      }
     }
   ]
 }

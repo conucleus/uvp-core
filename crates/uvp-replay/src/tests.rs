@@ -1011,6 +1011,81 @@ fn poke_before_due_or_not_waiting_is_skipped() {
 }
 
 #[test]
+fn timer_poked_without_poked_at_fails_loudly() {
+    // pokedAt 是 TimerPoked 的求值时钟：缺失/非串是结构性毒输入，整场
+    // 回放响亮失败——跳过（或按未到期静默滤除）会把"事件存在但时钟
+    // 不可知"吞成空洞。TS 镜像层按同口径抛错，此测试是两侧对齐的
+    // 权威侧钉子。
+    let events = vec![
+        json!({
+            "eventName": "PlanRegistered",
+            "blockNumber": 1,
+            "logIndex": 0,
+            "transactionHash": "0x01",
+            "plan": {
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "compiledHooks": [{
+                    "hookId": "flow.pay#TIMEOUT",
+                    "stageId": "flow.pay",
+                    "stageIdentifier": "flow.pay",
+                    "hookName": "TIMEOUT",
+                    // watcher 形态：order-trigger hook 禁 DELAY，出生钩
+                    // 携 DELAY 会在注册门先炸，到不了 pokedAt 口径。
+                    "orderTriggerKind": "none",
+                    "emitReady": true,
+                    "instructions": [
+                        {"op": "SIGNAL", "signalKey": "0x50"},
+                        {"op": "DELAY", "delaySeconds": 5}
+                    ],
+                }],
+                "dependencyIndex": {"0x50": ["flow.pay#TIMEOUT"]}
+            },
+        }),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x30",
+            "signalId": "0x40",
+            "signalKey": "0x50",
+            "senderId": "sender",
+            "submittedAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "TimerPoked",
+            "blockNumber": 4,
+            "logIndex": 0,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "flow.pay#TIMEOUT",
+            "dueAt": "2026-04-27T00:00:05.000Z"
+        }),
+    ];
+    let error = replay_chain_events(events, &ReplayOptions::default()).unwrap_err();
+    assert!(
+        error.to_string().contains("pokedAt must be a string"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn rejects_not_without_operand() {
     let instructions = vec![json!({"op": "NOT"})];
     let error = evaluate_instructions(
