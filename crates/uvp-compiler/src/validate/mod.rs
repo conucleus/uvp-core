@@ -140,6 +140,32 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                         executor.supplier_type
                     ));
                 }
+                // executor.selectableResource 与 stage.fileResources 同为
+                // FileResource 面：条目随 route 进链上承诺（executorHash /
+                // resourcesHash），词表外 fileType（含带空白变体）在此拒绝。
+                if let Some(selectable) = &executor.selectable_resource {
+                    let path = format!(
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}].executor.selectableResource"
+                    );
+                    match selectable.as_object() {
+                        Some(entries) => {
+                            for (key, resource) in entries {
+                                if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+                                    issues.push(issue);
+                                }
+                            }
+                        }
+                        None => issues.push(format!("{path} must be a map of file resources")),
+                    }
+                }
+            }
+            for (key, resource) in &stage.file_resources {
+                let path = format!(
+                    "spec.taskPatterns[{task_index}].stages[{stage_index}].fileResources"
+                );
+                if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+                    issues.push(issue);
+                }
             }
             // stage.source：非空、plain identifier 字符集、≤36（与
             // hook-dsl 标头/订阅目标的 source 类上限同口径）。
@@ -200,6 +226,24 @@ fn is_plain_source_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+/// 单个 FileResource 条目的 fileType 闭集检查（fileResources 与
+/// executor.selectableResource 共用）：缺失/非串/闭集外（含带空白变体）
+/// 都是确定性的非法输入——条目内容会原样进链上承诺，归一化放行会让
+/// 承诺侧按原文分叉。
+fn file_resource_type_issue(path: &str, key: &str, resource: &Value) -> Option<String> {
+    let file_type = resource.get("fileType").and_then(Value::as_str);
+    if file_type.is_some_and(uvp_model::is_known_file_type) {
+        return None;
+    }
+    Some(format!(
+        "{path}[{key:?}].fileType must be one of {} (exact match, whitespace variants rejected), found {:?}",
+        uvp_model::FILE_TYPES
+            .map(|value| format!("{value:?}"))
+            .join(", "),
+        resource.get("fileType")
+    ))
 }
 
 /// `^[a-z][a-z0-9_-]{0,99}$`（字节口径）。

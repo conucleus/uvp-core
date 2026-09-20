@@ -130,6 +130,18 @@ pub fn is_known_supplier_type(value: &str) -> bool {
     SUPPLIER_TYPES.contains(&value)
 }
 
+/// `fileType` 闭集：`fileResources` 条目与 `executor.selectableResource`
+/// 条目（FileResource 词表）的取值面，与 TS compiler FILE_TYPES / Go
+/// fileTypes 同源。两类条目都随 route 进链上承诺（resourcesHash /
+/// executorHash），拼错的类型必须在编译期拒绝，而不是烧进承诺后才在
+/// 消费侧炸开。
+pub const FILE_TYPES: [&str; 4] = ["local", "http", "txcloud", "plain_text"];
+
+/// 与 supplierType 闭集同纪律：精确匹配、不 trim。
+pub fn is_known_file_type(value: &str) -> bool {
+    FILE_TYPES.contains(&value)
+}
+
 /// `spec.dockInterface` 下的具名接口。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

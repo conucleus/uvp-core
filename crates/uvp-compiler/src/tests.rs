@@ -1384,6 +1384,74 @@ fn rejects_unknown_executor_supplier_types() {
 }
 
 #[test]
+fn rejects_file_resources_outside_the_closed_file_type_set() {
+    // fileResources 条目随 route 进链上承诺（resourcesHash）：fileType
+    // 闭集 {local, http, txcloud, plain_text} 之外（含带空白变体与缺失）
+    // 都在编译期拒绝，不静默烧进承诺。
+    for (label, file_type) in [
+        ("misspelled", json!("locale")),
+        ("padded", json!(" local ")),
+        ("missing", Value::Null),
+    ] {
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][0]["stages"][0]["fileResources"] =
+            json!({ "contract_template": { "fileType": file_type } });
+        let error = compile_zhixu_hook_plan(&parent, None, true)
+            .err()
+            .unwrap_or_else(|| panic!("{label} fileType must be rejected"));
+        assert!(
+            error.to_string().contains("fileResources")
+                && error.to_string().contains("fileType must be one of")
+                && error.to_string().contains("whitespace variants rejected"),
+            "{label}: {error}"
+        );
+    }
+
+    // 闭集内取值照常编译。
+    let mut parent = parent_settlement_definition(TARGET_NAME);
+    parent["spec"]["taskPatterns"][0]["stages"][0]["fileResources"] = json!({
+        "contract_template": { "fileType": "local", "localFile": { "path": "./t.md" } }
+    });
+    compile_zhixu_hook_plan(&parent, None, true)
+        .unwrap_or_else(|err| panic!("closed-set fileType must compile: {err}"));
+}
+
+#[test]
+fn rejects_selectable_resource_outside_the_closed_file_type_set() {
+    // executor.selectableResource 与 fileResources 同为 FileResource 面，
+    // 且整体经 executorHash 进链上承诺：词表外 fileType（含带空白变体）
+    // 与非 map 形态都在编译期拒绝。
+    for (label, value) in [
+        (
+            "misspelled",
+            json!({ "dataset": { "fileType": "tx_cloud" } }),
+        ),
+        ("padded", json!({ "dataset": { "fileType": " http" } })),
+        ("not-a-map", json!(["dataset"])),
+    ] {
+        let mut parent = parent_settlement_definition(TARGET_NAME);
+        parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["selectableResource"] = value;
+        let error = compile_zhixu_hook_plan(&parent, None, true)
+            .err()
+            .unwrap_or_else(|| panic!("{label} selectableResource must be rejected"));
+        assert!(
+            error.to_string().contains("selectableResource")
+                && (label == "not-a-map"
+                    || error.to_string().contains("fileType must be one of")),
+            "{label}: {error}"
+        );
+    }
+
+    // 闭集内取值照常编译。
+    let mut parent = parent_settlement_definition(TARGET_NAME);
+    parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["selectableResource"] = json!({
+        "dataset": { "fileType": "plain_text", "plainText": { "content": "x" } }
+    });
+    compile_zhixu_hook_plan(&parent, None, true)
+        .unwrap_or_else(|err| panic!("closed-set selectableResource must compile: {err}"));
+}
+
+#[test]
 fn rejects_non_zhixu_executor_with_delegation_config() {
     // organization executor 携带完整 zhixuExecutorConfig：编译期响亮拒绝
     // （D001"拼错字段同罪"口径）——静默放行会把委托配置原文烧进
