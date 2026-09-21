@@ -2227,9 +2227,9 @@ fn rejects_receive_signal_keys_with_separators() {
 #[test]
 fn send_signal_combined_length_counts_canonical_full_name_exactly() {
     // 对拍 Go validateDDLDimensions（dimensions.go）：canonical 三段式声明
-    // 本身即全名，按原文精确计长；裸名才拼 stage 前缀。旧公式对三段式
-    // 再拼一次 stage 前缀，把 task.stage 段重复计入——恰 100 字节的合法
-    // canonical 名被误拒，两侧结论必须一致。
+    // 本身即全名（task.stage.signal），按原文精确计长；裸名才拼 stage
+    // 前缀。三段式若再拼一次 stage 前缀，会把 task.stage 段重复计入、
+    // 误伤恰 100 字节列宽边界内的合法 canonical 名，两侧结论必须一致。
     let stage_name = "s".repeat(48);
     let canonical_at_limit = format!("t.{}.{}", stage_name, "x".repeat(49));
     assert_eq!(canonical_at_limit.len(), 100);

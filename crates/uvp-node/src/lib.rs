@@ -73,8 +73,10 @@ pub fn hook_plan_schema_version() -> String {
 }
 
 #[napi]
-/// 构建指纹（git-<rev>，build.rs 编译期烧入）：TS 侧据此比对当前 uvp-core
-/// 检出 HEAD，识别"版本+语义探针双检都放行但行为已变"的陈旧 dylib。
+/// 构建指纹（git-<rev>，build.rs 编译期烧入）：rev 是 uvp-core 检出的
+/// 内容树哈希（`HEAD^{tree}`，squash 只改提交图不改树），TS 侧据此比对
+/// 当前 uvp-core 检出内容树，识别"版本+语义探针双检都放行但行为已变"的
+/// 陈旧 dylib。
 /// `no-git-` 前缀表示构建时找不到 git 仓库，宿主侧应拒绝静默通过。
 pub fn build_fingerprint() -> String {
     env!("UVP_BUILD_FINGERPRINT").to_string()
