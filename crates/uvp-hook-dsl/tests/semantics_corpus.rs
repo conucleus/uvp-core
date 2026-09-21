@@ -9,6 +9,7 @@ const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Corpus {
+    schema_version: String,
     parse_cases: Vec<ParseCase>,
     eval_cases: Vec<EvalCase>,
     invalid_cases: Vec<InvalidCase>,
@@ -65,7 +66,14 @@ struct InvalidCase {
 }
 
 fn load_corpus() -> Corpus {
-    serde_json::from_str(CORPUS).expect("semantic corpus should decode")
+    let corpus: Corpus = serde_json::from_str(CORPUS).expect("semantic corpus should decode");
+    // 语料格式版本钉住：v2 迁移时这里必须先响亮失败，消费面不得静默按旧
+    // 口径解读新文件（replay/TS/Go 消费测试同款断言）。
+    assert_eq!(
+        corpus.schema_version, "uvp.hookSemanticsCorpus.v1",
+        "corpus schemaVersion drifted; migrate every consumer before shipping the new file"
+    );
+    corpus
 }
 
 fn profile(value: &str) -> Profile {
