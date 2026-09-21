@@ -41,10 +41,10 @@ pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
 
 /// 以下跨秩序关键字不受支持：`::OUTSIDE@`、`ANCHOR@`（裸标头）、
-/// `OUTSOURCE`。解析器仍识别这些关键字，以便给出精确的 unsupported 报错
+/// `OUTSOURCE`。解析器词法识别这些关键字，以便给出精确的 unsupported 报错
 /// （统一入口为 `::ANCHOR(@source::task.stage.signal)` 订阅，见
-/// subscription-mint-spec.md），而不是笼统的语法错误。扇入类旧标头不再点名：
-/// 该形态按通用语法错误拒绝。
+/// subscription-mint-spec.md），而不是笼统的语法错误。扇入类标头不在
+/// 词表内：该形态按通用语法错误拒绝。
 pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -361,7 +361,7 @@ impl<'a> Parser<'a> {
         match ident.as_str() {
             "ANCHOR" => self.parse_subscription(ident_start),
             "OUTSIDE" | "OUTSOURCE" => Err(HookError::Message(format!(
-                "{ident}@ has been retired: {RETIRED_KEYWORDS_HINT}"
+                "{ident}@ is not supported: {RETIRED_KEYWORDS_HINT}"
             ))),
             _ => {
                 if !is_strict_signal_ref(&ident) {
@@ -382,7 +382,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         if self.peek() == '@' {
             return Err(HookError::Message(format!(
-                "ANCHOR@ header form has been retired: {RETIRED_KEYWORDS_HINT}"
+                "ANCHOR@ header form is not supported: {RETIRED_KEYWORDS_HINT}"
             )));
         }
         if !self.consume("(") {

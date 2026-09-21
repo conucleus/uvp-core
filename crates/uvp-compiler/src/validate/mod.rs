@@ -55,7 +55,7 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
             definition.metadata.name
         ));
     }
-    // N7：name 是作者技术标签，slug 形态保证任何报错都有可读且可排序的
+    // name 是作者技术标签，slug 形态保证任何报错都有可读且可排序的
     // 标签；校验仅限形态。
     if !is_name_slug(&definition.metadata.name) {
         issues.push(format!(
@@ -355,7 +355,7 @@ fn stage_is_subscription(stage: &ZhixuStage) -> bool {
 /// - 有 receiveSignals 但全部编译为 flags=0 纯 watcher 的阶段同样不物化。
 ///
 /// dockInterface entrance 端口钩子编译为 dock|emitReady（=6），是合法
-/// 物化路径，不按 watcher 拒绝（CORE-8）。
+/// 物化路径，不按 watcher 拒绝。
 pub(crate) fn validate_onchain_stage_materialization(
     entries: &[StageEntry],
     entrance_hook_ids: &BTreeSet<String>,
@@ -513,7 +513,7 @@ pub(crate) fn validate_mint_anchors(
     }
     // 5) 防跨源代铸环（源类级统一环检测，直连自环已在上面按条上报）。
     issues.extend(validate_mint_subscription_cycles(entries));
-    // 6) 出生通道键并集查重（U2）：mint 出生键 ∪ dock entrance 键内
+    // 6) 出生通道键并集查重：mint 出生键 ∪ dock entrance 键内
     //    不得重复——跨通道重复同样拒绝。
     issues.extend(validate_birth_channel_key_uniqueness(
         entries,
@@ -559,7 +559,7 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
     }
 }
 
-/// 出生通道键并集查重（U2）：同一 plan 内，出生通道键的并集——mint 阶段
+/// 出生通道键并集查重：同一 plan 内，出生通道键的并集——mint 阶段
 /// ANCHOR 订阅的出生事实键 (source, task.stage.signal) ∪ dockInterface
 /// entrance 端口（orderModes 含 new 的接口的 input 端口）atom 的事实键
 /// ——内不得重复。三个臂的裁决现状并不一致：

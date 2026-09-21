@@ -58,7 +58,7 @@ pub enum HookMode {
 // Subscription operators are cross-source delivery channels, not
 // backend/executor input declarations. Backend/executor external inputs are
 // sent to UVP only when the executor explicitly chooses to do so; there is no
-// externalSignals declaration any more.
+// externalSignals declaration.
 pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
     match expr {
         Expr::Subscription { .. } => {

@@ -2060,7 +2060,7 @@ fn rejects_empty_or_whitespace_metadata_name() {
 
 #[test]
 fn rejects_metadata_name_outside_slug_shape() {
-    // N7：name 是作者技术标签，slug 形态（小写开头，小写字母/数字/
+    // name 是作者技术标签，slug 形态（小写开头，小写字母/数字/
     // 下划线/中划线，≤100 字节）；校验仅限形态。
     for name in ["Payment", "pay ment", "1payment", "支付"] {
         let mut definition = target_payment_definition();
@@ -2571,7 +2571,7 @@ fn mint_definitions(stages: &[(&str, Value)]) -> Value {
 
 #[test]
 fn rejects_mint_birth_key_colliding_with_dock_entrance_key() {
-    // U2 出生通道键并集查重：mint 阶段的 ANCHOR 出生事实键与本地
+    // 出生通道键并集查重：mint 阶段的 ANCHOR 出生事实键与本地
     // dockInterface entrance 端口（orderModes 含 new）的 atom 事实键相同
     // ——同一事实同时是 mint 出生入口与 dock 出生锚，outside 开放提交与
     // dock 建单竞争同一事实的出生通道，编译期与协议侧同义拒绝（两个
@@ -2635,7 +2635,7 @@ fn rejects_mint_birth_key_colliding_with_dock_entrance_key() {
 
 #[test]
 fn rejects_dock_entrance_key_published_twice_across_new_interfaces() {
-    // U2 并集查重的 dock∪dock 面：两个 new 型接口的 input 端口引用同一
+    // 并集查重的 dock∪dock 面：两个 new 型接口的 input 端口引用同一
     // stage 上 atom 相同的两个 mailbox hook——hooks_claimed 只封同一 hook
     // 引用重复发布，不同 hook 名承载同一 atom 的事实键仍构成出生通道键
     // 重复，按并集规则拒绝。

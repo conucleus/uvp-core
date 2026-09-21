@@ -30,7 +30,7 @@ pub(crate) struct DockState {
     /// 引用的本地 hook：编译为 orderTriggerKind=dock。
     pub(crate) entrance_hook_ids: BTreeSet<String>,
     /// entrance 端口 atom 的事实键 (source, task.stage.signal) → 发布端口
-    /// 路径：U2 出生通道键并集查重（mint 出生键 ∪ dock entrance 键）的
+    /// 路径：出生通道键并集查重（mint 出生键 ∪ dock entrance 键）的
     /// dock 侧输入。
     pub(crate) entrance_fact_keys: BTreeMap<(String, String), Vec<String>>,
 }

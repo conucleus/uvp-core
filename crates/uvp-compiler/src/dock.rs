@@ -616,7 +616,7 @@ pub struct InterfaceDeclaration {
 }
 
 /// 编译本地 `spec.dockInterface` 的产物：中性接口声明 + entrance 出生
-/// 事实键（U2 出生通道键并集查重的 dock 侧输入）。entrance 键只从本地
+/// 事实键（出生通道键并集查重的 dock 侧输入）。entrance 键只从本地
 /// 接口编译收集——manifest 侧接口是远端目标的声明面，不参与本 plan 的
 /// 出生通道键并集。
 #[derive(Debug, Clone)]

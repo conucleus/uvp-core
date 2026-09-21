@@ -1833,7 +1833,7 @@ fn case_distinct_hook_ids_stay_separate() {
 
 #[test]
 fn init_status_changes_are_trimmed() {
-    // v0.10 合约不产出 HookStatusChanged(status=init)（Init 是隐含初值，
+    // 合约不产出 HookStatusChanged(status=init)（Init 是隐含初值，
     // 无观察语义）：携带该状态的输入事件被裁剪，不产生 expected、
     // 不参与比对——原生入口可直接喂，无需适配层预裁。
     let plan = single_hook_plan(
@@ -2396,7 +2396,7 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
 }
 
 // ------------------------------------------------------------------
-// M27 镜像补齐：注册门（30d 上限 / 根正锚 / NOT 裸操作数 / 深度 120）、
+// 链上注册门镜像（30d 上限 / 根正锚 / NOT 裸操作数 / 深度 120）、
 // 重复 OrderRegistered 吸收、非整数 blockNumber、dueAt 渲染响亮失败。
 // ------------------------------------------------------------------
 
@@ -2923,7 +2923,7 @@ fn unrenderable_due_at_fails_loudly_instead_of_folding_to_permanent_wait() {
 }
 
 // ------------------------------------------------------------------
-// M28：Rust 编译产物（无指令轨）直连回放的空洞 PASS 断层。
+// Rust 编译产物（无指令轨）直连回放的空洞 PASS 断层。
 // ------------------------------------------------------------------
 
 #[test]

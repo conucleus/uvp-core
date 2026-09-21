@@ -15,7 +15,7 @@ use crate::{chain_event_id, seconds_from_iso, value_i64, value_str, ReplayError,
 /// - `HookStatusChanged(status=ready)`：合约对 →Ready 先 emit 状态变更再
 ///   emit HookReady；oracle 只以 HookReady 观察就绪，ready 状态变更被裁剪
 ///   出 expected，不参与比对。
-/// - `HookStatusChanged(status=init)`：v0.10 合约不产出（Init 是隐含初值，
+/// - `HookStatusChanged(status=init)`：合约不产出（Init 是隐含初值，
 ///   无观察语义）；适配层抬升的遗留形状被裁剪，原生输入契约据此免裁剪
 ///   直喂。
 /// - 语义重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt 时刻）：
@@ -294,8 +294,8 @@ pub(crate) fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Res
     evaluate_hook(order, &hook, poked_at)
 }
 
-/// hook-plan v2 把单一 `isTrigger` 拆成 `orderTriggerKind`(mint|dock|none)
-/// 加 `emitReady`。oracle 只认 v2 字段，缺失即结构性错误
+/// hook-plan v2 的出生标记字段是 `orderTriggerKind`(mint|dock|none) 加
+/// `emitReady`。oracle 只认 v2 字段，缺失即结构性错误
 /// （fail-closed，不做隐式回退）。
 pub(crate) fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
     Ok(matches!(order_trigger_kind(hook)?, "mint" | "dock"))
@@ -706,8 +706,7 @@ fn min_anchor(left: Option<i64>, right: Option<i64>) -> Option<i64> {
 
 /// 可用 due 取较晚者；无 due 侧（就绪/取消归约的产物）不参与（AND 等待
 /// 的归约口径，与核心求值器 Expr::And 的 waits.max() 同形：waits 只收集
-/// Some 的 ready_at）。替代旧 0 哨兵的裸 max——那会把"无 due"折成
-/// epoch 0 参与比较。
+/// Some 的 ready_at，"无 due"不得折成 epoch 0 参与比较）。
 fn max_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.max(right)),
@@ -717,7 +716,7 @@ fn max_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
 }
 
 /// 可用 due 取较早者；无 due 侧让位（OR 等待的归约口径，与核心求值器
-/// Expr::Or 的 waits.min() 同形）。替代 min_non_zero 的哨兵特判。
+/// Expr::Or 的 waits.min() 同形：无 due 侧不做非零哨兵特判）。
 fn min_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),

@@ -26,10 +26,10 @@ pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
 /// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
 /// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
 pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
-// 能力表无规模上限（Merkle 化）：链上不再逐条注册 signalCapabilities，
+// 能力表无规模上限（Merkle 化）：链上不逐条注册 signalCapabilities，
 // 由链下 TS 编译器建树以 capabilitiesRoot 承诺；Rust 按架构契约保持
 // 中性语义权威、不产哈希、不建树，仅保留逐条语义校验（空串/重复/
-// E16 唯一属主）。
+// relation=current 事实键唯一属主）。
 
 /// hook_plan 产物：中性 plan 壳（模型/校验/编译结果 + dock 声明面）。
 /// 哈希承诺（planHash/roots/派生身份）由链轨 TS 在此壳上计算；云轨
@@ -332,7 +332,7 @@ fn build_dependency_index(compiled_hooks: &[Value]) -> Value {
 fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     let mut capabilities = Vec::new();
     let mut seen = BTreeSet::new();
-    // E16 镜像（合约 UVPPlanMetadataModule._registerSignalCapabilities 的
+    // 镜像合约注册门（UVPPlanMetadataModule._registerSignalCapabilities 的
     // DuplicateCurrentOrderSignalCapability / TS onchain-hook-plan 的
     // duplicateCurrentOrderFactKeyIssues）：relation=current 的事实键
     // (targetSource, targetSignalName) 在 plan 内唯一属主——跨阶段双属主
@@ -376,7 +376,8 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
         }
     }
     // 无规模上限：链上能力表由 capabilitiesRoot 一次性承诺，不存在
-    // 逐条注册循环。语义校验（空串/重复/E16 唯一属主）见上，规模不受限。
+    // 逐条注册循环。语义校验（空串/重复/relation=current 事实键唯一
+    // 属主）见上，规模不受限。
     capabilities.sort_by(|left, right| {
         value_str(left, "stageIdentifier")
             .cmp(value_str(right, "stageIdentifier"))
@@ -429,7 +430,7 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<
         // 三段式只是显式自指形态：task.stage 前缀必须落在声明阶段自身。
         // 指向别处命名空间的 canonical 声明会与目标阶段的裸名声明展开成
         // 同一 (targetSource, signal) capability——双属主绕过"一事一能力"，
-        // 链上 _signalStageId 归属二义（E16 注册边界 revert
+        // 链上 _signalStageId 归属二义（注册边界 revert
         // DuplicateCurrentOrderSignalCapability），编译期同口径拒绝。
         if !declared_signal.starts_with(&format!("{}.", entry.stage_identifier)) {
             return Err(CompilerError::Issues(format!(

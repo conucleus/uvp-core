@@ -240,7 +240,7 @@ fn seconds_from_iso(value: &str) -> Result<i64> {
 }
 
 fn iso_from_seconds(value: i64) -> Option<String> {
-    // 0 不再是"无 due"哨兵（区分已移至 EvalValue::due_at 的显式 Option）：
+    // "无 due"由 EvalValue::due_at 的显式 Option 区分，epoch 0 不是哨兵：
     // epoch 0 的等待期限照常渲染，poke 资格闸按存在性判断。
     Some(
         Utc.timestamp_opt(value, 0)

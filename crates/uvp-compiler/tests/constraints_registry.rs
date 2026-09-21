@@ -877,7 +877,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
-    // --- 出生通道键并集（U2，分叉现状：mint∪mint 臂仅本仓拒绝）---
+    // --- 出生通道键并集（分叉现状：mint∪mint 臂仅本仓拒绝）---
     probes.push((
         "birth-channel-key-union-uniqueness".into(),
         (
