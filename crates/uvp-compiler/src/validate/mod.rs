@@ -559,16 +559,21 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
     }
 }
 
-/// 出生通道键并集查重（U2，与协议侧 Solidity/TS 同义规则）：同一 plan
-/// 内，出生通道键的并集——mint 阶段 ANCHOR 订阅的出生事实键
-/// (source, task.stage.signal) ∪ dockInterface entrance 端口（orderModes
-/// 含 new 的接口的 input 端口）atom 的事实键——内不得重复。
-/// - mint∪mint：一事一单（一事实多 mint 各铸一单，"该事实对应哪个订单"
-///   三线发散）；
-/// - mint∪dock / dock∪dock：同一事实既是 mint 出生入口又是 dock
-///   entrance 出生锚（或被多个 entrance 端口重复发布）时，outside 开放
-///   提交与 dock 建单竞争同一事实的出生通道，订单号从事实纯函数派生
-///   会让两条通道互相顶替——协议侧注册边界同义拒绝，编译期同口径收口。
+/// 出生通道键并集查重（U2）：同一 plan 内，出生通道键的并集——mint 阶段
+/// ANCHOR 订阅的出生事实键 (source, task.stage.signal) ∪ dockInterface
+/// entrance 端口（orderModes 含 new 的接口的 input 端口）atom 的事实键
+/// ——内不得重复。三个臂的裁决现状并不一致：
+/// - mint∪dock / dock∪dock：三方一致拒绝（合约注册门
+///   DuplicateBirthChannelKey、TS 编译器镜像、本仓编译期）。跨通道共享键
+///   会让任一侧的出生事务把另一侧的出生线一并推 Ready、物化幻影阶段；
+///   dock entrance 键按 route 钉死（planHookDependsOn），一键挂两条
+///   entrance 时任一 route 的子单会物化另一 route 的阶段。
+/// - mint∪mint：未收敛分叉。本仓拒绝（下方"一事一单"臂）：一事实多
+///   mint 各铸一单，"该事实对应哪个订单"三线发散，本仓选择在编译期
+///   收口；合约与 TS 放行：一事实扇出多条 mint 出生线是产品现行形态
+///   （customs 基准 plan：order::registered 同时出生执行者选择与资源
+///   发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段。收敛前
+///   如实登记两侧口径，不宣称一致。
 fn validate_birth_channel_key_uniqueness(
     entries: &[StageEntry],
     entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,

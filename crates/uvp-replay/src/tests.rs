@@ -2528,8 +2528,10 @@ fn not_on_composite_operand_is_rejected_at_registration() {
         "{error}"
     );
 
-    // 对照：NOT 直接作用于裸 SIGNAL 合法（A&~B 的负依赖形态）。
-    let plan = watcher_plan(
+    // 对照：NOT 直接作用于裸 SIGNAL 合法（A&~B 的负依赖形态）。指令集
+    // 携带两个 SIGNAL 原子，dependencyIndex 须逐点镜像（真实编译产物按
+    // 全部原子建索引）。
+    let mut plan = watcher_plan(
         "flow.pay#GUARD",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
@@ -2538,6 +2540,7 @@ fn not_on_composite_operand_is_rejected_at_registration() {
             { "op": "AND", "arity": 2 }
         ]),
     );
+    plan["dependencyIndex"] = json!({ "0x50": ["flow.pay#GUARD"], "0x51": ["flow.pay#GUARD"] });
     replay_chain_events(
         vec![plan_registered_event(plan)],
         &ReplayOptions {
@@ -2583,6 +2586,148 @@ fn instruction_depth_cap_120_is_enforced_at_registration() {
         },
     )
     .expect("nesting depth exactly 120 sits at the cap and must register");
+}
+
+#[test]
+fn dependency_index_key_mismatch_is_rejected_at_registration() {
+    // 绕过形态：instructions 全合法（SIGNAL 原子可求值、根含正锚），但
+    // dependencyIndex 用不匹配的键挂该 hook。oracle 的求值范围由
+    // dependencyIndex 反查决定——指令轨与索引错位时事件流回放产出零观察，
+    // observed/mismatches 全 0 仍 ok:true（空洞假 PASS）。镜像合约
+    // HookDependencyKeyMismatch 门，注册期响亮失败。
+    let mut wrong_key = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    wrong_key["dependencyIndex"] = json!({ "0x99": ["flow.pay#TIMEOUT"] });
+    let error = replay_chain_events(
+        vec![plan_registered_event(wrong_key)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("dependencyIndex maps key 0x99 to hook flow.pay#TIMEOUT but the key is not a SIGNAL atom"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("HookDependencyKeyMismatch"),
+        "{error}"
+    );
+
+    // 反向错位：SIGNAL 原子不在索引内——该事实到达永不触发求值，hook
+    // 永久 Init 且零告警，同样必须响亮失败。
+    let mut unindexed = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    unindexed["dependencyIndex"] = json!({});
+    let error = replay_chain_events(
+        vec![plan_registered_event(unindexed)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("references SIGNAL key 0x50 that dependencyIndex does not map back to it"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("HookDependencyKeyMismatch"),
+        "{error}"
+    );
+
+    // dependencyIndex 整体缺失：求值范围反查恒为空，一切信号零观察——
+    // "合约不可能的 plan"（注册必然写入索引），按结构错误拒绝。
+    let mut missing_index = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    missing_index
+        .as_object_mut()
+        .expect("plan object")
+        .remove("dependencyIndex");
+    let error = replay_chain_events(
+        vec![plan_registered_event(missing_index)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("missing dependencyIndex"),
+        "{error}"
+    );
+
+    // 对照：指令原子键与索引逐点一致的 plan 照常注册（watcher_plan 基底
+    // 即该形态）。
+    replay_chain_events(
+        vec![plan_registered_event(watcher_plan(
+            "flow.pay#TIMEOUT",
+            json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+        ))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("an index that mirrors the SIGNAL atoms exactly must register");
+}
+
+#[test]
+fn silent_order_trigger_is_rejected_at_registration() {
+    // 镜像合约 SilentOrderTriggerHook 门：order-trigger hook 必须携带
+    // emitReady。沉默 trigger 物化阶段但不发 HookReady——该形态会让
+    // oracle 的 expected 观察与链上事件流系统性分叉，注册边界拒绝，
+    // 不留到求值期。
+    let mut silent = single_hook_plan(
+        "flow.start#TRIGGER",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    silent["compiledHooks"][0]["emitReady"] = json!(false);
+    let error = replay_chain_events(
+        vec![plan_registered_event(silent)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("order-trigger hook flow.start#TRIGGER must carry emitReady=true"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("SilentOrderTriggerHook"),
+        "{error}"
+    );
+
+    // 对照：非 trigger 的沉默 watcher（emitReady=false）合法——物化门由
+    // 阶段物化状态承担，不发 HookReady 是其正常形态。
+    let mut silent_watcher = watcher_plan(
+        "flow.pay#WATCH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    silent_watcher["compiledHooks"][0]["emitReady"] = json!(false);
+    replay_chain_events(
+        vec![plan_registered_event(silent_watcher)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a silent non-trigger watcher is a legal shape and must register");
 }
 
 #[test]

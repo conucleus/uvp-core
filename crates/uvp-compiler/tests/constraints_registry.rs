@@ -15,7 +15,7 @@
 //! 作为 uvp-eth 子模块检出（uvp-eth/uvp-core、注册表在 uvp-eth/uvp-protocol）
 //! 还是与 uvp-protocol 平级独立检出，都能命中，不绑定单一兄弟目录布局。
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 const CONSTRAINTS_ENV_VAR: &str = "UVP_CONSTRAINTS_PATH";
@@ -491,10 +491,58 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
+        "file-resource-type-closed-enum".into(),
+        (
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["fileResources"] = json!({
+                        "contract_template": { "fileType": "local", "localFile": { "path": "./t.md" } }
+                    });
+                    d
+                })
+            },
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["fileResources"] =
+                        json!({ "contract_template": { "fileType": "locale" } });
+                    d
+                })
+            },
+            "fileType must be one of",
+        ),
+    ));
+    probes.push((
         "send-signal-combined-max-length".into(),
         (
-            || probe_compile(base_definition()),
             || {
+                // canonical 三段式声明本身即全名：原文恰 100 字节必须放行
+                //（旧公式会再拼一次 stage 前缀、把 100 误算成 110 拒绝）。
+                // 保留裸名 cmp：receiveSignals.START 的引用不悬空。
+                let canonical = probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["sendSignals"] =
+                        json!(["cmp", "main.work.".to_string() + &"s".repeat(90)]);
+                    d
+                });
+                assert_satisfy(canonical, "send-signal-combined-max-length(canonical)");
+                probe_compile(base_definition())
+            },
+            || {
+                // 裸名超限（拼 stage 前缀后 >100）与 canonical 原文超限
+                //（>100）两个方向都拒绝。
+                let canonical_over = probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["sendSignals"] =
+                        json!(["cmp", "main.work.".to_string() + &"s".repeat(91)]);
+                    d
+                });
+                assert_violate(
+                    canonical_over,
+                    "exceeds 100 bytes combined (individual_record.signal_name)",
+                    "send-signal-combined-max-length(canonical)",
+                );
                 probe_compile({
                     let mut d = base_definition();
                     let stage = stage_mut(&mut d);
@@ -782,7 +830,189 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
+    // --- dock 级（M31 计数闸：接口端口 / manifest 条目）---
+    probes.push((
+        "interface-ports-max-count".into(),
+        (
+            || probe_compile(target_interface_definition()),
+            || {
+                probe_compile({
+                    let mut d = target_interface_definition();
+                    let inputs: Map<String, Value> = (0..65)
+                        .map(|index| {
+                            (
+                                format!("p{index:02}"),
+                                json!({ "hook": "main.work#DOCK_ENTER" }),
+                            )
+                        })
+                        .collect();
+                    d["spec"]["dockInterface"]["production_service"]["inputs"] =
+                        Value::Object(inputs);
+                    d
+                })
+            },
+            "interface exposes 66 ports (65 inputs + 1 outputs), limit is 64",
+        ),
+    ));
+    probes.push((
+        "manifest-definitions-max-count".into(),
+        (
+            || probe_link(dock_definition(), interface_manifest()),
+            || {
+                let mut manifest = interface_manifest();
+                let mut definitions = manifest["definitions"]
+                    .as_array()
+                    .expect("interface manifest carries definitions")
+                    .clone();
+                for index in 0..256 {
+                    definitions.push(json!({
+                        "name": format!("filler{index:03}"),
+                        "interfaces": [{ "name": "svc", "orderModes": ["existing"] }]
+                    }));
+                }
+                manifest["definitions"] = Value::Array(definitions);
+                probe_link(dock_definition(), manifest)
+            },
+            "manifest carries 257 definitions, limit is 256",
+        ),
+    ));
+
+    // --- 出生通道键并集（U2，分叉现状：mint∪mint 臂仅本仓拒绝）---
+    probes.push((
+        "birth-channel-key-union-uniqueness".into(),
+        (
+            || probe_compile(mint_union_definition(false)),
+            || probe_compile(mint_union_definition(true)),
+            "一事一单：同一事实至多铸一单",
+        ),
+    ));
+
+    // --- 编译计数闸（M31：taskPatterns / 阶段总数 / hooks 总数）---
+    probes.push((
+        "task-patterns-max-count".into(),
+        (
+            || probe_compile(base_definition()),
+            || probe_compile(mechanical_definition(65, 1, 1)),
+            "task patterns, limit is 64",
+        ),
+    ));
+    probes.push((
+        "stage-entries-max-count".into(),
+        (
+            || probe_compile(base_definition()),
+            || probe_compile(mechanical_definition(1, 257, 1)),
+            "stages across taskPatterns, limit is 256",
+        ),
+    ));
+    probes.push((
+        "compile-hooks-max-count".into(),
+        (
+            || probe_compile(base_definition()),
+            || probe_compile(mechanical_definition(1, 256, 3)),
+            "receiveSignals channels (compiled hooks) across taskPatterns, limit is 512",
+        ),
+    ));
+
     probes
+}
+
+/// mint 出生通道并集探针基底：两枚 emitter + 两个 mint 阶段。
+/// `same_birth_fact` 控制第二个 mint 阶段是否与第一个订阅同一出生事实——
+/// true 触发 mint∪mint 臂（本仓拒绝的分叉臂），false 为不相交的合法形态。
+fn mint_union_definition(same_birth_fact: bool) -> Value {
+    let cellar_birth = if same_birth_fact {
+        "::ANCHOR(@producer::dispatch.main.smart_contract)".to_string()
+    } else {
+        "::ANCHOR(@distributor::depot.ship.manifest)".to_string()
+    };
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "mint_union_probe" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "probe-core" },
+            "taskPatterns": [
+                { "name": "dispatch", "stages": [{
+                    "name": "main",
+                    "source": "producer",
+                    "receiveSignals": { "PUBLISH": "producer::dispatch.main.seed" },
+                    "sendSignals": ["smart_contract", "seed"],
+                    "executor": { "supplierType": "organization", "supplierID": "dispatch-main" }
+                }]},
+                { "name": "depot", "stages": [{
+                    "name": "ship",
+                    "source": "distributor",
+                    "receiveSignals": { "PUBLISH": "distributor::depot.ship.seed" },
+                    "sendSignals": ["manifest", "seed"],
+                    "executor": { "supplierType": "organization", "supplierID": "depot-ship" }
+                }]},
+                { "name": "orchard", "stages": [{
+                    "name": "retail",
+                    "source": "buyer",
+                    "receiveSignals": { "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" },
+                    "sendSignals": ["ack"],
+                    "mint": "per-fact",
+                    "executor": { "supplierType": "organization", "supplierID": "orchard-retail" }
+                }]},
+                { "name": "cellar", "stages": [{
+                    "name": "store",
+                    "source": "cellar",
+                    "receiveSignals": { "SPAWN": cellar_birth },
+                    "sendSignals": ["shelve"],
+                    "mint": "per-fact",
+                    "executor": { "supplierType": "organization", "supplierID": "cellar-store" }
+                }]},
+            ]
+        }
+    })
+}
+
+/// 计数闸探针基底：机械生成的合法形态定义——`tasks` 个 task、每 task
+/// `stages` 个 stage、每 stage `hooks` 个 receiveSignals 通道。标识符
+/// 唯一（task t{i} × stage s{j}），信号引用一律自指（沿用 base_definition
+/// 的合法形状），保证触发的只有目标计数闸。
+fn mechanical_definition(tasks: usize, stages: usize, hooks: usize) -> Value {
+    let signals = ["cmp", "str", "ack"];
+    let hooks = hooks.max(1).min(signals.len());
+    let mut patterns = Vec::new();
+    for task_index in 0..tasks {
+        let mut stage_values = Vec::new();
+        for stage_index in 0..stages {
+            let task = format!("t{task_index}");
+            let stage = format!("s{stage_index}");
+            let mut receive_signals = Map::new();
+            let mut send_signals = Vec::new();
+            for (hook_index, signal) in signals.iter().take(hooks).enumerate() {
+                receive_signals.insert(
+                    format!("H{hook_index}"),
+                    Value::String(format!("buyer::{task}.{stage}.{signal}")),
+                );
+                send_signals.push(Value::String((*signal).to_string()));
+            }
+            stage_values.push(json!({
+                "name": stage,
+                "source": "buyer",
+                "receiveSignals": receive_signals,
+                "sendSignals": send_signals,
+                "executor": {
+                    "supplierType": "organization",
+                    "supplierID": format!("e{task_index}x{stage_index}")
+                }
+            }));
+        }
+        patterns.push(json!({ "name": format!("t{task_index}"), "stages": stage_values }));
+    }
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "count_probe" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "probe-core" },
+            "taskPatterns": patterns,
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------

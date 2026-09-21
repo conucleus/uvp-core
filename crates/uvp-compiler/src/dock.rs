@@ -1044,25 +1044,23 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
     }
     let mut targets = Vec::new();
     let mut names_seen = BTreeSet::new();
-    let definitions = value
-        .get("definitions")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let definitions = value.get("definitions").and_then(Value::as_array);
     // D008（manifest 计数闸）：definitions 条目数上限——发布方数据错误
-    // 的规模面在解析期收口，不给 link 期留下无界图。
-    if definitions.len() > MAX_MANIFEST_DEFINITIONS {
+    // 的规模面在解析期收口，不给 link 期留下无界图。闸按引用取 len 先行、
+    // 过闸后才逐条消费：闸门前深拷贝整个数组会让拒绝路径的成本正比于
+    // 载荷规模（毒 manifest 越大越贵），条目解析在超限时一次都不发生。
+    let definitions_len = definitions.map_or(0, Vec::len);
+    if definitions_len > MAX_MANIFEST_DEFINITIONS {
         issues.push(DockIssue::new(
             "D008",
             "resolutionManifest.definitions",
             format!(
-                "manifest carries {} definitions, limit is {MAX_MANIFEST_DEFINITIONS}",
-                definitions.len()
+                "manifest carries {definitions_len} definitions, limit is {MAX_MANIFEST_DEFINITIONS}"
             ),
         ));
         return Err(issues);
     }
-    for (index, entry) in definitions.iter().enumerate() {
+    for (index, entry) in definitions.into_iter().flatten().enumerate() {
         let path = format!("resolutionManifest.definitions[{index}]");
         // 条目级键闭集与 interface/dockEdges 闸口同口径：拼错的字段（如
         // interface 单数、dockEdgess）被静默吸收会让发布方数据错误以缺省

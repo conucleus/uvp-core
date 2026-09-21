@@ -2,7 +2,7 @@
 //! 时状态与 plan 注册门。
 
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::transition::hook_is_order_trigger;
 use crate::{value_i64, value_str, ReplayError, Result};
@@ -110,7 +110,14 @@ pub(crate) const MAX_INSTRUCTION_DEPTH: usize = 120;
 /// - AND/OR arity ≥ 2、栈深充足；AND 取任一正锚、OR 需每分支都有；
 /// - 指令嵌套深度 ≤ 120（逐槽计数：SIGNAL=0，一元/二元组合=操作数最大
 ///   深度+1）；
-/// - 结束时栈上恰一个值，且根含正向锚点（纯否定条件的 anchorAt 无源）。
+/// - 结束时栈上恰一个值，且根含正向锚点（纯否定条件的 anchorAt 无源）；
+/// - 每 hook 的 SIGNAL 原子键集合与 dependencyIndex 反查该 hook 的键集合
+///   逐点一致（合约 reverts HookDependencyKeyMismatch）：oracle 的求值
+///   范围由 dependencyIndex 反查决定，指令轨合法而索引错位的 plan 会让
+///   observed/mismatches 全 0 仍 ok:true——空洞假 PASS 在注册期对拍拒绝；
+/// - order-trigger（mint/dock）hook 必须携带 emitReady（合约 reverts
+///   SilentOrderTriggerHook）：沉默 trigger 物化阶段但不发 HookReady，
+///   链上链下的发出口径会分叉。
 pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
     let hooks = plan
         .get("compiledHooks")
@@ -118,8 +125,69 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
         .ok_or_else(|| {
             ReplayError::Message("chain oracle plan missing compiledHooks".to_string())
         })?;
+    // dependencyIndex 是合约注册的必然产物（_registerPlanHook 逐键写入），
+    // 缺失即"合约不可能的 plan"：求值范围反查会恒为空，一切信号都产生
+    // 零观察——按结构错误响亮失败，不做"缺失视为空索引"的静默回退。
+    let dependency_index = plan
+        .get("dependencyIndex")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            ReplayError::Message("chain oracle plan missing dependencyIndex".to_string())
+        })?;
     for hook in hooks {
         validate_hook_registration_shape(hook)?;
+        validate_hook_dependency_index_mirror(hook, dependency_index)?;
+    }
+    Ok(())
+}
+
+/// 镜像合约 _validateHook 的 HookDependencyKeyMismatch 门：hook 指令集的
+/// SIGNAL 原子键集合与 dependencyIndex 反查该 hook 的键集合必须逐点一致。
+/// 索引侧多出的键只是死索引；指令侧多出的键不进索引——该事实到达永不
+/// 触发求值，hook 永久 Init 且零告警。两种错位在回放里都表现为零观察的
+/// 空洞 PASS，注册期对拍拒绝。
+fn validate_hook_dependency_index_mirror(
+    hook: &Value,
+    dependency_index: &Map<String, Value>,
+) -> Result<()> {
+    let hook_id = value_str(hook, "hookId")?.to_string();
+    let instructions = hook
+        .get("instructions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ReplayError::Message(format!(
+                "chain oracle hook {hook_id} missing instructions (the onchain instruction track is produced by the TS compiler; a plan compiled by the Rust core does not carry it and cannot be replayed)"
+            ))
+        })?;
+    let mut signal_keys: BTreeSet<&str> = BTreeSet::new();
+    for instruction in instructions {
+        if value_str(instruction, "op")? == "SIGNAL" {
+            signal_keys.insert(value_str(instruction, "signalKey")?);
+        }
+    }
+    let mut indexed_keys: BTreeSet<&str> = BTreeSet::new();
+    for (key, hook_ids) in dependency_index {
+        let hook_ids = hook_ids.as_array().ok_or_else(|| {
+            ReplayError::Message(format!(
+                "chain oracle dependencyIndex[{key}] must map to an array of hook ids"
+            ))
+        })?;
+        if hook_ids
+            .iter()
+            .any(|id| id.as_str() == Some(hook_id.as_str()))
+        {
+            indexed_keys.insert(key);
+        }
+    }
+    if let Some(key) = indexed_keys.difference(&signal_keys).next() {
+        return Err(ReplayError::Message(format!(
+            "malformed instruction plan: dependencyIndex maps key {key} to hook {hook_id} but the key is not a SIGNAL atom of its instructions (a declared key that never participates in evaluation is a dead index; contract _validateHook reverts HookDependencyKeyMismatch)"
+        )));
+    }
+    if let Some(key) = signal_keys.difference(&indexed_keys).next() {
+        return Err(ReplayError::Message(format!(
+            "malformed instruction plan: hook {hook_id} references SIGNAL key {key} that dependencyIndex does not map back to it (an unindexed key never triggers evaluation, so the hook would stay Init forever with no alarm; contract _validateHook reverts HookDependencyKeyMismatch)"
+        )));
     }
     Ok(())
 }
@@ -148,6 +216,20 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
         )));
     }
     let order_trigger = hook_is_order_trigger(hook)?;
+    // 镜像合约 SilentOrderTriggerHook 门：order-trigger hook 必须携带
+    // EMIT_READY——沉默 trigger 物化阶段但不发 HookReady，该形态的观察
+    // 口径在链上链下会分叉，注册边界直接拒绝（编译器产物恒为
+    // trigger|EMIT_READY，这里是"合约不可能的 plan"的防御面）。
+    if order_trigger {
+        match hook.get("emitReady") {
+            Some(Value::Bool(true)) => {}
+            _ => {
+                return Err(ReplayError::Message(format!(
+                    "malformed instruction plan: order-trigger hook {hook_id} must carry emitReady=true (a silent trigger materializes its stage without emitting HookReady; contract commitPlan reverts SilentOrderTriggerHook)"
+                )))
+            }
+        }
+    }
     let mut stack: Vec<InstructionSlot> = Vec::new();
     for instruction in instructions {
         match value_str(instruction, "op")? {
