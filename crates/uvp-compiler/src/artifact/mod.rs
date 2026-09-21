@@ -332,12 +332,11 @@ fn build_dependency_index(compiled_hooks: &[Value]) -> Value {
 fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     let mut capabilities = Vec::new();
     let mut seen = BTreeSet::new();
-    // 镜像合约注册门（UVPPlanMetadataModule._registerSignalCapabilities 的
-    // DuplicateCurrentOrderSignalCapability / TS onchain-hook-plan 的
-    // duplicateCurrentOrderFactKeyIssues）：relation=current 的事实键
-    // (targetSource, targetSignalName) 在 plan 内唯一属主——跨阶段双属主
-    // 会让链上 _currentOrderFactStages 后写覆盖先写、_signalStageId 归属
-    // 二义，注册边界 revert；编译期按同一展开后的全名同口径拒绝。
+    // 镜像 TS onchain-hook-plan 的 duplicateCurrentOrderFactKeyIssues：
+    // relation=current 的事实键 (targetSource, targetSignalName) 在 plan 内
+    // 唯一属主——双属主会让携证解析无法唯一定位属主阶段（一个事实键只
+    // 能落一棵能力叶）；链上能力表以整棵 Merkle root 一次承诺、无逐条
+    // 注册循环，编译期按同一展开后的全名同口径拒绝。
     // triggerOrigin（relation=1）不在此列：合约与 TS 预检都允许跨阶段
     // 声明同一触发源能力。
     let mut current_order_owners: BTreeMap<(String, String), String> = BTreeMap::new();
@@ -365,7 +364,7 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
                 if let Some(owner) = current_order_owners.get(&fact_key) {
                     if *owner != entry.stage_identifier {
                         return Err(CompilerError::Issues(format!(
-                            "{}.sendSignals declares the current-order fact key ({}, {}) already owned by {}: one capability has one owner (UVPPlanMetadataModule reverts DuplicateCurrentOrderSignalCapability at finalizePlan; declare the fact key on a single stage)",
+                            "{}.sendSignals declares the current-order fact key ({}, {}) already owned by {}: one capability has one owner (declare the fact key on a single stage)",
                             entry.stage_identifier, fact_key.0, fact_key.1, owner
                         )));
                     }
@@ -430,8 +429,7 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<
         // 三段式只是显式自指形态：task.stage 前缀必须落在声明阶段自身。
         // 指向别处命名空间的 canonical 声明会与目标阶段的裸名声明展开成
         // 同一 (targetSource, signal) capability——双属主绕过"一事一能力"，
-        // 链上 _signalStageId 归属二义（注册边界 revert
-        // DuplicateCurrentOrderSignalCapability），编译期同口径拒绝。
+        // 携证解析无法唯一定位属主阶段，编译期同口径拒绝。
         if !declared_signal.starts_with(&format!("{}.", entry.stage_identifier)) {
             return Err(CompilerError::Issues(format!(
                 "{}.sendSignals contains canonical signal {:?} that does not address the declaring stage: expected {}.<signal> (the three-part form is an explicit self-reference; bare names expand to the same capability)",
