@@ -84,7 +84,7 @@
 ### 2.4 跨域：委托 dock + 接口映射
 
 - 委托是一个秩序 dock 另一个秩序：目标定义在 `spec.dockInterface` 发布**具名接口 map**（接口名 → {orderModes, inputs, outputs}），调用方 stage 在 `executor.zhixuExecutorConfig` 按接口名引用，`inputMap`/`signalMap` 是接缝上的对译表；A 的委托 stage 与 B 被绑定的端口在接缝处视为**同一个 source** 的两半（单源 seam，被绑定端口范围）。
-- `target.zhixu` 填目标定义的 `metadata.name`（slug）或显式 `null`（动态选择）。DSL 壳不携带任何派生身份（`metadata.uid` 不是作者可写字段）；身份权威分治——链轨由 uvp-protocol TS 从内容派生 `zx-<32hex>`（内幕），云轨由 DB 唯一 name + 主键承载，共享 core 产物为中性形状（`zhixuName` 键，无 uid/hash/root 字段）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚，云轨幂等=建立自然唯一键、链轨幂等=链上确定性承诺），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）——`existing` 与 `target: null` 的组合语义单点收敛于下「对等挂接五点」。
+- `target.zhixu` 填目标定义的 `metadata.name`（slug）或显式 `null`（动态选择）。DSL 壳不携带任何派生身份（`metadata.uid` 不是作者可写字段）；身份权威分治——链轨由 uvp-protocol TS 从内容派生 `zx-<32hex>`（内幕），云轨由 DB 唯一 name + 主键承载，共享 core 产物为中性形状（`zhixuName` 键，无 uid/hash/root 字段）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚，云轨幂等=建立自然唯一键、链轨幂等=链上确定性承诺），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）——`existing` 与 `target: null` 的组合语义单点收敛于下「对等挂接五点」（语法与结构层）及「对等挂接 · 运行时语义」五点（运行时层）。
 - 委托声明至少一项输入或输出映射（无需虚构 str/cmp 映射满足格式）；接口输出不自动置任何一方为终态，终态只由本地阶段/订单结束驱动。
 - 委托共享订单上下文（现有 zhixu 执行器 `NewSource=false` 通道不变）；事实经 signalMap 逐条映射回父阶段。
 - 委托关系一次性绑定、禁 patch（现有门禁不变）。
@@ -97,7 +97,17 @@
 2. **拼批 / N:1**：同一目标运行可被多个调用方挂接——一个订单可由一次 `new` 对接创建，此后被任意多次 `existing` 对接引用；每个调用方按（本地订单, 本地阶段）各成一条对接实例（`dock_instance` UNIQUE(本地秩序, 本地订单, 本地阶段)），共享同一目标订单，任何一方都不重复建单。
 3. **运行时选择与生命周期**：`target: null` 的 route 编译为未解析声明面（`uvp.dockRoute.unresolved.v1`，本地校验全量保留、不进 link），运行时由选择记录（`/dock-selection`，目标按定义 uid 寻址；`existing` 的目标订单由记录的 orderRef 指定）钉住为 resolved 行；定义重发布时钉住行回到未解析形态，下次建立按当时选择重新钉住。
 4. **DDL 已支持**：云轨 DDL 已承载全部所需结构——`dock_route_selection`（UNIQUE(父定义, 本地阶段)，目标定义 uid + 接口名 + 可选 orderRef）、`dock_instance`（order_mode 闭集含 `existing`）、按（实例, 端口）的投递唯一键（`dock_input_delivery`/`dock_output_delivery`）；该形态是纯运行时能力，无 schema 缺口。
-5. **链轨能力缺口**：链轨（uvp-eth 侧编译器）暂不支持该形态——`existing` 与未解析 target 在 on-chain 编译边界按 `UNRESOLVED_DOCK_TARGET` 响亮拒绝，不静默降级。拒绝发生在编译期且响亮：依赖该形态的调用方切到链轨裁决器不会遭遇静默语义分叉，切链裁决器今天安全。两轨逐语法点的接受/拒绝对照见 uvp-eth `zhixu-dsl-grammar.md`（链轨册）§10 第 5 条。
+5. **链轨能力缺口**：链轨（uvp-eth 侧编译器）对该形态的现缺失是**能力缺口而非语义分叉**——`existing` 与未解析 target 在 on-chain 编译边界按 `UNRESOLVED_DOCK_TARGET` 响亮拒绝，不静默降级；拒绝发生在编译期且响亮，依赖该形态的调用方切到链轨裁决器不会遭遇静默语义分叉，切链裁决器今天安全。缺口的补齐状态不在此登记，以兼容矩阵（`uvp-deploy/deploy/compatibility/uvp-stack.v1.json`，§7）为准；两轨逐语法点的接受/拒绝对照见 uvp-eth `zhixu-dsl-grammar.md`（链轨册）§10 第 5 条。
+
+**对等挂接 · 运行时语义（两轨统一）。上五点钉住语法与结构层（一等语法、拼批、选择记录、DDL、能力缺口）；以下五点是挂接自建立时刻起生效的运行时语义——同意、回填、交付、解析、同构，同属本规格唯一权威出处：**
+
+1. **挂接同意模型**：建立挂接（`existing` 连接既有目标订单）的动作方必须命中目标侧同意集合三者之一——目标订单创建者（creator）、目标订单在任执行者、或目标侧显式授权的持有者；三者皆缺即响亮拒绝，不建立挂接。
+2. **回填口径（两轨唯一语义）**：挂接建立时，目标接口输出中在该时点已成立的事实按 signalMap 回填父侧。回填是引用不是搬运：事实保持自己的家（§1.3），历史不改写、事实不重发。云轨现行回填行为即唯一语义，链轨不另立口径。
+3. **input 恰一次交付**：对接实例的每个 input 端口恰交付一次；此后对该端口的提交一律是幂等重放面——吸收、不交付新事实，幂等由（实例, 端口）投递唯一键承载（上五点第 4 条）。跨单的持续信息流只有 output 方向（signalMap 回传）。
+4. **`null` 解析时点（建立期解析、终身钉住）**：`target: null` 只在挂接建立期由选择权威经选择记录（`/dock-selection`）解析为具体目标——目标定义与 `existing` 的 orderRef——解析结果对该挂接终身钉住，不随运行推进重开；定义重发布只影响后续建立（上五点第 3 条）。缺选择记录属等待性错误：退避重试、计入投递预算、预算耗尽落死信（§6 投递层同款纪律）；不猜单（A07 existing 明确端点：缺 orderRef 时待解析，不猜「最新一单」）。
+5. **挂接后与 `new` 完全同构**：两模式的全部差异都在建立动作上（`new` 建新单、`existing` 挂接既有单）；建立之后走同一套运行时语义——input 每端口恰交付一次（第 3 条）、output 经 signalMap 回传父侧、终态只由本地阶段/订单结束驱动（接口输出不自动置任何一方为终态）。建立之后不存在第二条语义路径。
+
+本运行时五点两轨逐字统一；链轨当前缺挂接建立入口，属同一能力缺口而非语义分叉（定性见上五点第 5 条），补齐状态以兼容矩阵（`uvp-deploy/deploy/compatibility/uvp-stack.v1.json`，§7）为准。
 
 ### 2.5 外部世界
 
@@ -263,3 +273,9 @@ Stage 字段总表（目标态）：
 | 报关特例只作演示配置 | 共享 demo 任务里的"报关单 PDF、报关单号、出口港口、完成时间"等特例内容只存在于一份显式的演示配置数据（形态上等同"某凝结核自带配置"），只经通用渲染路径生效；商店核心代码 grep 不到这些业务字符串（演示配置文件与其测试除外）。MVP 不内置报关示例 | store `src/product/demo/customs-demo-config.ts`；protocol fixture `demoCustomsEvidenceSpec` 同形示例 |
 | 证据文件格式校验归属 | accept 约束来自凝结核配置（`spec.accept`）；前端按 accept 校验并在 accept=pdf 时读取文件首字节做 %PDF- 快速拦截（防伪造 MIME/扩展名），服务端魔数校验仍是权威 | store workbenchSupport `validateEvidenceFileForSlot` |
 | DTO 兼容口径 | `evidenceSpec` 为加性可选字段：消费方在字段缺失时必须走降级路径而不是报错。任务 DTO 单轨携带证据契约：不设 `requiredEvidence`，缺失 spec 即无凭证槽位（不臆造通用槽位、不报错） | protocol freeze 校验（product signal map gate + verify-stack-compatibility）exit 0 |
+
+### 裁决落地（2026-09-22，对等挂接运行时语义两轨统一）
+
+| 裁决 | 结论 | 落地 |
+|---|---|---|
+| 对等挂接运行时语义 | 链轨向文法收敛、不砍文法：`existing` + `target: null` 是对等挂接的一等本体语法（文法 §8.1），链轨现缺失定性为能力缺口而非语义分叉。运行时五点两轨统一：挂接建立须命中目标侧同意集合（创建者 / 在任执行者 / 显式授权三者之一）；建立时已成立的目标输出回填父侧，该口径为唯一语义；input 每端口恰交付一次、此后为幂等重放面，跨单持续信息流只有 output 方向；`target: null` 建立期由选择权威解析、之后终身钉住，缺选择记录（A07）退避重试、不猜单、预算耗尽落死信；挂接建立后与 `new` 完全同构 | 本规格 §2.4「对等挂接 · 运行时语义」即唯一权威出处（两册文法手册与实现手册只留摘要与指针）；链轨挂接建立入口的补齐状态以兼容矩阵（`uvp-deploy/deploy/compatibility/uvp-stack.v1.json`，§7）为准，不在此登记 |
