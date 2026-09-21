@@ -23,9 +23,7 @@ pub use artifact::{CLOUD_ARTIFACT_SCHEMA_VERSION, HOOK_PLAN_SCHEMA_VERSION};
 mod tests;
 
 #[cfg(test)]
-// 模块内测试直引能力表规模上限与 serde_json::Map（见 tests.rs）。
-use artifact::MAX_SIGNAL_CAPABILITIES;
-#[cfg(test)]
+// 模块内测试直引 serde_json::Map（见 tests.rs）。
 use serde_json::Map;
 
 #[derive(Debug, Error)]

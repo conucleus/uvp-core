@@ -26,16 +26,16 @@ const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
 
 // 定义内计数上限（M31 资源闸）：列宽族只约束单个标识符的长度，计数
 // 维度无闸时 plan 控制的输入可以让编译期的校验/产物规模无界增长。取值
-// 对真实计划留有余量，且不与合约侧同族上限打架（能力表 256、依赖键
-// 1024、selector 绑定 128）。
+// 对真实计划留有余量，且不与合约侧同族上限打架（依赖键 1024）。
+// 能力表/绑定表已 Merkle 化（capabilitiesRoot 一次承诺），其旧的
+// 256/128 规模上限不再存在，也不在此闸的参照系内。
 /// 单定义 taskPatterns 数上限。
 const MAX_TASK_PATTERNS: usize = 64;
-/// 单定义摊平后的阶段总数上限（每阶段至少编译一个 hook、最多声明一份
-/// 能力表——256 与 MAX_SIGNAL_CAPABILITIES 同量级）。
+/// 单定义摊平后的阶段总数上限（每阶段至少编译一个 hook，阶段数是
+/// hooks 与产物规模的直接下界——编译期资源闸，与链上注册面无关）。
 const MAX_STAGE_ENTRIES: usize = 256;
-/// 单定义 receiveSignals 通道（编译产物 hooks）总数上限：链上每个 hook
-/// 注册进 plan.hookIds，512 恰为合约 MAX_PLAN_DEPENDENCIES=1024 的一半，
-/// 给每钩平均 ≥2 个依赖键的余量。
+/// 单定义 receiveSignals 通道（编译产物 hooks）总数上限：512 恰为合约
+/// MAX_PLAN_DEPENDENCIES=1024 的一半，给每钩平均 ≥2 个依赖键的余量。
 const MAX_HOOKS: usize = 512;
 
 pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
@@ -150,7 +150,8 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                     match selectable.as_object() {
                         Some(entries) => {
                             for (key, resource) in entries {
-                                if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+                                if let Some(issue) = file_resource_type_issue(&path, key, resource)
+                                {
                                     issues.push(issue);
                                 }
                             }
@@ -160,9 +161,8 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                 }
             }
             for (key, resource) in &stage.file_resources {
-                let path = format!(
-                    "spec.taskPatterns[{task_index}].stages[{stage_index}].fileResources"
-                );
+                let path =
+                    format!("spec.taskPatterns[{task_index}].stages[{stage_index}].fileResources");
                 if let Some(issue) = file_resource_type_issue(&path, key, resource) {
                     issues.push(issue);
                 }

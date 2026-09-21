@@ -181,15 +181,17 @@ fn manifest_for(target: &Value) -> Value {
 }
 
 #[test]
-fn send_signals_total_is_capped_at_256() {
-    // 能力表规模闸：hook_plan 与 cloud 共用 build_signal_capabilities，
-    // 与 TS 编译+反序列化边界同值同文案；256 条放行、257 条拒绝。
+fn send_signals_total_is_uncapped() {
+    // 能力表 Merkle 化：链上以 capabilitiesRoot 一次承诺，不再逐条注册，
+    // 旧的 256 规模上限随之取消。257 条（旧上限 +1）照常编译、产物逐条
+    // 保留，证明规模不再受限；hook_plan 与 cloud 共用
+    // build_signal_capabilities，两个 target 同口径放行。
     let definition_with = |count: usize| {
         let signals: Vec<String> = (0..count).map(|index| format!("sig{index:03}")).collect();
         json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
-            "metadata": { "name": "capability_cap" },
+            "metadata": { "name": "capability_scale" },
             "spec": {
                 "platform": { "type": "cloud" },
                 "nucleation": { "id": "cap-core" },
@@ -209,22 +211,14 @@ fn send_signals_total_is_capped_at_256() {
             }
         })
     };
-    let at_limit = compile_zhixu_hook_plan(&definition_with(MAX_SIGNAL_CAPABILITIES), None, true)
-        .expect("256 capabilities compile");
+    let plan = compile_zhixu_hook_plan(&definition_with(257), None, true)
+        .expect("capability count is no longer capped");
     assert_eq!(
-        at_limit["signalCapabilities"].as_array().map(Vec::len),
-        Some(MAX_SIGNAL_CAPABILITIES)
+        plan["signalCapabilities"].as_array().map(Vec::len),
+        Some(257)
     );
-    let over_limit =
-        compile_zhixu_hook_plan(&definition_with(MAX_SIGNAL_CAPABILITIES + 1), None, true)
-            .unwrap_err();
-    let CompilerError::Issues(message) = &over_limit else {
-        panic!("expected issues error, got {over_limit:?}");
-    };
-    assert!(
-        message.contains("signal capabilities 257 exceed the documented limit 256"),
-        "message: {message}"
-    );
+    compile_cloud_artifact(&definition_with(257), None, true)
+        .expect("cloud target accepts the same capability table");
 }
 
 #[test]
@@ -1436,8 +1430,7 @@ fn rejects_selectable_resource_outside_the_closed_file_type_set() {
             .unwrap_or_else(|| panic!("{label} selectableResource must be rejected"));
         assert!(
             error.to_string().contains("selectableResource")
-                && (label == "not-a-map"
-                    || error.to_string().contains("fileType must be one of")),
+                && (label == "not-a-map" || error.to_string().contains("fileType must be one of")),
             "{label}: {error}"
         );
     }

@@ -26,14 +26,10 @@ pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
 /// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
 /// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
 pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
-/// sendSignals 能力表规模上限：UVPPlanMetadataModule 逐条写存储注册
-/// signalCapabilities（合约注册边界同值 revert TooManySignalCapabilities），
-/// 无上限则注册 gas 随 plan 规模无界增长。信号提交侧的归属读取走
-/// metadata 属主索引单键查询，gas 不随表规模变化——上限守护的是注册
-/// 循环，不是热路径。TS 侧 onchain-hook-plan.ts 的
-/// MAX_SIGNAL_CAPABILITIES 在编译+反序列化两边界同值同文案；Rust 是语义
-/// 权威，此值即上限的唯一出处，TS 必须镜像。
-pub(crate) const MAX_SIGNAL_CAPABILITIES: usize = 256;
+// 能力表无规模上限（Merkle 化）：链上不再逐条注册 signalCapabilities，
+// 由链下 TS 编译器建树以 capabilitiesRoot 承诺；Rust 按架构契约保持
+// 中性语义权威、不产哈希、不建树，仅保留逐条语义校验（空串/重复/
+// E16 唯一属主）。
 
 /// hook_plan 产物：中性 plan 壳（模型/校验/编译结果 + dock 声明面）。
 /// 哈希承诺（planHash/roots/派生身份）由链轨 TS 在此壳上计算；云轨
@@ -379,15 +375,9 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
             capabilities.push(capability);
         }
     }
-    // 上限在去重之后检查：重复声明已被前面拒绝，此处计数即编译产物的
-    // signalCapabilities 长度，与 TS signalCapabilityCountIssues 同口径。
-    if capabilities.len() > MAX_SIGNAL_CAPABILITIES {
-        return Err(CompilerError::Issues(format!(
-            "signal capabilities {} exceed the documented limit {} (UVPPlanMetadataModule registers each capability with a storage write; unbounded plan-controlled registration gas)",
-            capabilities.len(),
-            MAX_SIGNAL_CAPABILITIES
-        )));
-    }
+    // 无规模上限：链上能力表 Merkle 化后由 capabilitiesRoot 一次性承诺，
+    // 逐条注册循环（旧 256 上限守护的 gas 面）不复存在。语义校验（空串/
+    // 重复/E16 唯一属主）见上，规模不再受限。
     capabilities.sort_by(|left, right| {
         value_str(left, "stageIdentifier")
             .cmp(value_str(right, "stageIdentifier"))
