@@ -830,7 +830,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
-    // --- dock 级（M31 计数闸：接口端口 / manifest 条目）---
+    // --- dock 级计数闸：接口端口 / manifest 条目 ---
     probes.push((
         "interface-ports-max-count".into(),
         (
@@ -887,7 +887,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
-    // --- 编译计数闸（M31：taskPatterns / 阶段总数 / hooks 总数）---
+    // --- 编译计数闸：taskPatterns / 阶段总数 / hooks 总数 ---
     probes.push((
         "task-patterns-max-count".into(),
         (

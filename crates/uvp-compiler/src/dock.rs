@@ -51,11 +51,11 @@ pub const MAX_SIGNAL_NAME_BYTES: usize = 100;
 
 /// 单接口端口数（inputs+outputs）上限：D016 的 route 绑定数上限
 /// （8/16）只约束单条 route，接口侧端口可被多条 route 跨定义绑定——
-/// 端口计数无闸时声明面规模随 plan 输入无界增长（M31 计数闸）。
+/// 端口计数无闸时声明面规模随 plan 输入无界增长（计数闸）。
 pub const MAX_INTERFACE_PORTS: usize = 64;
 
 /// resolution manifest 的 definitions 条目上限：manifest 是发布方数据，
-/// 计数无闸时毒 manifest 可让 link 期的图规模无界增长（M31 计数闸）。
+/// 计数无闸时毒 manifest 可让 link 期的图规模无界增长（计数闸）。
 pub const MAX_MANIFEST_DEFINITIONS: usize = 256;
 
 /// order.mode 与接口 orderModes 的闭集取值。

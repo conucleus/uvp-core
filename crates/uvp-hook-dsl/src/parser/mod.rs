@@ -192,7 +192,7 @@ fn starts_cross_source(value: &str) -> bool {
     // 不受支持的关键字仍放行进解析器，以便命中精确的 unsupported 报错
     // 而非笼统的空标头报错。匹配必须落到完整 token 边界：关键字后随
     // 标识符字符（如 ::ANCHORX 伪前缀）不是关键字形态，
-    // 不得绕过空标头门禁。扇入类旧标头不在词表内：
+    // 不得绕过空标头门禁。扇入类标头不在词表内：
     // 其字面按通用语法错误（空标头门禁）拒绝，没有退役清单条目。
     ["ANCHOR", "OUTSIDE", "OUTSOURCE"].iter().any(|keyword| {
         let Some(rest) = value.strip_prefix(keyword) else {

@@ -182,10 +182,10 @@ fn manifest_for(target: &Value) -> Value {
 
 #[test]
 fn send_signals_total_is_uncapped() {
-    // 能力表 Merkle 化：链上以 capabilitiesRoot 一次承诺，不再逐条注册，
-    // 旧的 256 规模上限随之取消。257 条（旧上限 +1）照常编译、产物逐条
-    // 保留，证明规模不再受限；hook_plan 与 cloud 共用
-    // build_signal_capabilities，两个 target 同口径放行。
+    // 能力表 Merkle 化：链上以 capabilitiesRoot 一次承诺，无逐条注册，
+    // 无 256 规模上限。257 条照常编译、产物逐条保留，钉住规模不受限；
+    // hook_plan 与 cloud 共用 build_signal_capabilities，两个 target
+    // 同口径放行。
     let definition_with = |count: usize| {
         let signals: Vec<String> = (0..count).map(|index| format!("sig{index:03}")).collect();
         json!({
@@ -212,7 +212,7 @@ fn send_signals_total_is_uncapped() {
         })
     };
     let plan = compile_zhixu_hook_plan(&definition_with(257), None, true)
-        .expect("capability count is no longer capped");
+        .expect("capability count is uncapped");
     assert_eq!(
         plan["signalCapabilities"].as_array().map(Vec::len),
         Some(257)
@@ -453,11 +453,10 @@ fn rejects_parent_without_manifest() {
 }
 
 #[test]
-fn dock_link_compile_target_is_retired() {
-    // dock link 编译 target（uvp.dock-link v1 产物面）
-    // 无消费方，直接删除、无兼容形态——出现即按未知 target 响亮拒绝
-    // （link 校验由 hook_plan/cloud/parse 在 manifest 在场时同一链路
-    // 承担）。
+fn dock_link_compile_target_is_unknown() {
+    // 不存在 dock link 编译 target（uvp.dock-link v1 产物面）
+    // ——出现即按未知 target 响亮拒绝（link 校验由 hook_plan/cloud/parse
+    // 在 manifest 在场时同一链路承担）。
     let request = json!({
         "target": "dock_link",
         "definition": target_payment_definition(),
@@ -2676,7 +2675,7 @@ fn rejects_dock_entrance_key_published_twice_across_new_interfaces() {
 }
 
 // ------------------------------------------------------------------
-// M31：定义/接口/manifest 计数上限与错误串截断。
+// 定义/接口/manifest 计数上限与错误串截断。
 // ------------------------------------------------------------------
 
 /// 计数闸探针基底：shape 层合法的最小 stage（后续校验不跑——计数错误在

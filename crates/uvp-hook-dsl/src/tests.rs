@@ -460,7 +460,7 @@ fn rejects_subscription_inside_composite_condition() {
         );
     }
 
-    // 扇入类旧标头没有退役清单条目：字面按通用空标头语法错误拒绝，
+    // 扇入类标头没有退役清单条目：字面按通用空标头语法错误拒绝，
     // 报错不点名该词。
     let retired_word: String = ["M", "E", "R", "G", "E"].concat();
     let hook = format!("::{retired_word} & task.main.cmp");
@@ -557,10 +557,10 @@ fn outsource_forms_are_rejected_with_hint() {
 
 #[test]
 fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
-    // 伪前缀形态（如 ::ANCHORX / ::OUTSIDER，及已移除的旧扇入标头加
-    // 伪后缀）不是退役关键字：空标头门禁按完整 token 边界匹配，直接
-    // 以空标头错误拒绝，而不是借 starts_with 前缀命中放行进解析器。
-    // 旧扇入词按字节拼装，保持全文检索零命中口径。
+    // 伪前缀形态（如 ::ANCHORX / ::OUTSIDER，及扇入标头加伪后缀）
+    // 不是退役关键字：空标头门禁按完整 token 边界匹配，直接以空标头
+    // 错误拒绝，而不是借 starts_with 前缀命中放行进解析器。
+    // 扇入词按字节拼装，保持全文检索零命中口径。
     let retired_word: String = ["M", "E", "R", "G", "E"].concat();
     for hook in [
         format!("::{retired_word}X@(seller::task.main.cmp)"),

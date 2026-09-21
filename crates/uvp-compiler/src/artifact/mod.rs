@@ -375,9 +375,8 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
             capabilities.push(capability);
         }
     }
-    // 无规模上限：链上能力表 Merkle 化后由 capabilitiesRoot 一次性承诺，
-    // 逐条注册循环（旧 256 上限守护的 gas 面）不复存在。语义校验（空串/
-    // 重复/E16 唯一属主）见上，规模不再受限。
+    // 无规模上限：链上能力表由 capabilitiesRoot 一次性承诺，不存在
+    // 逐条注册循环。语义校验（空串/重复/E16 唯一属主）见上，规模不受限。
     capabilities.sort_by(|left, right| {
         value_str(left, "stageIdentifier")
             .cmp(value_str(right, "stageIdentifier"))

@@ -96,7 +96,7 @@ fn retired_fan_in_instruction_is_rejected_as_unknown() {
 
 #[test]
 fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
-    // 负向 golden：手工 plan 携带退役扇入指令时，回放整体以错误收场
+    // 负向 golden：手工 plan 携带指令集外的扇入指令时，回放整体以错误收场
     // （envelope ok:false），不产出"部分观察 + mismatch"的软化报告——
     // 与合约 commitPlan 注册边界的响亮拒绝同口径。
     let retired_op = concat!("MER", "GE");

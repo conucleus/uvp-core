@@ -34,7 +34,7 @@ pub enum CompilerError {
     Issues(String),
 }
 
-/// 编译错误串上限（M31）：issues 的条数与单条长度都随 plan 输入无界
+/// 编译错误串上限：issues 的条数与单条长度都随 plan 输入无界
 /// 增长（毒定义可造出数百条 issue × 长路径），错误串经 FFI/NAPI 信封
 /// 外发——在拼装边界截断并标注被省略的条数，保留头部诊断。
 pub(crate) const MAX_ISSUES_STRING_BYTES: usize = 16 * 1024;
@@ -96,10 +96,9 @@ pub fn compile_request(req: &CompileRequest) -> Result<Value> {
         "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, manifest, false),
         // parse-only：允许 unresolved route。
         "parse" => compile_zhixu_hook_plan(&req.definition, manifest, true),
-        // dock link 编译 target（uvp.dock-link v1 产物面）已删除
-        // （无消费方，机制直接移除）：link 校验由
-        // hook_plan/cloud/parse 在 resolutionManifest 在场时同一链路承担，
-        // 无独立产物面。
+        // 不存在 dock link 编译 target（uvp.dock-link v1 产物面）：
+        // link 校验由 hook_plan/cloud/parse 在 resolutionManifest
+        // 在场时同一链路承担，无独立产物面。
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"
         ))),
