@@ -72,8 +72,9 @@ pub struct CompileRequest {
     pub target: String,
     pub definition: Value,
     /// Dock resolution manifest：由 Store/发布系统或离线
-    /// lock 文件提供；含 zhixu executor 的可运行编译必须提供，否则返回
-    /// `UNRESOLVED_DOCK_TARGET`。
+    /// lock 文件提供；静态目标 route 缺 manifest 的可运行编译返回
+    /// `UNRESOLVED_DOCK_TARGET`（`target: null` 的动态选择 route 走
+    /// 未解析声明面，不要求 manifest）。
     #[serde(default)]
     pub resolution_manifest: Option<Value>,
 }
