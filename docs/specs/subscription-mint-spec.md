@@ -3,7 +3,7 @@
 > 状态：对齐基线（v1）
 > 语义版本：`uvp.semantic.v1`（单一语义版本线，不并存两套语义）
 > 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
-> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.11、`UVPDockingModule` 4.3 及其余 module fixtures；六域 PlanCommit（publisher、hooksHash、capabilitiesRoot、dockRoutesRoot、dockInterfaceRoot、deadline）、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出指令集外的指令/入口。
+> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.11、`UVPDockingModule` 4.4 及其余 module fixtures；六域 PlanCommit（publisher、hooksHash、capabilitiesRoot、dockRoutesRoot、dockInterfaceRoot、deadline）、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出指令集外的指令/入口。
 
 ---
 

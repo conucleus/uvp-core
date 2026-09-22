@@ -1109,8 +1109,9 @@ fn accepts_dynamic_target_null_for_parse_only_compilation() {
 }
 
 /// target:null 的父定义（无 manifest）：本地声明面完整进产物，两个
-/// 可运行 target 都放行——链轨拒绝在 TS onchain 边界（UNRESOLVED_DOCK_
-/// TARGET 口径），云轨运行时由选择记录补齐。
+/// 可运行 target 都放行——链轨以同一 unresolvedDockRoutes 声明面承接
+/// （唯一保留的动态拒绝是 orderMode=new，TS onchain 边界按
+/// UNRESOLVED_DOCK_MODE 口径），云轨运行时由选择记录补齐。
 fn null_target_parent() -> Value {
     let mut parent = parent_settlement_definition(TARGET_NAME);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
