@@ -192,10 +192,14 @@ fn validate_hook_dependency_index_mirror(
     Ok(())
 }
 
-/// 栈槽的注册期分析标志：_validateHook 的 bareSignal/hasPosAnchor 数组
-/// 在 oracle 侧的等价物，外加逐槽嵌套深度（深度闸）。
+/// 栈槽的注册期分析标志：_validateHook 的
+/// bareSignal/delayResult/vetoTerm/vetoInside/hasPosAnchor 数组在 oracle
+/// 侧的等价物，外加逐槽嵌套深度（深度闸）。
 struct InstructionSlot {
     bare_signal: bool,
+    delay_result: bool,
+    veto_term: bool,
+    veto_inside: bool,
     has_pos_anchor: bool,
     depth: usize,
 }
@@ -236,6 +240,9 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
             "SIGNAL" => {
                 stack.push(InstructionSlot {
                     bare_signal: true,
+                    delay_result: false,
+                    veto_term: false,
+                    veto_inside: false,
                     has_pos_anchor: true,
                     depth: 0,
                 });
@@ -247,13 +254,21 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                             .to_string(),
                     ));
                 };
-                if !slot.bare_signal {
+                // NOT 操作数词表：裸 SIGNAL（现状）或 DELAY 产出（衰减
+                // 否决位 ~(signal+duration) 的内层）。~(A&B) 一类组合否定
+                // 的取消/锚点语义与编译器产物形态分叉，注册边界拒绝；否决
+                // 位自身的合法位置（合取直接子项）由 veto_term 位交给消费
+                // 方校验。
+                if !slot.bare_signal && !slot.delay_result {
                     return Err(ReplayError::Message(format!(
                         "malformed instruction plan: hook {hook_id} applies NOT to a non-bare-SIGNAL operand (composite negation diverges from compiler-produced shapes; contract _validateHook reverts InvalidInstruction)"
                     )));
                 }
                 stack.push(InstructionSlot {
                     bare_signal: false,
+                    delay_result: false,
+                    veto_term: slot.delay_result,
+                    veto_inside: slot.veto_inside || slot.delay_result,
                     has_pos_anchor: false,
                     depth: slot.depth + 1,
                 });
@@ -288,10 +303,21 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                             .to_string(),
                     ));
                 }
+                // Delay 操作数内禁含否决位（任意深度）：否决位的 Ready 会
+                // 衰减，Delay 成熟是永久的——外层延时锚在已过期的否决上
+                // 会静默放行（合约 _validateHook 的 vetoInside 检查镜像）。
+                if slot.veto_term || slot.veto_inside {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: hook {hook_id} applies DELAY to an operand containing a decaying veto (a veto's readiness decays while delay maturity is permanent; an outer delay anchored on an expired veto would silently pass; contract _validateHook reverts InvalidInstruction)"
+                    )));
+                }
                 // Delay 结果的锚点口径 = 操作数口径（成熟时刻成为新锚点，
                 // 正负性随操作数）。
                 stack.push(InstructionSlot {
                     bare_signal: false,
+                    delay_result: true,
+                    veto_term: false,
+                    veto_inside: false,
                     has_pos_anchor: slot.has_pos_anchor,
                     depth: slot.depth + 1,
                 });
@@ -314,6 +340,14 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                     )));
                 }
                 let terms = stack.split_off(stack.len() - arity);
+                // 否决位唯一合法位置是合取直接子项：Or 分支位一律拒绝
+                // （合约 _validateHook 对 vetoTerm 的 Or 检查镜像；And 消费
+                // 否决位是其唯一合法去处）。
+                if !is_and && terms.iter().any(|term| term.veto_term) {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: hook {hook_id} places a decaying veto under an OR branch (a veto is only legal as a direct conjunction operand; contract _validateHook reverts InvalidInstruction)"
+                    )));
+                }
                 // And 取任一正锚，Or 需每一分支都有（Or 的缺席分支可单独
                 // 就绪且锚点无源）——与 _anyPosAnchor/_allPosAnchor 同口径。
                 let anchored = if is_and {
@@ -321,9 +355,13 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                 } else {
                     terms.iter().all(|term| term.has_pos_anchor)
                 };
+                let veto_inside_result = terms.iter().any(|term| term.veto_inside);
                 let depth = terms.iter().map(|term| term.depth).max().unwrap_or(0) + 1;
                 stack.push(InstructionSlot {
                     bare_signal: false,
+                    delay_result: false,
+                    veto_term: false,
+                    veto_inside: veto_inside_result,
                     has_pos_anchor: anchored,
                     depth,
                 });
@@ -350,6 +388,14 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
         return Err(ReplayError::Message(format!(
             "malformed instruction plan: expected exactly one result value, found {}",
             stack.len()
+        )));
+    }
+    // 根位的否决位拒绝（否决位必须由合取父项消费；根否决位同时缺正
+    // 锚，两条闸都会拒绝——显式判定让拒绝面可读，合约 _validateHook
+    // 的 vetoTerm[0] 检查镜像）。
+    if stack[0].veto_term {
+        return Err(ReplayError::Message(format!(
+            "malformed instruction plan: hook {hook_id} places a decaying veto at the root (a veto is only legal as a direct conjunction operand; contract _validateHook reverts InvalidInstruction)"
         )));
     }
     if !stack[0].has_pos_anchor {

@@ -546,7 +546,22 @@ pub(crate) fn false_value() -> EvalValue {
 }
 
 pub(crate) fn not_value(value: EvalValue) -> EvalValue {
-    if value.value || value.wait {
+    // 衰减否决位（合取直接子项上的 ~(A+duration)，注册门位置闸保证
+    // 唯一合法形态）三分支取补，与合约 _notValue / 核心求值器 Expr::Not
+    // 同形：内层已熟（Ready）→ 否决成立，Impossible；内层在案未熟
+    // （Wait）→ 本项此刻 Ready，due_at 承载内层到期时刻（有效期——
+    // 纯输出元数据，HookRuntime 只为 Wait 渲染 due，调度不得依赖它）；
+    // 其余（Impossible/NeedsMore，含缺席分支）→ 无限期 Ready。
+    if value.wait {
+        return EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: value.due_at,
+            anchor_at: None,
+        };
+    }
+    if value.value {
         return EvalValue {
             value: false,
             wait: false,
@@ -627,7 +642,10 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: true,
             wait: false,
             cancel: false,
-            due_at: None,
+            // 衰减有效期取成员最紧者（None = 无限，不放宽有限期）：任一
+            // 成员到期即整体不再成立——与合约 _andValue 的
+            // _minDue(left.dueAt, right.dueAt)（0=无限）同形。
+            due_at: min_due(left.due_at, right.due_at),
             anchor_at: max_anchor(left.anchor_at, right.anchor_at),
         };
     }
@@ -636,7 +654,13 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: false,
             wait: true,
             cancel: false,
-            due_at: max_due(left.due_at, right.due_at),
+            // 等待期限只由等待成员贡献：就绪成员的 due_at 是衰减有效期而
+            // 非等待期限，不得混入 max（合约 _andValue 以
+            // _maxDue(left.wait ? left.dueAt : 0, ...) 同口径隔离）。
+            due_at: max_due(
+                left.wait.then_some(left.due_at).flatten(),
+                right.wait.then_some(right.due_at).flatten(),
+            ),
             anchor_at: max_anchor(left.anchor_at, right.anchor_at),
         };
     }
@@ -650,19 +674,33 @@ pub(crate) fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
     // 不得获胜——就绪胜者保留自己的计时。与核心求值器（uvp-hook-dsl
     // Expr::Or）及合约 _orValue 对齐。
     if left.value || right.value {
-        let anchor = if left.value && right.value {
-            min_anchor(left.anchor_at, right.anchor_at)
-        } else if left.value {
-            left.anchor_at
+        let left_wins = if left.value && right.value {
+            // 就绪双分支按"最早成熟时刻"竞争，无锚就绪（如 Not 产出）不
+            // 参与竞争、平局保持左操作数（incumbent）——与核心求值器
+            // branch_maturity 的严格小于替换同形。
+            match (left.anchor_at, right.anchor_at) {
+                (Some(left_anchor), Some(right_anchor)) => left_anchor <= right_anchor,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => true,
+            }
         } else {
-            right.anchor_at
+            left.value
         };
+        // 获胜分支原样上浮——包括其衰减有效期 due_at：衰减只收紧获胜
+        // 分支自身的有效期，不跨分支取 min（合约 _orValue 的 leftWins
+        // 载荷选择同形；合法 plan 里否决位不进 Or，此为手工 plan 的
+        // 载荷保真）。
         return EvalValue {
             value: true,
             wait: false,
             cancel: false,
-            due_at: None,
-            anchor_at: anchor,
+            due_at: if left_wins { left.due_at } else { right.due_at },
+            anchor_at: if left_wins {
+                left.anchor_at
+            } else {
+                right.anchor_at
+            },
         };
     }
     if left.wait || right.wait {

@@ -2235,6 +2235,331 @@ fn epoch_zero_submission_is_a_real_anchor_for_delay() {
 }
 
 #[test]
+fn not_value_mirrors_the_decaying_veto_three_branches() {
+    // 衰减否决位 ~(A+duration) 的三分支取补（对齐合约 _notValue 与核心
+    // 求值器 Expr::Not）：内层 Ready→Impossible、内层 Wait→Ready 且
+    // due_at 承载内层到期时刻（有效期）、其余（Impossible/NeedsMore）→
+    // 无限期 Ready。旧语义把内层 Wait 一律折成 cancel，未熟窗口内的
+    // 放行被判成否决成立——与链上/权威求值分叉。
+    let anchored = signal_value(
+        &{
+            let mut order = OracleOrderState::default();
+            order.signals.insert(
+                "0x50".to_string(),
+                json!({"submittedAt": "2026-04-27T00:00:00.000Z"}),
+            );
+            order
+        },
+        "0x50",
+    )
+    .expect("signal value");
+
+    // 内层在案未熟：本项此刻 Ready，有效期 = 内层到期时刻（元数据，
+    // 无锚——外层 DELAY 依旧按缺正锚拒绝，位置闸也在注册期封死该形态）。
+    let waiting = delay_value(anchored, 5, "2026-04-27T00:00:02.000Z").expect("wait");
+    let veto_live = not_value(waiting);
+    assert!(veto_live.value && !veto_live.wait && !veto_live.cancel);
+    assert_eq!(
+        veto_live.due_at,
+        Some(seconds_from_iso("2026-04-27T00:00:05.000Z").unwrap())
+    );
+    assert_eq!(veto_live.anchor_at, None);
+
+    // 内层已熟（成熟边界含端点：now == due 即 Ready）：否决成立。
+    let matured = delay_value(anchored, 5, "2026-04-27T00:00:05.000Z").expect("matured");
+    let veto_expired = not_value(matured);
+    assert!(veto_expired.cancel && !veto_expired.value && !veto_expired.wait);
+    assert_eq!(veto_expired.due_at, None);
+
+    // 其余分支：内层取消/缺席归约 → 无限期 Ready（due_at 不携带）。
+    let cancelled = EvalValue {
+        value: false,
+        wait: false,
+        cancel: true,
+        due_at: None,
+        anchor_at: None,
+    };
+    for inner in [cancelled, false_value()] {
+        let unbounded = not_value(inner);
+        assert!(unbounded.value && !unbounded.wait && !unbounded.cancel);
+        assert_eq!(unbounded.due_at, None);
+    }
+}
+
+/// `ship & ~(cancel + 14d)` 的指令形态（衰减否决位是 AND 直接子项）。
+fn window_instructions() -> Vec<Value> {
+    vec![
+        json!({"op": "SIGNAL", "signalKey": "0x50"}),
+        json!({"op": "SIGNAL", "signalKey": "0x51"}),
+        json!({"op": "DELAY", "delaySeconds": 1209600}),
+        json!({"op": "NOT"}),
+        json!({"op": "AND", "arity": 2}),
+    ]
+}
+
+fn order_with_signals(signals: &[(&str, &str)]) -> OracleOrderState {
+    let mut order = OracleOrderState::default();
+    for (key, submitted_at) in signals {
+        order
+            .signals
+            .insert(key.to_string(), json!({"submittedAt": submitted_at}));
+    }
+    order
+}
+
+#[test]
+fn decaying_veto_window_three_states_match_the_evaluator() {
+    // 与语义语料 evalCases 同形态对拍（decaying veto passes/…matures/
+    // …exactly at maturity）：缺席→无限期放行；在案未熟→放行至成熟
+    // 时刻（due_at = 2026-05-11）；恰在成熟时刻→否决成立（cancel）。
+    let absent = evaluate_instructions(
+        &order_with_signals(&[("0x50", "2026-04-27T00:00:05.000Z")]),
+        &window_instructions(),
+        "2026-04-27T00:00:10.000Z",
+    )
+    .expect("absent veto passes unbounded");
+    assert!(absent.value && !absent.wait && !absent.cancel);
+    assert_eq!(absent.due_at, None);
+
+    let immature = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:05.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+        ]),
+        &window_instructions(),
+        "2026-04-27T00:00:10.000Z",
+    )
+    .expect("live veto passes");
+    assert!(immature.value && !immature.wait && !immature.cancel);
+    assert_eq!(
+        immature.due_at,
+        Some(seconds_from_iso("2026-05-11T00:00:00.000Z").unwrap())
+    );
+
+    let last_millisecond = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:05.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+        ]),
+        &window_instructions(),
+        "2026-05-10T23:59:59.999Z",
+    )
+    .expect("veto still passes one millisecond before maturity");
+    assert!(last_millisecond.value);
+    assert_eq!(
+        last_millisecond.due_at,
+        Some(seconds_from_iso("2026-05-11T00:00:00.000Z").unwrap())
+    );
+
+    let at_maturity = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:05.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+        ]),
+        &window_instructions(),
+        "2026-05-11T00:00:00.000Z",
+    )
+    .expect("evaluation returns a verdict");
+    assert!(at_maturity.cancel && !at_maturity.value && !at_maturity.wait);
+}
+
+#[test]
+fn and_wait_due_excludes_the_live_vetos_validity() {
+    // `(A +5s) & ~(B +10s)`：AND 等待期限只由等待成员贡献——就绪成员
+    // （活性否决位）的 due_at 是衰减有效期而非等待期限，混入 max 会把
+    // 等待期限错拓到否决位的有效期（合约 _andValue 以 wait 门隔离）。
+    let instructions = vec![
+        json!({"op": "SIGNAL", "signalKey": "0x50"}),
+        json!({"op": "DELAY", "delaySeconds": 5}),
+        json!({"op": "SIGNAL", "signalKey": "0x51"}),
+        json!({"op": "DELAY", "delaySeconds": 10}),
+        json!({"op": "NOT"}),
+        json!({"op": "AND", "arity": 2}),
+    ];
+    let result = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:00.000Z"),
+            ("0x51", "2026-04-27T00:00:01.000Z"),
+        ]),
+        &instructions,
+        "2026-04-27T00:00:02.000Z",
+    )
+    .expect("and waits on its positive branch");
+    assert!(result.wait && !result.value && !result.cancel);
+    assert_eq!(
+        result.due_at,
+        Some(seconds_from_iso("2026-04-27T00:00:05.000Z").unwrap())
+    );
+}
+
+#[test]
+fn or_winner_carries_its_own_expiry_verbatim() {
+    // 嵌套 Or 内 And 含衰减（唯一能携带有效期的合法 Or 形态）：获胜分支
+    // 的衰减有效期原样上浮，不跨分支取 min（合约 _orValue 的 leftWins
+    // 载荷选择同形）。
+    let instructions = vec![
+        json!({"op": "SIGNAL", "signalKey": "0x50"}),
+        json!({"op": "SIGNAL", "signalKey": "0x51"}),
+        json!({"op": "DELAY", "delaySeconds": 600}),
+        json!({"op": "NOT"}),
+        json!({"op": "AND", "arity": 2}),
+        json!({"op": "SIGNAL", "signalKey": "0x52"}),
+        json!({"op": "OR", "arity": 2}),
+    ];
+    let result = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:10.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+            ("0x52", "2026-04-27T00:00:20.000Z"),
+        ]),
+        &instructions,
+        "2026-04-27T00:00:30.000Z",
+    )
+    .expect("or picks the earliest-maturity ready branch");
+    assert!(result.value && !result.wait && !result.cancel);
+    assert_eq!(
+        result.anchor_at,
+        Some(seconds_from_iso("2026-04-27T00:00:10.000Z").unwrap()),
+        "and branch matures first"
+    );
+    assert_eq!(
+        result.due_at,
+        Some(seconds_from_iso("2026-04-27T00:10:00.000Z").unwrap()),
+        "the winning branch's decaying validity floats up verbatim"
+    );
+}
+
+#[test]
+fn decaying_veto_positions_are_rejected_at_registration() {
+    // 位置规则镜像（合约 _validateHook 的 vetoTerm/vetoInside 双闸）：
+    // 否决位唯一合法位置是合取直接子项——根位、Or 子项、Delay 操作数
+    // 内（任意深度）一律拒绝；合法形态（And 直接子项、嵌套 Or 内 And
+    // 含衰减）注册放行。
+    let veto_root = watcher_plan(
+        "flow.pay#VETO_ROOT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(veto_root)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("places a decaying veto at the root"),
+        "{error}"
+    );
+
+    let veto_under_or = watcher_plan(
+        "flow.pay#VETO_OR",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "OR", "arity": 2 }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(veto_under_or)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("places a decaying veto under an OR branch"),
+        "{error}"
+    );
+
+    // Delay 操作数内（任意深度）：外层延时锚在已过期的否决上会静默
+    // 放行——衰减与成熟永久的语义冲突在注册边界封死。
+    let veto_in_delay = watcher_plan(
+        "flow.pay#VETO_DELAY",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "AND", "arity": 2 },
+            { "op": "DELAY", "delaySeconds": 10 }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(veto_in_delay)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("applies DELAY to an operand containing a decaying veto"),
+        "{error}"
+    );
+
+    // 双重否定：内层 NOT 消费掉 DELAY 产出后，外层 NOT 的操作数既非裸
+    // SIGNAL 也非 DELAY 产出——词表闸拒绝。
+    let double_negation = watcher_plan(
+        "flow.pay#VETO_NOT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(double_negation)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("applies NOT to a non-bare-SIGNAL operand"),
+        "{error}"
+    );
+
+    // 合法形态对照：And 直接子项（依赖索引逐点镜像）注册放行。
+    let mut legal = watcher_plan(
+        "flow.pay#VETO",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "AND", "arity": 2 }
+        ]),
+    );
+    legal["dependencyIndex"] = json!({ "0x50": ["flow.pay#VETO"], "0x51": ["flow.pay#VETO"] });
+    replay_chain_events(
+        vec![plan_registered_event(legal)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a veto as a direct conjunction operand registers");
+}
+
+#[test]
 fn non_positive_delay_seconds_is_rejected_at_replay_decode() {
     // 回放解码镜像合约注册门（delaySeconds == 0 revert
     // InvalidInstruction）与在线入口（uvp-hook-dsl 解码层 positive 门）：
