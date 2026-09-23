@@ -82,7 +82,7 @@ pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<
 }
 
 pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
-    let anchored = validate_anchors(expr)?;
+    let anchored = validate_anchors(expr, false, false)?;
     if !anchored {
         return Err(HookError::Message(
             "hook condition must contain at least one positive signal anchor".to_string(),
@@ -100,17 +100,44 @@ pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
     Ok(())
 }
 
-fn validate_anchors(expr: &Expr) -> Result<bool> {
+/// `veto_slot`：当前节点是否是某个 And 的直接子项——这是衰减否决位
+/// `~(A + duration)` 的合法位置。`inside_delay_operand`：当前子树是否
+/// 位于某个 Delay 的操作数内——否决位的 Ready 会衰减，而 Delay 的成熟
+/// 是永久的，二者组合会让外层延时锚定在已过期的否决上静默放行，因此
+/// Delay 操作数内任何深度一律禁止。两闸合并：根位置、Or 子项、Not
+/// 操作数、Delay 操作数内出现的否决位全部拒绝。
+fn validate_anchors(expr: &Expr, veto_slot: bool, inside_delay_operand: bool) -> Result<bool> {
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
-        Expr::Not(inner) => {
-            if !matches!(inner.as_ref(), Expr::Signal(_)) {
-                return Err(HookError::Message(
-                    "negation only supports direct signal references".to_string(),
-                ));
+        Expr::Not(inner) => match inner.as_ref() {
+            Expr::Signal(_) => Ok(false),
+            Expr::Delay {
+                expr: delay_operand,
+                duration_seconds,
+                ..
+            } => {
+                if !veto_slot || inside_delay_operand {
+                    return Err(HookError::Message(
+                        "decaying veto ~(signal+duration) is only allowed as a direct operand of a conjunction (e.g. B & ~(A+14d)); not at the root, under OR/NOT, or inside a delay operand"
+                            .to_string(),
+                    ));
+                }
+                // Delay 自身校验不因外层取反放松：正时长、操作数须有正锚。
+                if *duration_seconds <= 0 {
+                    return Err(HookError::Message("delay must be positive".to_string()));
+                }
+                let anchored = validate_anchors(delay_operand, false, true)?;
+                if !anchored {
+                    return Err(HookError::Message(
+                        "delay requires a positive signal anchor".to_string(),
+                    ));
+                }
+                Ok(false)
             }
-            Ok(false)
-        }
+            _ => Err(HookError::Message(
+                "negation only supports direct signal references".to_string(),
+            )),
+        },
         Expr::Delay {
             expr,
             duration_seconds,
@@ -119,7 +146,7 @@ fn validate_anchors(expr: &Expr) -> Result<bool> {
             if *duration_seconds <= 0 {
                 return Err(HookError::Message("delay must be positive".to_string()));
             }
-            let anchored = validate_anchors(expr)?;
+            let anchored = validate_anchors(expr, false, true)?;
             if !anchored {
                 return Err(HookError::Message(
                     "delay requires a positive signal anchor".to_string(),
@@ -130,14 +157,14 @@ fn validate_anchors(expr: &Expr) -> Result<bool> {
         Expr::And(terms) => {
             let mut anchored = false;
             for term in terms {
-                anchored |= validate_anchors(term)?;
+                anchored |= validate_anchors(term, true, inside_delay_operand)?;
             }
             Ok(anchored)
         }
         Expr::Or(terms) => {
             let mut anchored = false;
             for term in terms {
-                let term_anchored = validate_anchors(term)?;
+                let term_anchored = validate_anchors(term, false, inside_delay_operand)?;
                 if !term_anchored {
                     return Err(HookError::Message(
                         "each OR branch must contain a positive signal anchor".to_string(),

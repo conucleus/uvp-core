@@ -22,6 +22,8 @@ pub struct EvalCompiledHookOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
@@ -271,6 +273,9 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         state: result.state,
         ready_at: result
             .ready_at
+            .map(|ts| ts.to_rfc3339_opts(SecondsFormat::Millis, true)),
+        expires_at: result
+            .expires_at
             .map(|ts| ts.to_rfc3339_opts(SecondsFormat::Millis, true)),
         reason: result.reason,
     })
@@ -538,6 +543,10 @@ struct InternalEval {
     state: EvalState,
     anchors: Vec<DateTime<Utc>>,
     ready_at: Option<DateTime<Utc>>,
+    /// 本 Ready 的有效期至（None = 无限期）。仅 Ready 态可携带，来自衰减
+    /// 否决位 `~(A+duration)` 的内层成熟时刻。它是纯输出元数据：任何
+    /// 调度不得依赖它——poke 只为"变真"设闹钟，衰减永不为"变假"唤醒。
+    expires_at: Option<DateTime<Utc>>,
     reason: Option<String>,
 }
 
@@ -553,6 +562,7 @@ fn eval_expr(
             state: EvalState::NeedsMore,
             anchors: Vec::new(),
             ready_at: None,
+            expires_at: None,
             reason: Some(
                 "subscription hooks are delivered per contributing event by the state machine"
                     .to_string(),
@@ -561,19 +571,33 @@ fn eval_expr(
         Expr::Not(inner) => {
             let evaluated = eval_expr(inner, source, signals, now)?;
             match evaluated.state {
-                EvalState::Ready | EvalState::Wait => Ok(InternalEval {
+                EvalState::Ready => Ok(InternalEval {
                     state: EvalState::Impossible,
                     anchors: Vec::new(),
                     ready_at: None,
+                    expires_at: None,
                     reason: Some(format!(
                         "negated condition exists: {}",
                         normalize_tight(inner)
                     )),
                 }),
+                // 衰减否决位（合取直接子项上的 `~(A+duration)`，校验期
+                // 位置闸保证唯一合法形态）：内层在案未熟 → 本项此刻
+                // Ready，有效期至内层成熟时刻——此后内层翻 Ready、本项翻
+                // Impossible（A 缺席/被否决的分支永不到达成熟，走下方
+                // 无限期臂）。
+                EvalState::Wait => Ok(InternalEval {
+                    state: EvalState::Ready,
+                    anchors: Vec::new(),
+                    ready_at: None,
+                    expires_at: evaluated.ready_at,
+                    reason: None,
+                }),
                 EvalState::Impossible | EvalState::NeedsMore => Ok(InternalEval {
                     state: EvalState::Ready,
                     anchors: Vec::new(),
                     ready_at: None,
+                    expires_at: None,
                     reason: None,
                 }),
             }
@@ -596,6 +620,7 @@ fn eval_expr(
                     state: EvalState::Wait,
                     anchors: Vec::new(),
                     ready_at: evaluated.ready_at,
+                    expires_at: None,
                     reason: None,
                 }),
                 EvalState::Ready => {
@@ -604,6 +629,7 @@ fn eval_expr(
                             state: EvalState::NeedsMore,
                             anchors: Vec::new(),
                             ready_at: None,
+                            expires_at: None,
                             reason: None,
                         });
                     };
@@ -621,10 +647,12 @@ fn eval_expr(
                         ))
                     })?;
                     if now >= ready_at {
+                        // 成熟是永久的：延时 Ready 不携带有效期。
                         Ok(InternalEval {
                             state: EvalState::Ready,
                             anchors: vec![ready_at],
                             ready_at: Some(ready_at),
+                            expires_at: None,
                             reason: None,
                         })
                     } else {
@@ -632,6 +660,7 @@ fn eval_expr(
                             state: EvalState::Wait,
                             anchors: Vec::new(),
                             ready_at: Some(ready_at),
+                            expires_at: None,
                             reason: None,
                         })
                     }
@@ -642,6 +671,7 @@ fn eval_expr(
             let mut anchors = Vec::new();
             let mut waits = Vec::new();
             let mut needs_more = false;
+            let mut min_expires: Option<DateTime<Utc>> = None;
             for term in terms {
                 let evaluated = eval_expr(term, source, signals, now)?;
                 match evaluated.state {
@@ -652,7 +682,34 @@ fn eval_expr(
                             waits.push(ready_at);
                         }
                     }
-                    EvalState::Ready => anchors.extend(evaluated.anchors),
+                    EvalState::Ready => {
+                        // 防御语义（按构造不可达，求值器自洽）：衰减项的
+                        // expires_at 只应指向未来（Not 构造时内层 Wait 保证
+                        // 严格晚于 now）。若已到期，按 Impossible 处理
+                        // （fail-closed），不得把过期否决当作仍然成立放行。
+                        if evaluated
+                            .expires_at
+                            .is_some_and(|expires_at| expires_at <= now)
+                        {
+                            return Ok(InternalEval {
+                                state: EvalState::Impossible,
+                                anchors: Vec::new(),
+                                ready_at: None,
+                                expires_at: None,
+                                reason: Some(format!(
+                                    "decaying veto expired: {}",
+                                    normalize_tight(term)
+                                )),
+                            });
+                        }
+                        anchors.extend(evaluated.anchors);
+                        // And 的 Ready 有效期取成员最紧者（None = 无限，
+                        // 不放宽任何有限期）：任一成员到期即整体不再成立。
+                        min_expires = [min_expires, evaluated.expires_at]
+                            .into_iter()
+                            .flatten()
+                            .min();
+                    }
                 }
             }
             if needs_more {
@@ -660,6 +717,7 @@ fn eval_expr(
                     state: EvalState::NeedsMore,
                     anchors: Vec::new(),
                     ready_at: None,
+                    expires_at: None,
                     reason: None,
                 });
             }
@@ -668,6 +726,7 @@ fn eval_expr(
                     state: EvalState::Wait,
                     anchors: Vec::new(),
                     ready_at: Some(ready_at),
+                    expires_at: None,
                     reason: None,
                 });
             }
@@ -675,6 +734,7 @@ fn eval_expr(
                 state: EvalState::Ready,
                 ready_at: anchors.iter().max().copied(),
                 anchors,
+                expires_at: min_expires,
                 reason: None,
             })
         }
@@ -695,6 +755,8 @@ fn eval_expr(
                         // 合约 _orValue / 回放 oracle 的 or_value 逐字节一致）。
                         // 无锚点的 Ready 分支（如 Not 就绪）永不获胜——链上其
                         // anchorAt=0，_minAnchor 同样让位于任何带锚分支。
+                        // 获胜分支的 expires_at 原样上浮（衰减只收紧获胜
+                        // 分支自身的有效期，不跨分支取 min）。
                         let better = ready.as_ref().is_none_or(|current| {
                             match (branch_maturity(&evaluated), branch_maturity(current)) {
                                 (Some(candidate), Some(incumbent)) => candidate < incumbent,
@@ -728,6 +790,7 @@ fn eval_expr(
                     state: EvalState::Wait,
                     anchors: Vec::new(),
                     ready_at: Some(ready_at),
+                    expires_at: None,
                     reason: None,
                 });
             }
@@ -736,6 +799,7 @@ fn eval_expr(
                     state: EvalState::Impossible,
                     anchors: Vec::new(),
                     ready_at: None,
+                    expires_at: None,
                     reason: Some(format!(
                         "all OR branches are cancelled: {}",
                         normalize_tight(expr)
@@ -746,6 +810,7 @@ fn eval_expr(
                 state: EvalState::NeedsMore,
                 anchors: Vec::new(),
                 ready_at: None,
+                expires_at: None,
                 reason: None,
             })
         }
@@ -775,6 +840,7 @@ fn eval_signal(
             state: EvalState::Ready,
             anchors: vec![entry.received_at],
             ready_at: Some(entry.received_at),
+            expires_at: None,
             reason: None,
         });
     }
@@ -782,6 +848,7 @@ fn eval_signal(
         state: EvalState::NeedsMore,
         anchors: Vec::new(),
         ready_at: None,
+        expires_at: None,
         reason: None,
     })
 }

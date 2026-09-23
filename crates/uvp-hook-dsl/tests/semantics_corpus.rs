@@ -52,6 +52,7 @@ struct EvalCase {
 struct EvalExpect {
     state: String,
     ready_at: Option<String>,
+    expires_at: Option<String>,
     reason_contains: Option<String>,
 }
 
@@ -143,6 +144,13 @@ fn evaluates_semantic_corpus() {
                 case.name
             );
         }
+        // 衰减维度对每个 eval 用例整体钉死（缺席 = 无期限），不做
+        // "写了才比对"：否则带否决位的用例漏写 expiresAt 会被静默放过。
+        assert_eq!(
+            output.expires_at, case.expect.expires_at,
+            "expiresAt mismatch: {}",
+            case.name
+        );
         if let Some(expected) = case.expect.reason_contains {
             let reason = output.reason.unwrap_or_default();
             assert!(

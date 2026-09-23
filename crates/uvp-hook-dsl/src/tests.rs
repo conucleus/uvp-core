@@ -1624,3 +1624,268 @@ fn chained_delay_timers_accumulate_inner_expiry() {
         out.dependencies
     );
 }
+
+#[test]
+fn decaying_veto_three_window_states() {
+    // 窗口三态：A 缺席 → 放行（无有效期）；A 在案未熟 → 放行至成熟时刻；
+    // A 已熟 → 否决（Impossible）。成熟边界含端点：now == 成熟时刻即否决。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+
+    let absent = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+        Profile::EvmStrict,
+        vec![fact("task.ship.cmp", "2026-04-27T00:00:05.000Z")],
+        "2026-04-27T00:00:10.000Z",
+    );
+    assert_eq!(absent.state, EvalState::Ready);
+    assert_eq!(absent.expires_at, None, "absent veto must not decay");
+
+    let immature = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+        Profile::EvmStrict,
+        vec![
+            fact("task.ship.cmp", "2026-04-27T00:00:05.000Z"),
+            fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z"),
+        ],
+        "2026-04-27T00:00:10.000Z",
+    );
+    assert_eq!(immature.state, EvalState::Ready);
+    assert_eq!(
+        immature.expires_at.as_deref(),
+        Some("2026-05-11T00:00:00.000Z"),
+        "validity must end at the negated delay's maturity"
+    );
+
+    let matured = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+        Profile::EvmStrict,
+        vec![
+            fact("task.ship.cmp", "2026-04-27T00:00:05.000Z"),
+            fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z"),
+        ],
+        "2026-05-11T00:00:00.000Z",
+    );
+    assert_eq!(matured.state, EvalState::Impossible);
+    assert!(
+        matured
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("negated condition exists: task.cancel.cmp+14d"),
+        "unexpected reason: {:?}",
+        matured.reason
+    );
+}
+
+#[test]
+fn decaying_veto_position_rules_reject_non_conjunction_slots() {
+    // 否决位仅合取直接子项合法：根位 / Or 子项 / Not 操作数 / Delay
+    // 操作数内（任意深度，含 Delay 内嵌套 And/Or 再包衰减）一律编译期拒绝。
+    let position_error = "only allowed as a direct operand of a conjunction";
+    for hook in [
+        "buyer::~(task.cancel.cmp +14d)",
+        "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
+        "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
+        "buyer::((task.a.cmp & (task.b.cmp & ~(task.cancel.cmp +14d))) | task.c.cmp) +5s",
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "WINDOW".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains(position_error),
+            "unexpected error for {hook}: {err}"
+        );
+    }
+
+    let err = parse_hook(ParseHookRequest {
+        profile: Profile::EvmStrict,
+        hook_name: "WINDOW".to_string(),
+        hook: "buyer::task.a.cmp & ~(~(task.cancel.cmp +14d))".to_string(),
+    })
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("negation only supports direct signal references"),
+        "unexpected error for doubly negated veto: {err}"
+    );
+}
+
+#[test]
+fn decaying_veto_expires_at_takes_the_and_minimum() {
+    // And 的有效期取成员最紧者：两个衰减项取较早成熟；无期限成员
+    // （缺席否决/正向项）不放宽有限期。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let both_live = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.b.cmp & ~(task.a1.cmp +5s) & ~(task.a2.cmp +10s)",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a1.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("task.a2.cmp", "2026-04-27T00:00:02.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(both_live.state, EvalState::Ready);
+    assert_eq!(
+        both_live.expires_at.as_deref(),
+        Some("2026-04-27T00:00:06.000Z"),
+        "min(5s, 10s) decay must win"
+    );
+
+    let one_unbounded = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.b.cmp & ~(task.a1.cmp +5s) & ~task.a2.cmp",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a1.cmp", "2026-04-27T00:00:01.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(one_unbounded.state, EvalState::Ready);
+    assert_eq!(
+        one_unbounded.expires_at.as_deref(),
+        Some("2026-04-27T00:00:06.000Z"),
+        "an unbounded member must not loosen the finite decay"
+    );
+}
+
+#[test]
+fn decaying_veto_inside_an_or_winning_branch_floats_its_expiry() {
+    // Or：获胜分支的 expires_at 原样上浮，不跨分支取 min——另一分支
+    // 就绪且无衰减时，整体的 Ready 无有效期。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let veto_branch_wins = evaluate_compiled(
+        "ANY",
+        "buyer::(task.b.cmp & ~(task.a.cmp +5s)) | task.d.cmp",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(veto_branch_wins.state, EvalState::Ready);
+    assert_eq!(
+        veto_branch_wins.expires_at.as_deref(),
+        Some("2026-04-27T00:00:06.000Z"),
+        "the winning AND branch must float its decay up through the OR"
+    );
+
+    let plain_branch_wins = evaluate_compiled(
+        "ANY",
+        "buyer::(task.b.cmp & ~(task.a.cmp +5s)) | task.d.cmp",
+        Profile::EvmStrict,
+        vec![
+            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("task.d.cmp", "2026-04-27T00:00:02.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(plain_branch_wins.state, EvalState::Ready);
+    assert_eq!(
+        plain_branch_wins.expires_at, None,
+        "OR must not take a cross-branch expiry minimum"
+    );
+}
+
+#[test]
+fn decaying_veto_over_a_composite_delay_operand() {
+    // 否定延时操作数可以是复合式：~((A|C)+5s) 的有效期 = 复合延时
+    // 的成熟时刻（C 缺席不阻塞 A 分支成熟）。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let eval = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.b.cmp & ~((task.a.cmp | task.c.cmp) +5s)",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(eval.state, EvalState::Ready);
+    assert_eq!(eval.expires_at.as_deref(), Some("2026-04-27T00:00:06.000Z"));
+}
+
+#[test]
+fn decaying_veto_serializes_expires_at_across_the_json_boundary() {
+    // FFI/NAPI 序列化边界：有效期以 camelCase expiresAt 字段出场，
+    // 无期限时字段缺席（skip_serializing_if）。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let request_for = |signals: Vec<SignalFact>, now: &str| {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            hook_name: "WINDOW".to_string(),
+            hook: "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)".to_string(),
+        })
+        .unwrap();
+        json!({
+            "profile": "evm_strict",
+            "ast": parsed.cloud_ast,
+            "signals": signals
+                .into_iter()
+                .map(|fact| json!({
+                    "source": fact.source,
+                    "signalName": fact.signal_name,
+                    "receivedAt": fact.received_at,
+                }))
+                .collect::<Vec<_>>(),
+            "now": now,
+        })
+    };
+
+    let bounded = eval_compiled_hook_json(
+        &request_for(
+            vec![
+                fact("task.ship.cmp", "2026-04-27T00:00:05.000Z"),
+                fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z"),
+            ],
+            "2026-04-27T00:00:10.000Z",
+        )
+        .to_string(),
+    );
+    assert!(
+        bounded.contains("\"expiresAt\":\"2026-05-11T00:00:00.000Z\""),
+        "expiresAt must serialize on the JSON boundary: {bounded}"
+    );
+
+    let unbounded = eval_compiled_hook_json(
+        &request_for(
+            vec![fact("task.ship.cmp", "2026-04-27T00:00:05.000Z")],
+            "2026-04-27T00:00:10.000Z",
+        )
+        .to_string(),
+    );
+    assert!(
+        !bounded.is_empty() && !unbounded.contains("expiresAt"),
+        "absent veto must leave expiresAt out of the envelope: {unbounded}"
+    );
+}

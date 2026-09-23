@@ -449,6 +449,54 @@
           }
         ]
       }
+    },
+    {
+      "name": "decaying veto as a direct conjunction operand",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.ship.cmp&~(task.cancel.cmp+14d)",
+        "normalizedExpression": "buyer::task.ship.cmp&~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cloud rendering of the decaying veto keeps grouped delay parentheses",
+      "profile": "cloud_compat",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.ship.cmp & ~(task.cancel.cmp + 14d)",
+        "normalizedExpression": "buyer::task.ship.cmp&~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
+          }
+        ]
+      }
     }
   ],
   "evalCases": [
@@ -1048,6 +1096,118 @@
         "state": "needs_more",
         "reasonContains": "delivered per"
       }
+    },
+    {
+      "name": "decaying veto passes while the negated signal is absent",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "decaying veto passes until the negated delay matures",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z",
+        "expiresAt": "2026-05-11T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "decaying veto still passes one millisecond before the negated delay matures",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-05-10T23:59:59.999Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z",
+        "expiresAt": "2026-05-11T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "decaying veto cancels exactly at the negated delay maturity",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-05-11T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "negated condition exists: task.cancel.cmp+14d"
+      }
+    },
+    {
+      "name": "and with a live veto still waits only on its positive branch",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::(task.ship.cmp +5s) & ~(task.cancel.cmp +10s)",
+      "now": "2026-04-27T00:00:02.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:01.000Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
     }
   ],
   "invalidCases": [
@@ -1197,6 +1357,34 @@
       "hookName": "HOOK",
       "hook": "buyer::task.a.cmp +5s +10s",
       "messageContains": "unexpected token"
+    },
+    {
+      "name": "decaying veto at the root is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::~(task.cancel.cmp +14d)",
+      "messageContains": "only allowed as a direct operand of a conjunction"
+    },
+    {
+      "name": "decaying veto under an OR branch is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
+      "messageContains": "only allowed as a direct operand of a conjunction"
+    },
+    {
+      "name": "doubly negated decaying veto is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.a.cmp & ~(~(task.cancel.cmp +14d))",
+      "messageContains": "negation only supports direct signal references"
+    },
+    {
+      "name": "decaying veto inside a delay operand is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
+      "messageContains": "only allowed as a direct operand of a conjunction"
     },
     {
       "name": "channel name containing the signal separator dot is rejected",
