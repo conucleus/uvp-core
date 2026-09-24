@@ -3,7 +3,7 @@
 > 状态：对齐基线（v1）
 > 语义版本：`uvp.semantic.v1`（单一语义版本线，不并存两套语义）
 > 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
-> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.11、`UVPDockingModule` 4.4 及其余 module fixtures；六域 PlanCommit（publisher、hooksHash、capabilitiesRoot、dockRoutesRoot、dockInterfaceRoot、deadline）、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出指令集外的指令/入口。
+> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.12、`UVPDockingModule` 4.4 及其余 module fixtures；六域 PlanCommit（publisher、hooksHash、capabilitiesRoot、dockRoutesRoot、dockInterfaceRoot、deadline）、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出指令集外的指令/入口。
 
 ---
 
@@ -145,7 +145,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   executor: { supplierType: organization, supplierID: journey-executor }
   receiveSignals:
     JOURNEY_START: "::ANCHOR(@fruit_merchant::stall_retail.retail.sold)"
-  sendSignals: [str, cmp, err]
+  sendSignals: [{name: str}, {name: cmp}, {name: err}]
 
 # 无锚监听：通道扇入（原撮合）
 - name: exchange
@@ -154,7 +154,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   receiveSignals:
     SURPLUS_EVENT: "::ANCHOR(@fruit_merchant::stall_retail.retail.surplus)"
     DEMAND_EVENT: "::ANCHOR(@buyer::juice_demand.entry.requested)"
-  sendSignals: [str, frozen, cmp, deal, err]
+  sendSignals: [{name: str}, {name: frozen}, {name: cmp}, {name: deal}, {name: err}]
 
 # 有锚阶段：按单路由（原收购回流；同 source 类存在 mint 声明即有锚）
 - name: packing intake
@@ -162,7 +162,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   executor: { supplierType: organization, supplierID: fruit-merchant-executor }
   receiveSignals:
     FARMER_FRUIT_SETTLED: "::ANCHOR(@farmer::farmer_orchard.packing.settled)"
-  sendSignals: [str, frozen, cmp, err]
+  sendSignals: [{name: str}, {name: frozen}, {name: cmp}, {name: err}]
 
 # 同单推进：普通 hook（原语义）
 - name: washing
@@ -170,7 +170,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   executor: { supplierType: organization, supplierID: farmer-executor }
   receiveSignals:
     WASH_READY: "seller::farmer_orchard.picking.cmp"
-  sendSignals: [str, cmp, err]
+  sendSignals: [{name: str}, {name: cmp}, {name: err}]
 ```
 
 Stage 字段总表（目标态）：
@@ -180,7 +180,7 @@ Stage 字段总表（目标态）：
 | `source` | 保留，升格为因果身份类（域内命名空间，多阶段共享） |
 | `mint` | 新增，可选，仅 `per-fact`；由出生阶段声明，是该类铸单的唯一声明点 |
 | `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
-| `sendSignals` | 保留 |
+| `sendSignals` | 保留，条目对象化 `{name, validWhen?}`：`name` 必填非空、归一后不可重复；`validWhen` 是发射适格声明（过滤档钩子方言），语义权威见两轨文法手册 §5.7，本规格不重述 |
 | `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(目标定义name|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
 | `trigger` | **删除**（原必填入口表） |
 | `externalSignals` | **删除** |
@@ -210,9 +210,9 @@ Stage 字段总表（目标态）：
 
 ## 7. 版本与兼容
 
-- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v2`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v2`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v5 编号制品，无兼容义务。
-- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v2`、`onchainHookPlan.v3`、`cloudArtifact.v2`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
-- `UVPStateMachine` 0.11 的六域 PlanCommit（含 capabilitiesRoot）、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.4 的 open/attach/input/output boundary（output 端口叶为 V3：叶直接钉绑定侧的 targetSourceId/targetSignalId 事实键分量）必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
+- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v3`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v3`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v5 编号制品，无兼容义务。
+- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v3`、`onchainHookPlan.v3`、`cloudArtifact.v3`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
+- `UVPStateMachine` 0.12 的六域 PlanCommit（含 capabilitiesRoot）、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.4 的 open/attach/input/output boundary（output 端口叶为 V3：叶直接钉绑定侧的 targetSourceId/targetSignalId 事实键分量）必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
 - OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals 不在语法面、两侧语料与两侧文档表述内。其中 trigger 入口表与 externalSignals 零存在；`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 由解析器词法识别并精确拒绝，报错统一指引 `::ANCHOR(@source::task.stage.signal)` 订阅入口，扇入类标头按通用语法错误拒绝（语法面排除的完整口径见 2.2）。
 
 ## 8. 决策记录
