@@ -122,7 +122,8 @@ spec:
       stages:
         - name: main
           source: buyer
-          sendSignals: ["a"]
+          sendSignals:
+            - name: a
           receiveSignals:
             DUP: "buyer::flow.main.a & flow.main.a"
           executor:

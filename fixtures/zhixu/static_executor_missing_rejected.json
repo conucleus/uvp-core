@@ -27,7 +27,9 @@
                 "MATCH": "buyer::market.pool.matched"
               },
               "sendSignals": [
-                "ack"
+                {
+                  "name": "ack"
+                }
               ]
             }
           ]

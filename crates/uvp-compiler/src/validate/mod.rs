@@ -203,14 +203,15 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
             // 长；裸名才拼 stage 前缀——三段式再拼一次前缀会把 task.stage
             // 段重复计入，误拒真实 ≤100 的合法声明。
             for signal in &stage.send_signals {
-                let full_name_bytes = if signal.contains('.') {
-                    signal.len()
+                let full_name_bytes = if signal.name.contains('.') {
+                    signal.name.len()
                 } else {
-                    stage_identifier.len() + 1 + signal.len()
+                    stage_identifier.len() + 1 + signal.name.len()
                 };
                 if full_name_bytes > MAX_SIGNAL_NAME_BYTES {
                     issues.push(format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}] ({stage_identifier:?}) sendSignal {signal:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)"
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}] ({stage_identifier:?}) sendSignal {:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)",
+                        signal.name
                     ));
                 }
             }
@@ -337,7 +338,7 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
 
 // stage_is_subscription 报告阶段是否声明了 ANCHOR 订阅入口。解析失败的
 // hook 不算订阅形态：语法错误由引用存在性校验统一上报。
-fn stage_is_subscription(stage: &ZhixuStage) -> bool {
+pub(crate) fn stage_is_subscription(stage: &ZhixuStage) -> bool {
     stage.receive_signals.values().any(|raw| {
         parse_hook_for_compiler("HOOK", raw)
             .map(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
@@ -813,18 +814,19 @@ fn validate_hook_dependency_references(
 /// triggerOrigin 声明不参与该比较：它声明的是跨源触发能力（relation=1，
 /// 合约消费），不是本阶段 current 事实。
 pub(crate) fn declares_signal_expanding_to(
-    send_signals: &[String],
+    send_signals: &[uvp_model::ZhixuSendSignal],
     stage_identifier: &str,
     full_signal_name: &str,
 ) -> bool {
     send_signals.iter().any(|declared| {
-        if declared.contains("::") {
+        if declared.name.contains("::") {
             return false;
         }
-        if declared == full_signal_name {
+        if declared.name == full_signal_name {
             return true;
         }
-        !declared.contains('.') && format!("{stage_identifier}.{declared}") == full_signal_name
+        !declared.name.contains('.')
+            && format!("{stage_identifier}.{}", declared.name) == full_signal_name
     })
 }
 

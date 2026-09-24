@@ -7,10 +7,12 @@ use std::collections::BTreeMap;
 
 use crate::ast::{
     contains_nested_subscription, is_plain_identifier, normalize_tight, valid_signal_identity,
-    validate_hook, Expr,
+    validate_filter_hook, validate_hook, Expr,
 };
 use crate::parser::{duration_to_seconds, MAX_PARSE_DEPTH};
-use crate::{HookError, Profile, Result, CLOUD_AST_SCHEMA_VERSION, CORE_VERSION, SEMANTIC_VERSION};
+use crate::{
+    Gate, HookError, Profile, Result, CLOUD_AST_SCHEMA_VERSION, CORE_VERSION, SEMANTIC_VERSION,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +44,10 @@ pub enum EvalState {
 pub struct EvalCompiledHookRequest {
     #[serde(default)]
     pub profile: Profile,
+    /// 校验档（默认 hook，与 ParseHookRequest.gate 同先例）：解码防御按
+    /// 档运行对应校验——过滤档（发射适格面）放行其合法化的形态。
+    #[serde(default)]
+    pub gate: Gate,
     pub ast: Value,
     #[serde(default)]
     pub signals: Vec<SignalFact>,
@@ -260,9 +266,13 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         _ => {}
     }
     // Defense in depth: a hand-crafted compiled AST must satisfy the same
-    // positive-anchor invariant as a parsed expression before it may drive
-    // hook status transitions.
-    validate_hook(&expr)?;
+    // invariants as a parsed expression before it may drive state
+    // transitions — per gate (hook: positive-anchor invariant; filter:
+    // admission vocabulary).
+    match req.gate {
+        Gate::Hook => validate_hook(&expr)?,
+        Gate::Filter => validate_filter_hook(&expr)?,
+    }
     let signals = signal_map(req.signals, req.profile)?;
     let result = eval_expr(&expr, &source, &signals, now)?;
 

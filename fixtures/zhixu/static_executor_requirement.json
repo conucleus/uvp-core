@@ -27,8 +27,12 @@
                 "PUBLISH": "seller::trade.listing.seed"
               },
               "sendSignals": [
-                "cmp",
-                "seed"
+                {
+                  "name": "cmp"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -42,8 +46,12 @@
                 "PUBLISH": "buyer::trade.intent.seed"
               },
               "sendSignals": [
-                "cmp",
-                "seed"
+                {
+                  "name": "cmp"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -63,7 +71,9 @@
                 "MATCH_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
               },
               "sendSignals": [
-                "matched"
+                {
+                  "name": "matched"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

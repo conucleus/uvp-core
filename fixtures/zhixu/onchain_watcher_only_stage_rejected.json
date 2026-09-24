@@ -27,8 +27,12 @@
                 "BEGIN": "buyer::flow.anchor.seed"
               },
               "sendSignals": [
-                "go",
-                "seed"
+                {
+                  "name": "go"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "selectedStages": [
                 "flow.watcher"
@@ -45,7 +49,9 @@
                 "WATCH": "buyer::flow.anchor.go"
               },
               "sendSignals": [
-                "cmp"
+                {
+                  "name": "cmp"
+                }
               ]
             }
           ]

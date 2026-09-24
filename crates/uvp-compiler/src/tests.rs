@@ -10,65 +10,68 @@ const UNKNOWN_TARGET: &str = "unpublished-zhixu";
 // ------------------------------------------------------------------
 fn target_payment_definition() -> Value {
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "payment_execution" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "payment-core" },
-            "dockInterface": {
-                "payment_service": {
-                    "orderModes": ["new"],
-                    "inputs": {
-                        "execute": { "hook": "payment_flow.init#DOCK_EXECUTE" },
-                        "cancel": { "hook": "payment_flow.control#DOCK_CANCEL" }
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "payment_execution" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "payment-core" },
+                "dockInterface": {
+                    "payment_service": {
+                        "orderModes": ["new"],
+                        "inputs": {
+                            "execute": { "hook": "payment_flow.init#DOCK_EXECUTE" },
+                            "cancel": { "hook": "payment_flow.control#DOCK_CANCEL" }
+                        },
+                        "outputs": {
+                            "started": { "signal": "payment::payment_flow.init.str" },
+                            "completed": { "signal": "payment::payment_flow.settle.cmp" },
+                            "failed": { "signal": "payment::payment_flow.settle.err" }
+                        }
                     },
-                    "outputs": {
-                        "started": { "signal": "payment::payment_flow.init.str" },
-                        "completed": { "signal": "payment::payment_flow.settle.cmp" },
-                        "failed": { "signal": "payment::payment_flow.settle.err" }
+                    "payment_evidence": {
+                        "orderModes": ["existing"],
+                        "outputs": {
+                            "cancelled": { "signal": "payment::payment_flow.control.cxl" }
+                        }
                     }
                 },
-                "payment_evidence": {
-                    "orderModes": ["existing"],
-                    "outputs": {
-                        "cancelled": { "signal": "payment::payment_flow.control.cxl" }
-                    }
-                }
-            },
-            "taskPatterns": [
-                { "name": "payment_flow", "stages": [
-                    {
-                        "name": "init",
-                        "source": "payment",
-                        "receiveSignals": {
-                            "DOCK_EXECUTE": "payment::payment_flow.init.execute"
+                "taskPatterns": [
+                    { "name": "payment_flow", "stages": [
+                        {
+                            "name": "init",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "DOCK_EXECUTE": "payment::payment_flow.init.execute"
+                            },
+                            "sendSignals": [{ "name": "str" }],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
                         },
-                        "sendSignals": ["str"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
-                    },
-                    {
-                        "name": "control",
-                        "source": "payment",
-                        "receiveSignals": {
-                            "DOCK_CANCEL": "payment::payment_flow.control.cancel"
+                        {
+                            "name": "control",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "DOCK_CANCEL": "payment::payment_flow.control.cancel"
+                            },
+                            "sendSignals": [{ "name": "cxl" }],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
                         },
-                        "sendSignals": ["cxl"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
-                    },
-                    {
-                        "name": "settle",
-                        "source": "payment",
-                        "receiveSignals": {
-                            "SETTLE": "payment::payment_flow.init.str"
-                        },
-                        "sendSignals": ["cmp", "err"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
-                    }
-                ]}
-            ]
-        }
-    })
+                        {
+                            "name": "settle",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "SETTLE": "payment::payment_flow.init.str"
+                            },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "err" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+                        }
+                    ]}
+                ]
+            }
+        })
 }
 
 const TARGET_NAME: &str = "payment_execution";
@@ -78,55 +81,66 @@ const TARGET_NAME: &str = "payment_execution";
 // ------------------------------------------------------------------
 fn parent_settlement_definition(target_name: &str) -> Value {
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "settlement" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "settlement-core" },
-            "taskPatterns": [
-                { "name": "checkout", "stages": [
-                    {
-                        "name": "confirm",
-                        "source": "buyer",
-                        // 物化门：零 hook 阶段在链上永不可物化、信号
-                        // 没有钩子可挂；seed 是执行者自发入口信号。
-                        "receiveSignals": { "PLACE": "buyer::checkout.confirm.seed" },
-                        "sendSignals": ["cmp", "seed"],
-                        "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
-                    },
-                    {
-                        "name": "cancel",
-                        "source": "buyer",
-                        "receiveSignals": { "ABORT": "buyer::checkout.cancel.seed" },
-                        "sendSignals": ["cmp", "seed"],
-                        "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
-                    }
-                ]},
-                { "name": "settlement", "stages": [
-                    {
-                        "name": "execute_payment",
-                        "source": "buyer",
-                        "receiveSignals": {
-                            "EXECUTE": "buyer::checkout.confirm.cmp",
-                            "CANCEL": "buyer::checkout.cancel.cmp"
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "settlement" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "settlement-core" },
+                "taskPatterns": [
+                    { "name": "checkout", "stages": [
+                        {
+                            "name": "confirm",
+                            "source": "buyer",
+                            // 物化门：零 hook 阶段在链上永不可物化、信号
+                            // 没有钩子可挂；seed 是执行者自发入口信号。
+                            "receiveSignals": { "PLACE": "buyer::checkout.confirm.seed" },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "seed" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                         },
-                        "sendSignals": ["str", "cmp", "err", "cxl"],
-                        "executor": {
-                            "supplierType": "zhixu",
-                            "zhixuExecutorConfig": {
-                                "target": { "zhixu": target_name },
-                                "interface": "payment_service",
-                                "order": { "mode": "new" },
-                                "inputMap": { "EXECUTE": "execute" },
-                                "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
+                        {
+                            "name": "cancel",
+                            "source": "buyer",
+                            "receiveSignals": { "ABORT": "buyer::checkout.cancel.seed" },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "seed" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                        }
+                    ]},
+                    { "name": "settlement", "stages": [
+                        {
+                            "name": "execute_payment",
+                            "source": "buyer",
+                            "receiveSignals": {
+                                "EXECUTE": "buyer::checkout.confirm.cmp",
+                                "CANCEL": "buyer::checkout.cancel.cmp"
+                            },
+                            "sendSignals": [
+    { "name": "str" },
+    { "name": "cmp" },
+    { "name": "err" },
+    { "name": "cxl" }
+    ],
+                            "executor": {
+                                "supplierType": "zhixu",
+                                "zhixuExecutorConfig": {
+                                    "target": { "zhixu": target_name },
+                                    "interface": "payment_service",
+                                    "order": { "mode": "new" },
+                                    "inputMap": { "EXECUTE": "execute" },
+                                    "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
+                                }
                             }
                         }
-                    }
-                ]}
-            ]
-        }
-    })
+                    ]}
+                ]
+            }
+        })
 }
 
 // ------------------------------------------------------------------
@@ -134,33 +148,36 @@ fn parent_settlement_definition(target_name: &str) -> Value {
 // ------------------------------------------------------------------
 fn parent_recycling_definition(target_name: &str) -> Value {
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "recycling" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "recycling-core" },
-            "taskPatterns": [
-                { "name": "recycling", "stages": [
-                    {
-                        "name": "source_evidence",
-                        "source": "recycler",
-                        "receiveSignals": { "READ": "recycler::recycling.source_evidence.seed" },
-                        "sendSignals": ["cmp", "seed"],
-                        "executor": {
-                            "supplierType": "zhixu",
-                            "zhixuExecutorConfig": {
-                                "target": { "zhixu": target_name },
-                                "interface": "payment_evidence",
-                                "order": { "mode": "existing" },
-                                "signalMap": { "cmp": "cancelled" }
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "recycling" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "recycling-core" },
+                "taskPatterns": [
+                    { "name": "recycling", "stages": [
+                        {
+                            "name": "source_evidence",
+                            "source": "recycler",
+                            "receiveSignals": { "READ": "recycler::recycling.source_evidence.seed" },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "seed" }
+    ],
+                            "executor": {
+                                "supplierType": "zhixu",
+                                "zhixuExecutorConfig": {
+                                    "target": { "zhixu": target_name },
+                                    "interface": "payment_evidence",
+                                    "order": { "mode": "existing" },
+                                    "signalMap": { "cmp": "cancelled" }
+                                }
                             }
                         }
-                    }
-                ]}
-            ]
-        }
-    })
+                    ]}
+                ]
+            }
+        })
 }
 
 /// 构造 resolution manifest：真实流程由 Store/发布系统在目标发布后
@@ -187,7 +204,9 @@ fn send_signals_total_is_uncapped() {
     // hook_plan 与 cloud 共用 build_signal_capabilities，两个 target
     // 同口径放行。
     let definition_with = |count: usize| {
-        let signals: Vec<String> = (0..count).map(|index| format!("sig{index:03}")).collect();
+        let signals: Vec<Value> = (0..count)
+            .map(|index| json!({ "name": format!("sig{index:03}") }))
+            .collect();
         json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
@@ -306,21 +325,25 @@ fn link_reports_every_routes_issues_in_one_pass() {
     let target = target_payment_definition();
     let mut parent = parent_settlement_definition(TARGET_NAME);
     let second_dock = json!({
-        "name": "second_dock",
-        "source": "buyer",
-        "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
-        "sendSignals": ["str", "cmp", "err"],
-        "executor": {
-            "supplierType": "zhixu",
-            "zhixuExecutorConfig": {
-                "target": { "zhixu": UNKNOWN_TARGET },
-                "interface": "payment_service",
-                "order": { "mode": "new" },
-                "inputMap": { "START": "execute" },
-                "signalMap": { "str": "started", "cmp": "completed" }
+            "name": "second_dock",
+            "source": "buyer",
+            "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
+            "sendSignals": [
+    { "name": "str" },
+    { "name": "cmp" },
+    { "name": "err" }
+    ],
+            "executor": {
+                "supplierType": "zhixu",
+                "zhixuExecutorConfig": {
+                    "target": { "zhixu": UNKNOWN_TARGET },
+                    "interface": "payment_service",
+                    "order": { "mode": "new" },
+                    "inputMap": { "START": "execute" },
+                    "signalMap": { "str": "started", "cmp": "completed" }
+                }
             }
-        }
-    });
+        });
     parent["spec"]["taskPatterns"][1]["stages"]
         .as_array_mut()
         .unwrap()
@@ -345,7 +368,7 @@ fn compiles_linked_parent_with_dock_route() {
     let manifest = manifest_for(&target);
     let plan =
         compile_zhixu_hook_plan(&parent, Some(&manifest), false).expect("linked parent compiles");
-    assert_eq!(plan["schemaVersion"], "uvp.hookPlan.v2");
+    assert_eq!(plan["schemaVersion"], "uvp.hookPlan.v3");
     assert_eq!(plan["zhixuName"], json!("settlement"));
 
     // hooks：无 signalMap 伪 hook；flags 拆分。
@@ -640,8 +663,7 @@ fn signal_map_keys_match_expanded_full_signal_names() {
     // ① signalMap 裸名 key 引用 canonical 自指声明：key "str" 展开后与
     // settlement.execute_payment.str 同一全名，链接照常。
     let mut parent = parent_settlement_definition(TARGET_NAME);
-    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] =
-        json!(["cmp", "err", "cxl", "settlement.execute_payment.str"]);
+    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] = json!([{ "name": "cmp" }, { "name": "err" }, { "name": "cxl" }, { "name": "settlement.execute_payment.str" }]);
     let plan = compile_zhixu_hook_plan(&parent, Some(&manifest), false).expect(
         "canonical self-reference declaration must be deliverable via a bare signalMap key",
     );
@@ -657,7 +679,8 @@ fn signal_map_keys_match_expanded_full_signal_names() {
     // ② 展开后仍无主的 key：sendSignals 里的裸名 cmp 不展开成
     // settlement.execute_payment.str，D006 悬空引用照拒。
     let mut parent = parent_settlement_definition(TARGET_NAME);
-    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] = json!(["cmp", "err", "cxl"]);
+    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] =
+        json!([{ "name": "cmp" }, { "name": "err" }, { "name": "cxl" }]);
     let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
         .expect_err("dangling signalMap key must fail");
     let message = error.to_string();
@@ -741,30 +764,36 @@ fn manifest_name_is_the_resolution_key() {
 fn delegation_subscription_definition(with_anchor: bool) -> Value {
     let mut stages = vec![
         json!({
-            "name": "fanin",
-            "source": "anchoredcls",
-            "receiveSignals": { "SUB": "::ANCHOR(@other::anchor_task.emit.cmp)" },
-            "sendSignals": ["str", "cmp"],
-            "executor": {
-                "supplierType": "zhixu",
-                "zhixuExecutorConfig": {
-                    "target": { "zhixu": UNKNOWN_TARGET },
-                    "interface": "payment_service",
-                    "order": { "mode": "new" },
-                    "inputMap": { "SUB": "execute" },
-                    "signalMap": { "str": "started", "cmp": "completed" }
-                }
-            }
-        }),
+                    "name": "fanin",
+                    "source": "anchoredcls",
+                    "receiveSignals": { "SUB": "::ANCHOR(@other::anchor_task.emit.cmp)" },
+                    "sendSignals": [
+        { "name": "str" },
+        { "name": "cmp" }
+        ],
+                    "executor": {
+                        "supplierType": "zhixu",
+                        "zhixuExecutorConfig": {
+                            "target": { "zhixu": UNKNOWN_TARGET },
+                            "interface": "payment_service",
+                            "order": { "mode": "new" },
+                            "inputMap": { "SUB": "execute" },
+                            "signalMap": { "str": "started", "cmp": "completed" }
+                        }
+                    }
+                }),
         // 订阅目标 source 类必须在本域声明（引用存在性校验）。
         json!({
-            "name": "emit",
-            "source": "other",
-            // 自发种子入口钩子，避免零 hook 阶段被物化门拒绝。
-            "receiveSignals": { "PUBLISH": "other::anchor_task.emit.seed" },
-            "sendSignals": ["cmp", "seed"],
-            "executor": { "supplierType": "organization", "supplierID": "other-org" }
-        }),
+                    "name": "emit",
+                    "source": "other",
+                    // 自发种子入口钩子，避免零 hook 阶段被物化门拒绝。
+                    "receiveSignals": { "PUBLISH": "other::anchor_task.emit.seed" },
+                    "sendSignals": [
+        { "name": "cmp" },
+        { "name": "seed" }
+        ],
+                    "executor": { "supplierType": "organization", "supplierID": "other-org" }
+                }),
     ];
     if with_anchor {
         stages.push(json!({
@@ -772,7 +801,7 @@ fn delegation_subscription_definition(with_anchor: bool) -> Value {
             "source": "anchoredcls",
             "mint": "per-fact",
             "receiveSignals": { "SPAWN": "::ANCHOR(@other::anchor_task.emit.cmp)" },
-            "sendSignals": ["str"],
+            "sendSignals": [{ "name": "str" }],
             "executor": { "supplierType": "organization", "supplierID": "anchor-org" }
         }));
     }
@@ -1201,7 +1230,7 @@ fn manifest_present_null_target_route_stays_unresolved() {
             "name": "static_dock",
             "source": "buyer",
             "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
-            "sendSignals": ["str"],
+            "sendSignals": [{ "name": "str" }],
             "executor": {
                 "supplierType": "zhixu",
                 "zhixuExecutorConfig": {
@@ -1288,12 +1317,12 @@ fn unresolved_routes_enforce_d016_binding_caps() {
                         "name": "work",
                         "source": "buyer",
                         "receiveSignals": { "START": "buyer::main.work.seed" },
-                        "sendSignals": ["seed"],
+                        "sendSignals": [{ "name": "seed" }],
                         "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                     },
                     { "name": "dock", "source": "buyer",
                       "receiveSignals": receive_signals,
-                      "sendSignals": ["out"],
+                      "sendSignals": [{ "name": "out" }],
                       "executor": {
                         "supplierType": "zhixu",
                         "zhixuExecutorConfig": {
@@ -1704,7 +1733,7 @@ fn cloud_artifact_uses_resolved_routes() {
         false,
     )
     .expect("cloud artifact compiles with manifest");
-    assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v2");
+    assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v3");
     let hooks = artifact["hooks"].as_array().unwrap();
     assert!(hooks
         .iter()
@@ -1776,7 +1805,7 @@ fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
     empty["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!(""));
+        .push(json!({ "name": "" }));
     for target in ["hook_plan", "cloud"] {
         let error = (if target == "hook_plan" {
             compile_zhixu_hook_plan(&empty, None, true)
@@ -1784,17 +1813,14 @@ fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
             compile_cloud_artifact(&empty, None, true)
         })
         .expect_err("empty sendSignal must fail");
-        assert!(
-            error.to_string().contains("cannot contain an empty signal"),
-            "{target}: {error}"
-        );
+        assert!(error.to_string().contains("D026"), "{target}: {error}");
     }
 
     let mut duplicate = target_payment_definition();
     duplicate["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!("str"));
+        .push(json!({ "name": "str" }));
     for target in ["hook_plan", "cloud"] {
         let error = (if target == "hook_plan" {
             compile_zhixu_hook_plan(&duplicate, None, true)
@@ -1831,7 +1857,7 @@ fn send_signal_declarations_use_a_single_exact_surface() {
         definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
             .as_array_mut()
             .unwrap()
-            .push(json!(signal));
+            .push(json!({ "name": signal }));
         let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err(&format!("{label} ({signal:?}) must be rejected"));
         assert!(
@@ -1847,7 +1873,7 @@ fn send_signal_declarations_use_a_single_exact_surface() {
     definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!("Seller::NOTED"));
+        .push(json!({ "name": "Seller::NOTED" }));
     let plan = compile_zhixu_hook_plan(&definition, None, true)
         .expect("identifier-grammar target signal compiles");
     let capability = plan["signalCapabilities"]
@@ -1865,7 +1891,7 @@ fn send_signal_declarations_use_a_single_exact_surface() {
     definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!(" str"));
+        .push(json!({ "name": " str" }));
     let error = compile_zhixu_hook_plan(&definition, None, true)
         .expect_err("whitespace-padded signal must be rejected by the shape gate");
     assert!(
@@ -1885,7 +1911,7 @@ fn canonical_send_signals_are_explicit_self_references() {
     // 校验只比第三段裸名，canonical 声明被判悬空引用。
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
-        json!(["payment_flow.init.str"]);
+        json!([{ "name": "payment_flow.init.str" }]);
     let plan = compile_zhixu_hook_plan(&definition, None, true)
         .expect("canonical self-reference declaration compiles");
     let capability = plan["signalCapabilities"]
@@ -1914,7 +1940,7 @@ fn canonical_send_signals_are_explicit_self_references() {
                 "name": "echo",
                 "source": "payment",
                 "receiveSignals": { "GO": "payment::payment_flow.init.str" },
-                "sendSignals": ["payment_flow.init.str"],
+                "sendSignals": [{ "name": "payment_flow.init.str" }],
                 "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
             }]
         }));
@@ -1939,7 +1965,7 @@ fn canonical_send_signals_are_explicit_self_references() {
     // duplicate（展开后的全名统一比较）。
     let mut both = target_payment_definition();
     both["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
-        json!(["str", "payment_flow.init.str"]);
+        json!([{ "name": "str" }, { "name": "payment_flow.init.str" }]);
     let error = compile_zhixu_hook_plan(&both, None, true)
         .expect_err("bare + canonical self-reference must collide");
     assert!(
@@ -1952,7 +1978,7 @@ fn canonical_send_signals_are_explicit_self_references() {
     // payment::payment_flow.init.str）。
     let mut target = target_payment_definition();
     target["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
-        json!(["payment_flow.init.str"]);
+        json!([{ "name": "payment_flow.init.str" }]);
     compile_zhixu_hook_plan(&target, None, true)
         .expect("D014 resolves canonical declarations by expanded full name");
 }
@@ -2012,7 +2038,7 @@ fn rejects_executor_without_supplier_id_even_when_selected_stages_anchored() {
                         "name": "assign",
                         "source": "buyer",
                         "selectedStages": ["execution.main"],
-                        "sendSignals": ["executor_selected"],
+                        "sendSignals": [{ "name": "executor_selected" }],
                         "executor": { "supplierType": "organization", "supplierID": "selector-org" }
                     }
                 ]},
@@ -2098,7 +2124,7 @@ fn rejects_subscription_stage_bound_only_through_selected_stages() {
                         "name": "assign",
                         "source": "buyer",
                         "selectedStages": ["execution.main"],
-                        "sendSignals": ["executor_selected"],
+                        "sendSignals": [{ "name": "executor_selected" }],
                         "executor": { "supplierType": "organization", "supplierID": "selector-org" }
                     }
                 ]},
@@ -2152,7 +2178,7 @@ fn rejects_receive_hooks_on_stage_without_static_executor() {
                         "name": "assign",
                         "source": "buyer",
                         "selectedStages": ["execution.main"],
-                        "sendSignals": ["executor_selected"],
+                        "sendSignals": [{ "name": "executor_selected" }],
                         "executor": { "supplierType": "organization", "supplierID": "selector-org" }
                     }
                 ]},
@@ -2256,7 +2282,10 @@ fn send_signal_combined_length_counts_canonical_full_name_exactly() {
                         "receiveSignals": {
                             "PUBLISH": format!("parity::t.{stage_name}.seed")
                         },
-                        "sendSignals": signals,
+                        "sendSignals": signals
+                            .iter()
+                            .map(|name| json!({ "name": name }))
+                            .collect::<Vec<_>>(),
                         "executor": {
                             "supplierType": "organization",
                             "supplierID": "parity-executor"
@@ -2529,7 +2558,10 @@ fn mint_stage_value(
         "name": name,
         "source": source,
         "receiveSignals": receive_signals,
-        "sendSignals": send_signals,
+        "sendSignals": send_signals
+            .iter()
+            .map(|name| json!({ "name": name }))
+            .collect::<Vec<_>>(),
         "mint": "per-fact",
         "executor": {
             "supplierType": "organization",
@@ -2546,7 +2578,10 @@ fn emitter_stage_value(task: &str, name: &str, source: &str, send_signals: &[&st
         "name": name,
         "source": source,
         "receiveSignals": { "PUBLISH": format!("{source}::{task}.{name}.seed") },
-        "sendSignals": signals,
+        "sendSignals": signals
+            .iter()
+            .map(|signal| json!({ "name": signal }))
+            .collect::<Vec<_>>(),
         "executor": {
             "supplierType": "organization",
             "supplierID": format!("{task}-{name}-executor")
@@ -2690,7 +2725,7 @@ fn counted_stage_value(name: &str, receive_keys: &[&str]) -> Value {
         "name": name,
         "source": "src",
         "receiveSignals": receive_signals,
-        "sendSignals": ["seed"],
+        "sendSignals": [{ "name": "seed" }],
         "executor": { "supplierType": "organization", "supplierID": "counter" }
     })
 }
@@ -2819,7 +2854,7 @@ fn error_string_is_truncated_at_the_boundary() {
                 "name": format!("s{index:03}"),
                 "source": "bad source",
                 "receiveSignals": { "PUBLISH": "src::count.task.seed" },
-                "sendSignals": ["seed"],
+                "sendSignals": [{ "name": "seed" }],
                 "executor": { "supplierType": "organization", "supplierID": "counter" }
             })
         })
@@ -2836,5 +2871,308 @@ fn error_string_is_truncated_at_the_boundary() {
         message.len() <= crate::MAX_ISSUES_STRING_BYTES + 200,
         "truncated error string must stay bounded: {}",
         message.len()
+    );
+}
+
+// ------------------------------------------------------------------
+// 发射适格面（admissions）：过滤档编译与编译期拒绝面（D026-D031）。
+// ------------------------------------------------------------------
+
+/// settle.cmp 的适格表达式（14d 窗口否决 control.cxl）：三段式寻址、
+/// 衰减否决位在合取直接子项——两档都合法的保守形态。
+const SETTLE_ADMISSION: &str = "payment::payment_flow.init.str & ~(payment_flow.control.cxl +14d)";
+
+#[test]
+fn admissions_compile_into_both_targets() {
+    // 条目镜像 hook 条目形态：hook_plan 携带 normalizedExpression/ast/全量
+    // 依赖（含 timer）；cloud 携带 cloudAst 与 (signalName, dependencyKind)
+    // 两维依赖（timer 不进云侧消费面）。无条件条目不产 admission。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!(SETTLE_ADMISSION);
+    let plan = compile_zhixu_hook_plan(&definition, None, true)
+        .expect("gated sendSignal compiles for hook_plan");
+    let admissions = plan["admissions"].as_array().unwrap();
+    assert_eq!(
+        admissions.len(),
+        1,
+        "only the validWhen-bearing entry admits: {admissions:?}"
+    );
+    let admission = &admissions[0];
+    assert_eq!(admission["stageIdentifier"], json!("payment_flow.settle"));
+    assert_eq!(admission["signalName"], json!("payment_flow.settle.cmp"));
+    assert_eq!(admission["rawExpression"], json!(SETTLE_ADMISSION));
+    assert_eq!(
+        admission["normalizedExpression"],
+        json!("payment::payment_flow.init.str&~(payment_flow.control.cxl+14d)")
+    );
+    assert!(
+        admission["ast"].is_object(),
+        "hook_plan carries the parsed AST"
+    );
+    // 否决位内层是否定延时：负向依赖照出、timer 不出（衰减不为变假调度）。
+    assert_eq!(
+        admissions[0]["dependencies"],
+        json!([
+            { "kind": "negative", "source": "payment", "signalName": "payment_flow.control.cxl" },
+            { "kind": "positive", "source": "payment", "signalName": "payment_flow.init.str" },
+        ]),
+        "hook_plan carries the full dependency form: {admission:?}"
+    );
+
+    let cloud = compile_cloud_artifact(&definition, None, true)
+        .expect("cloud target compiles the same admission");
+    let cloud_admissions = cloud["admissions"].as_array().unwrap();
+    assert_eq!(cloud_admissions.len(), 1);
+    let cloud_admission = &cloud_admissions[0];
+    assert_eq!(
+        cloud_admission["signalName"],
+        json!("payment_flow.settle.cmp")
+    );
+    assert_eq!(
+        cloud_admission["cloudAst"]["schemaVersion"],
+        json!("uvp.cloudAst.v1")
+    );
+    assert_eq!(
+        cloud_admission["dependencies"],
+        json!([
+            { "signalName": "payment_flow.control.cxl", "dependencyKind": "negative" },
+            { "signalName": "payment_flow.init.str", "dependencyKind": "positive" },
+        ]),
+        "cloud dependencies drop the timer dimension: {cloud_admission:?}"
+    );
+}
+
+#[test]
+fn admission_self_reference_is_rejected_in_both_targets() {
+    // pre-state 不含本发：表达式引用本信号自身是自证无效（D028）。
+    // 同名不同 source 类的事实不是本信号——正例对照照常编译。
+    for target in ["hook_plan", "cloud"] {
+        let mut definition = target_payment_definition();
+        definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+            json!("payment::payment_flow.settle.cmp & payment_flow.init.str");
+        let result = if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition, None, true)
+        } else {
+            compile_cloud_artifact(&definition, None, true)
+        };
+        let error = result.expect_err("self-referencing validWhen must fail");
+        assert!(
+            error.to_string().contains(
+                "D028 payment_flow.settle.sendSignals[cmp].validWhen: expression addresses the declaring signal itself (payment::payment_flow.settle.cmp)"
+            ),
+            "{target}: {error}"
+        );
+    }
+
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!("seller::payment_flow.settle.cmp & payment_flow.init.str");
+    compile_zhixu_hook_plan(&definition, None, true)
+        .expect("a same-named fact under another source class is not the declaring signal");
+}
+
+#[test]
+fn admission_on_birth_anchors_is_rejected() {
+    // 出生写入不经适格面，声明即死代码（D029）。四个编译可见面：
+    // trigger-origin 条目 / mint SPAWN 出生目标 / dock new 模式出生锚
+    // 输入端口 / 无锚通道阶段。
+    let mut trigger_origin = target_payment_definition();
+    trigger_origin["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "seller::noted", "validWhen": SETTLE_ADMISSION }));
+    let error = compile_zhixu_hook_plan(&trigger_origin, None, true)
+        .expect_err("validWhen on a trigger-origin entry must fail");
+    assert!(
+        error.to_string().contains(
+            "D029 payment_flow.init.sendSignals[seller::noted].validWhen: `<target>::<signal>` trigger-origin entries are birth anchors"
+        ),
+        "{error}"
+    );
+
+    // mint SPAWN 出生目标：orchard.retail 订阅 payment_flow.init.str，
+    // 该事实同时由 init 声明为 sendSignal——其 validWhen 即死代码。
+    let mut minted = target_payment_definition();
+    minted["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] =
+        json!(SETTLE_ADMISSION);
+    minted["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "buyer",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.init.str)" }),
+                &["ack"],
+            )]
+        }));
+    let error = compile_zhixu_hook_plan(&minted, None, true)
+        .expect_err("validWhen on a mint SPAWN birth target must fail");
+    assert!(
+        error.to_string().contains(
+            "D029 payment_flow.init.sendSignals[str].validWhen: payment_flow.init.str is a birth-anchor signal"
+        ),
+        "{error}"
+    );
+
+    // dock 出生锚输入端口：payment_service[new].inputs.execute 的 atom 是
+    // payment::payment_flow.init.execute（本单信号名），声明该名字的
+    // sendSignals 条目不得携带 validWhen。
+    let mut dock_anchored = target_payment_definition();
+    dock_anchored["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "execute", "validWhen": SETTLE_ADMISSION }));
+    let error = compile_cloud_artifact(&dock_anchored, None, true)
+        .expect_err("validWhen on a dock birth-anchor input must fail");
+    assert!(
+        error.to_string().contains(
+            "D029 payment_flow.init.sendSignals[execute].validWhen: payment_flow.init.execute is a birth-anchor signal"
+        ),
+        "{error}"
+    );
+
+    // 无锚通道阶段：订阅阶段所在 source 类无 mint 声明 → 扇入投递无单
+    // 可判，其信号全部不得声明适格面。
+    let mut channel = target_payment_definition();
+    channel["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "audit",
+            "stages": [{
+                "name": "watch",
+                "source": "auditor",
+                "receiveSignals": { "SPAWN": "::ANCHOR(@payment::payment_flow.init.str)" },
+                "sendSignals": [{ "name": "seen", "validWhen": SETTLE_ADMISSION }],
+                "executor": { "supplierType": "organization", "supplierID": "audit-watcher" }
+            }]
+        }));
+    let error = compile_zhixu_hook_plan(&channel, None, true)
+        .expect_err("validWhen on an anchorless channel stage must fail");
+    assert!(
+        error.to_string().contains(
+            "D029 audit.watch.sendSignals[seen].validWhen: audit.watch is an anchorless channel stage"
+        ),
+        "{error}"
+    );
+
+    // 正例对照：本域 source 类有 mint 声明的订阅阶段按单投递（route=
+    // order），其信号过适格面照常编译。
+    let mut anchored_channel = channel;
+    anchored_channel["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "auditor",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.init.str)" }),
+                &["ack"],
+            )]
+        }));
+    compile_zhixu_hook_plan(&anchored_channel, None, true)
+        .expect("an order-anchored subscription stage may declare admissions");
+}
+
+#[test]
+fn admission_subscription_atom_is_rejected() {
+    // 适格是本单状态判定，订阅原子（ANCHOR）是逐事件投递通道——
+    // 语义面互斥，编译期拒绝（D030）。过滤档解析放行订阅形态，拒绝
+    // 只能落在此处（解析器无定义上下文）。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!("::ANCHOR(@payment::payment_flow.init.str)");
+    for target in ["hook_plan", "cloud"] {
+        let result = if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition, None, true)
+        } else {
+            compile_cloud_artifact(&definition, None, true)
+        };
+        let error = result.expect_err("subscription atoms must not ride the admission face");
+        assert!(
+            error.to_string().contains(
+                "D030 payment_flow.settle.sendSignals[cmp].validWhen: admission is a per-order state judgment and must not contain subscription atoms"
+            ),
+            "{target}: {error}"
+        );
+    }
+}
+
+#[test]
+fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
+    // D026 空 name；D027 空白 validWhen（声明即必填，空白是笔误面）；
+    // D031 重复 capability（裸名与 canonical 自指同键）；未知键由
+    // typed model 的 deny_unknown_fields 在定义解码期响亮拒绝。
+    let mut empty_name = target_payment_definition();
+    empty_name["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "" }));
+    let error = compile_zhixu_hook_plan(&empty_name, None, true)
+        .expect_err("an entry without a name must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("D026 payment_flow.init.sendSignals: name is required"),
+        "{error}"
+    );
+
+    let mut blank = target_payment_definition();
+    blank["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] = json!("   ");
+    let error =
+        compile_cloud_artifact(&blank, None, true).expect_err("a blank validWhen must fail loudly");
+    assert!(
+        error.to_string().contains(
+            "D027 payment_flow.init.sendSignals[str].validWhen: must be a non-blank expression"
+        ),
+        "{error}"
+    );
+
+    let mut duplicate = target_payment_definition();
+    duplicate["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "payment_flow.init.str" }));
+    let error = compile_zhixu_hook_plan(&duplicate, None, true)
+        .expect_err("bare + canonical self-reference must collide on the expanded capability");
+    assert!(
+        error.to_string().contains("D031") && error.to_string().contains("duplicate capability"),
+        "{error}"
+    );
+
+    let mut unknown_key = target_payment_definition();
+    unknown_key["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "str", "validwhen": SETTLE_ADMISSION }));
+    let error = compile_zhixu_hook_plan(&unknown_key, None, true)
+        .expect_err("a misspelled key must fail at decode, not fold to the zero value");
+    assert!(
+        error.to_string().contains("unknown field") && error.to_string().contains("validwhen"),
+        "{error}"
+    );
+}
+
+#[test]
+fn admission_invalid_expression_reports_the_declaring_signal() {
+    // 表达式方言 = 钩子方言本身：解析失败按声明信号上下文上报
+    // （目标信号名作为上下文传入），不是裸 serde 报错。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!("payment::settle.cmp");
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("a two-part signal name inside validWhen must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("payment_flow.settle.sendSignals[cmp].validWhen is invalid")
+            && error.to_string().contains("task.stage.signal"),
+        "{error}"
     );
 }

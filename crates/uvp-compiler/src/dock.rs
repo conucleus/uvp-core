@@ -16,7 +16,7 @@
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use uvp_hook_dsl::{parse_hook, ParseHookRequest, Profile};
+use uvp_hook_dsl::{parse_hook, Gate, ParseHookRequest, Profile};
 use uvp_model::{DockInterfaceSpec, ZhixuStage};
 
 // ---------------------------------------------------------------------------
@@ -771,6 +771,7 @@ pub fn compile_dock_interface(
 
             let parsed = match parse_hook(ParseHookRequest {
                 profile: Profile::EvmStrict,
+                gate: Gate::Hook,
                 hook_name: hook_name.clone(),
                 hook: raw_expression.clone(),
             }) {
@@ -2104,7 +2105,7 @@ mod tests {
             "name": "execute_payment",
             "source": "buyer",
             "receiveSignals": { "EXECUTE": "buyer::task.execute_payment.exec" },
-            "sendSignals": ["str"],
+            "sendSignals": [{ "name": "str" }],
             "executor": {
                 "supplierType": "organization",
                 "supplierID": "payment-gateway",
@@ -2134,7 +2135,7 @@ mod tests {
             "name": "plain",
             "source": "buyer",
             "receiveSignals": { "RUN": "buyer::task.plain.run" },
-            "sendSignals": ["cmp"],
+            "sendSignals": [{ "name": "cmp" }],
             "executor": { "supplierType": "organization", "supplierID": "org" }
         }))
         .expect("stage decodes");

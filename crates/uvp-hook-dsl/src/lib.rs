@@ -55,6 +55,19 @@ pub enum Profile {
     CloudCompat,
 }
 
+/// 校验档（与 Profile 正交：profile 只影响归一化输出，gate 决定走哪套
+/// 位置/锚点校验）。`hook`（默认）：钩子档——正锚要求 + 否决位仅合取
+/// 直接子项；`filter`：过滤档（发射适格面）——无正锚要求、衰减否决位
+/// 位置全放开（到达一拍求值，任何位置的瞬时值都良定义），保留 duration
+/// 语法/上限、NOT 操作数词表与身份闸。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Gate {
+    #[default]
+    Hook,
+    Filter,
+}
+
 #[derive(Debug, Error)]
 pub enum HookError {
     #[error("{0}")]

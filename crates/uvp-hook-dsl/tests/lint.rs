@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 use uvp_hook_dsl::{
-    lint_hook, lint_hook_json, Expr, Profile, SpannedExpr, MAX_LINT_BOOLEAN_DEPTH,
+    lint_hook, lint_hook_json, Expr, Gate, Profile, SpannedExpr, MAX_LINT_BOOLEAN_DEPTH,
     MAX_LINT_BOOLEAN_OPERANDS,
 };
 
@@ -128,6 +128,7 @@ fn lint_does_not_change_parse_semantics() {
     ] {
         let before = uvp_hook_dsl::parse_hook(uvp_hook_dsl::ParseHookRequest {
             profile: Profile::EvmStrict,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook: hook.to_string(),
         })
@@ -135,6 +136,7 @@ fn lint_does_not_change_parse_semantics() {
         let lint_report = lint_hook(Profile::EvmStrict, "HOOK", hook).expect("hook must lint");
         let after = uvp_hook_dsl::parse_hook(uvp_hook_dsl::ParseHookRequest {
             profile: Profile::EvmStrict,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook: hook.to_string(),
         })

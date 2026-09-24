@@ -85,11 +85,23 @@ pub struct ZhixuStage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_stages: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub send_signals: Vec<String>,
+    pub send_signals: Vec<ZhixuSendSignal>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub receive_signals: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_resources: BTreeMap<String, Value>,
+}
+
+/// sendSignals 条目（发射适格面）：`name` 沿用既有信号声明值空间
+/// （裸名 / canonical 三段式自指 / `<target>::<signal>` trigger-origin）；
+/// `validWhen` 是钩子方言表达式（过滤档），缺省 = 无条件发射。
+/// 键闭集 `{name, validWhen}` 与 Go DisallowUnknownFields / TS 闭集三面同形。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ZhixuSendSignal {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_when: Option<String>,
 }
 
 /// typed executor。

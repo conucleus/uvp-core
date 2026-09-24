@@ -24,7 +24,9 @@
               "name": "main",
               "source": "test_executor",
               "sendSignals": [
-                "smart_contract"
+                {
+                  "name": "smart_contract"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -43,7 +45,9 @@
                 "SPAWN": "::ANCHOR(@test_executor::dispatch.main.smart_contract)"
               },
               "sendSignals": [
-                "ack"
+                {
+                  "name": "ack"
+                }
               ],
               "mint": "per-fact",
               "executor": {

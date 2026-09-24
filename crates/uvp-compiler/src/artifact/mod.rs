@@ -3,8 +3,8 @@
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use uvp_hook_dsl::DependencyKind;
-use uvp_model::ZhixuDefinition;
+use uvp_hook_dsl::{parse_hook, DependencyKind, Gate, HookMode, ParseHookRequest, Profile};
+use uvp_model::{ZhixuDefinition, ZhixuSendSignal};
 
 use crate::docking::{compile_dock_state, dock_entrance_hook_ids};
 use crate::lower::{
@@ -12,7 +12,7 @@ use crate::lower::{
     normalize_platform_value, parse_hook_for_cloud, value_str, StageEntry,
 };
 use crate::validate::{
-    valid_identifier_part, valid_signal_declaration, validate_mint_anchors,
+    stage_is_subscription, valid_identifier_part, valid_signal_declaration, validate_mint_anchors,
     validate_onchain_stage_materialization, validate_receive_signal_keys,
     validate_receive_signal_references, validate_stage_executors, validate_subscription_delegation,
     validate_zhixu_shape,
@@ -22,10 +22,12 @@ use crate::{join_issues_bounded, CompilerError, Result};
 /// HookPlan 产物信封版本（TS 权威 uvp-protocol compiler types 的
 /// HOOK_PLAN_SCHEMA_VERSION 镜像）。pub 供 uvp-node NAPI 导出
 /// hookPlanSchemaVersion：TS 侧兼容门逐字比对两侧常量，防漂移。
-pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v2";
+/// v3：产物新增顶层 `admissions`（发射适格面）数组。
+pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v3";
 /// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
 /// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
-pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v2";
+/// v3：产物新增顶层 `admissions`（发射适格面）数组。
+pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v3";
 // 能力表无规模上限（Merkle 化）：链上不逐条注册 signalCapabilities，
 // 由链下 TS 编译器建树以 capabilitiesRoot 承诺；Rust 按架构契约保持
 // 中性语义权威、不产哈希、不建树，仅保留逐条语义校验（空串/重复/
@@ -105,6 +107,7 @@ pub fn compile_zhixu_hook_plan(
     }
     let dependency_index = build_dependency_index(&compiled_hooks);
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
+    let admissions = build_signal_admissions(&stage_entries, &dock_state, Profile::EvmStrict)?;
     let executor_routes = build_executor_routes(&stage_entries);
 
     let mut artifact = json!({
@@ -117,6 +120,7 @@ pub fn compile_zhixu_hook_plan(
         "dockRoutes": Value::Array(dock_state.routes_json),
         "selectedStageBindings": selected_stage_bindings,
         "signalCapabilities": signal_capabilities,
+        "admissions": admissions,
     });
     if let Some(interface_json) = dock_state.interface_json {
         artifact["dockInterface"] = interface_json;
@@ -181,6 +185,9 @@ pub fn compile_cloud_artifact(
     // sendSignals capability 同口径（空串/重复在两个 target 一致拒绝）：
     // cloud 产物供 Go 主链路消费，不得放行 hook_plan 已拒绝的声明。
     build_signal_capabilities(&stage_entries)?;
+    // 适格面同口径：admissions 的编译期拒绝（自引用/出生锚/订阅原子）
+    // 在两个 target 一致生效。
+    let admissions = build_signal_admissions(&stage_entries, &dock_state, Profile::CloudCompat)?;
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(join_issues_bounded(
             &validation_issues,
@@ -211,6 +218,7 @@ pub fn compile_cloud_artifact(
         "hooks": hooks,
         "orderStageDefaults": stages,
         "dockRoutes": Value::Array(dock_state.routes_json),
+        "admissions": admissions,
     });
     if let Some(interface_json) = dock_state.interface_json {
         artifact["dockInterface"] = interface_json;
@@ -282,7 +290,7 @@ fn cloud_hook_artifact(
         );
     }
     // dependencies 此处只投 signalName/dependencyKind 两维：Go 主链路按
-    // (signalName, kind) 消费该结构（uvp.cloudArtifact.v2 冻结面），source
+    // (signalName, kind) 消费该结构（uvp.cloudArtifact.v3 冻结面），source
     // 维度不在其中——依赖的真实 source 由 astJson 恢复（普通 hook = 产物
     // sourceZhixuRef/self，ANCHOR 订阅 = subscriptionTarget.source 或 root
     // 订阅节点）。补 source 需改产物 schema 并同步 Go 消费方，属两轨变更，
@@ -352,8 +360,8 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
             );
             if !seen.insert(key) {
                 return Err(CompilerError::Issues(format!(
-                    "{}.sendSignals contains duplicate capability {}",
-                    entry.stage_identifier, declared_signal
+                    "D031 {}.sendSignals contains duplicate capability {}",
+                    entry.stage_identifier, declared_signal.name
                 )));
             }
             if value_str(&capability, "targetOrderRelation") == "current" {
@@ -393,13 +401,14 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
 /// 不 trim（文法"map 键值不 trim"同口径）。capability 侧若做 trim 归一，
 /// 产物会出现两种值——引用侧按存储值精确匹配必然失配（死能力），且
 /// "str" 与 " str" 会撞 duplicate 误判。空白/非法字符在此响亮拒绝。
-fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<Value> {
-    if declared_signal.is_empty() {
+fn parse_signal_capability(entry: &StageEntry, declared_signal: &ZhixuSendSignal) -> Result<Value> {
+    if declared_signal.name.is_empty() {
         return Err(CompilerError::Issues(format!(
-            "{}.sendSignals cannot contain an empty signal",
+            "D026 {}.sendSignals: name is required and must be non-empty",
             entry.stage_identifier
         )));
     }
+    let declared_signal = declared_signal.name.as_str();
     if let Some((target_source, target_signal_name)) = declared_signal.split_once("::") {
         // `<target>::<signal>` 跨源触发形态：目标半段是 source 类，与信号
         // 半段（裸名或 task.stage.signal）共用信号名同款标识符文法——
@@ -454,4 +463,170 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &str) -> Result<
         "targetSignalName": target_signal_name,
         "targetOrderRelation": "current",
     }))
+}
+
+/// 发射适格面（admissions）编译：逐条解析 sendSignals 条目的 validWhen
+/// （过滤档），产出两个 target 共用的条目集。编译期三条拒绝（D028 自引用/
+/// D029 出生锚/D030 订阅原子）与 D027 空白表达式在此收口；缺省 validWhen
+/// 的条目完全绕过适格面（行为与无条件发射等价），不产出条目。
+fn build_signal_admissions(
+    entries: &[StageEntry],
+    dock_state: &crate::docking::DockState,
+    profile: Profile,
+) -> Result<Vec<Value>> {
+    let minted_sources: BTreeSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.stage.mint.is_some())
+        .map(|entry| entry.stage.source.as_str())
+        .collect();
+    let birth_anchors = collect_birth_anchor_signals(entries, &dock_state.entrance_fact_keys);
+    let mut admissions = Vec::new();
+    for entry in entries {
+        // 无锚通道阶段（本域 source 类无 mint 声明的订阅阶段）：扇入投递
+        // 落通道维度（order_id=''），适格是按单状态判定——无单可判。
+        let anchorless_channel = stage_is_subscription(&entry.stage)
+            && !minted_sources.contains(entry.stage.source.as_str());
+        for declared in &entry.stage.send_signals {
+            let Some(valid_when) = &declared.valid_when else {
+                continue;
+            };
+            // 适格表达式是确定性必填面：声明了键却留空白是笔误形态，
+            // 静默按无条件放行会把"想设闸没设成"伪装成"没想设闸"。
+            if valid_when.trim().is_empty() {
+                return Err(CompilerError::Issues(format!(
+                    "D027 {}.sendSignals[{}].validWhen: must be a non-blank expression; drop the key to declare unconditional admission",
+                    entry.stage_identifier, declared.name
+                )));
+            }
+            if declared.name.contains("::") {
+                return Err(CompilerError::Issues(format!(
+                    "D029 {}.sendSignals[{}].validWhen: `<target>::<signal>` trigger-origin entries are birth anchors (birth writes bypass the admission face; a validWhen here is dead code)",
+                    entry.stage_identifier, declared.name
+                )));
+            }
+            if anchorless_channel {
+                return Err(CompilerError::Issues(format!(
+                    "D029 {}.sendSignals[{}].validWhen: {} is an anchorless channel stage (fan-in subscription delivery has no order to judge; the admission face is a per-order state judgment)",
+                    entry.stage_identifier, declared.name, entry.stage_identifier
+                )));
+            }
+            let full_name = if declared.name.contains('.') {
+                declared.name.clone()
+            } else {
+                format!("{}.{}", entry.stage_identifier, declared.name)
+            };
+            if birth_anchors.contains(&full_name) {
+                return Err(CompilerError::Issues(format!(
+                    "D029 {}.sendSignals[{}].validWhen: {} is a birth-anchor signal (mint SPAWN birth target or dock order.mode=new birth-anchor input; birth writes bypass the admission face, a validWhen here is dead code)",
+                    entry.stage_identifier, declared.name, full_name
+                )));
+            }
+            let parsed = parse_hook(ParseHookRequest {
+                profile,
+                gate: Gate::Filter,
+                // 适格面没有 hook 通道名：ADMIT 只是过名字闸的占位
+                // （产物不携带 hookName，normalizedExpression 与之无关）。
+                hook_name: "ADMIT".to_string(),
+                hook: valid_when.clone(),
+            })
+            .map_err(|err| {
+                CompilerError::Issues(format!(
+                    "{}.sendSignals[{}].validWhen is invalid: {err}",
+                    entry.stage_identifier, declared.name
+                ))
+            })?;
+            if parsed.mode == HookMode::Subscription {
+                return Err(CompilerError::Issues(format!(
+                    "D030 {}.sendSignals[{}].validWhen: admission is a per-order state judgment and must not contain subscription atoms (ANCHOR(@…))",
+                    entry.stage_identifier, declared.name
+                )));
+            }
+            // 自引用：求值吃 pre-state（不含本发），引用本信号自身是
+            // 自证无效——事实键维度上该原子永不可满足（或恒绕过）。
+            if parsed.source == entry.stage.source
+                && parsed
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.signal_name == full_name)
+            {
+                return Err(CompilerError::Issues(format!(
+                    "D028 {}.sendSignals[{}].validWhen: expression addresses the declaring signal itself ({}::{}); admission judges the pre-state, which never contains the emission being judged",
+                    entry.stage_identifier, declared.name, entry.stage.source, full_name
+                )));
+            }
+            let mut admission = Map::new();
+            admission.insert(
+                "stageIdentifier".to_string(),
+                Value::String(entry.stage_identifier.clone()),
+            );
+            admission.insert("signalName".to_string(), Value::String(full_name));
+            admission.insert(
+                "rawExpression".to_string(),
+                Value::String(valid_when.clone()),
+            );
+            if profile == Profile::CloudCompat {
+                // 云侧依赖与 hook 条目同源：只投 signalName/dependencyKind
+                // 两维（timer 是调度维度，不进云侧消费面）。
+                let dependencies: Vec<Value> = parsed
+                    .dependencies
+                    .iter()
+                    .filter(|dependency| dependency.kind != DependencyKind::Timer)
+                    .map(|dependency| {
+                        json!({
+                            "signalName": dependency.signal_name,
+                            "dependencyKind": dependency.kind,
+                        })
+                    })
+                    .collect();
+                admission.insert("cloudAst".to_string(), parsed.cloud_ast.clone());
+                admission.insert("dependencies".to_string(), Value::Array(dependencies));
+            } else {
+                admission.insert(
+                    "normalizedExpression".to_string(),
+                    Value::String(parsed.normalized_expression.clone()),
+                );
+                admission.insert("ast".to_string(), parsed.ast.clone());
+                admission.insert(
+                    "dependencies".to_string(),
+                    serde_json::to_value(&parsed.dependencies)
+                        .map_err(|err| CompilerError::Message(err.to_string()))?,
+                );
+            }
+            admissions.push(Value::Object(admission));
+        }
+    }
+    admissions.sort_by(|left, right| {
+        value_str(left, "stageIdentifier")
+            .cmp(value_str(right, "stageIdentifier"))
+            .then(value_str(left, "signalName").cmp(value_str(right, "signalName")))
+    });
+    Ok(admissions)
+}
+
+/// 出生锚信号集（编译可见）：mint 阶段 ANCHOR 订阅的 SPAWN 出生目标
+/// （task.stage.signal 全名）∪ dockInterface entrance 端口（orderModes 含
+/// new）交付的出生锚 atom 信号。全名在 plan 内钉死唯一属主（stage 标识符
+/// 唯一），source 维度不另比——同全名不同 source 的声明在摊平命名空间里
+/// 不可能存在。
+fn collect_birth_anchor_signals(
+    entries: &[StageEntry],
+    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
+) -> BTreeSet<String> {
+    let mut birth: BTreeSet<String> = BTreeSet::new();
+    for entry in entries {
+        if entry.stage.mint.is_none() {
+            continue;
+        }
+        for raw_expression in entry.stage.receive_signals.values() {
+            // 解析失败的条目不构成出生目标：语法错误由引用存在性校验统一上报。
+            let Ok(parsed) = crate::lower::parse_hook_for_compiler("HOOK", raw_expression) else {
+                continue;
+            };
+            if let Some(target) = &parsed.subscription_target {
+                birth.insert(target.signal_name.clone());
+            }
+        }
+    }
+    birth.extend(entrance_fact_keys.keys().map(|(_, signal)| signal.clone()));
+    birth
 }

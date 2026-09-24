@@ -167,27 +167,30 @@ fn assert_violate(outcome: (bool, String), anchor: &str, rule: &str) {
 /// 钩子可挂（物化门），基底自身就得是合法形态。
 fn base_definition() -> Value {
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": {
-            "name": "constraints_probe"
-        },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "constraints-core" },
-            "taskPatterns": [
-                { "name": "main", "stages": [
-                    {
-                        "name": "work",
-                        "source": "buyer",
-                        "receiveSignals": { "START": "buyer::main.work.cmp" },
-                        "sendSignals": ["str", "cmp"],
-                        "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
-                    }
-                ]}
-            ]
-        }
-    })
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "constraints_probe"
+            },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "constraints-core" },
+                "taskPatterns": [
+                    { "name": "main", "stages": [
+                        {
+                            "name": "work",
+                            "source": "buyer",
+                            "receiveSignals": { "START": "buyer::main.work.cmp" },
+                            "sendSignals": [
+    { "name": "str" },
+    { "name": "cmp" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                        }
+                    ]}
+                ]
+            }
+        })
 }
 
 fn stage_mut(definition: &mut Value) -> &mut Value {
@@ -200,39 +203,43 @@ fn stage_mut(definition: &mut Value) -> &mut Value {
 /// production_service 只允许 new（建单型服务）。
 fn target_interface_definition() -> Value {
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "constraints_target" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "target-core" },
-            "dockInterface": {
-                "production_service": {
-                    "orderModes": ["new"],
-                    "inputs": {
-                        "execute": { "hook": "main.work#DOCK_ENTER" }
-                    },
-                    "outputs": {
-                        "done": { "signal": "buyer::main.work.cmp" }
-                    }
-                }
-            },
-            "taskPatterns": [
-                { "name": "main", "stages": [
-                    {
-                        "name": "work",
-                        "source": "buyer",
-                        "receiveSignals": {
-                            "DOCK_ENTER": "buyer::main.work.enter",
-                            "SELF": "buyer::main.work.seed"
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "constraints_target" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "target-core" },
+                "dockInterface": {
+                    "production_service": {
+                        "orderModes": ["new"],
+                        "inputs": {
+                            "execute": { "hook": "main.work#DOCK_ENTER" }
                         },
-                        "sendSignals": ["str", "cmp", "seed"],
-                        "executor": { "supplierType": "organization", "supplierID": "target-org" }
+                        "outputs": {
+                            "done": { "signal": "buyer::main.work.cmp" }
+                        }
                     }
-                ]}
-            ]
-        }
-    })
+                },
+                "taskPatterns": [
+                    { "name": "main", "stages": [
+                        {
+                            "name": "work",
+                            "source": "buyer",
+                            "receiveSignals": {
+                                "DOCK_ENTER": "buyer::main.work.enter",
+                                "SELF": "buyer::main.work.seed"
+                            },
+                            "sendSignals": [
+    { "name": "str" },
+    { "name": "cmp" },
+    { "name": "seed" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "target-org" }
+                        }
+                    ]}
+                ]
+            }
+        })
 }
 
 fn target_interface_name() -> &'static str {
@@ -267,7 +274,7 @@ fn dock_definition_with(mode: &str) -> Value {
     let mut definition = base_definition();
     let stage = stage_mut(&mut definition);
     stage["receiveSignals"] = json!({ "START": "buyer::main.work.cmp" });
-    stage["sendSignals"] = json!(["str", "cmp"]);
+    stage["sendSignals"] = json!([{ "name": "str" }, { "name": "cmp" }]);
     stage["executor"] = json!({
         "supplierType": "zhixu",
         "zhixuExecutorConfig": {
@@ -523,7 +530,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 let canonical = probe_compile({
                     let mut d = base_definition();
                     stage_mut(&mut d)["sendSignals"] =
-                        json!(["cmp", "main.work.".to_string() + &"s".repeat(90)]);
+                        json!([{ "name": "cmp" }, { "name": "main.work.".to_string() + &"s".repeat(90) }]);
                     d
                 });
                 assert_satisfy(canonical, "send-signal-combined-max-length(canonical)");
@@ -535,7 +542,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 let canonical_over = probe_compile({
                     let mut d = base_definition();
                     stage_mut(&mut d)["sendSignals"] =
-                        json!(["cmp", "main.work.".to_string() + &"s".repeat(91)]);
+                        json!([{ "name": "cmp" }, { "name": "main.work.".to_string() + &"s".repeat(91) }]);
                     d
                 });
                 assert_violate(
@@ -547,7 +554,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                     let mut d = base_definition();
                     let stage = stage_mut(&mut d);
                     stage["name"] = json!(oversize_ascii(98, b's'));
-                    stage["sendSignals"] = json!(["s12345"]);
+                    stage["sendSignals"] = json!([{ "name": "s12345" }]);
                     d
                 })
             },
@@ -926,46 +933,52 @@ fn mint_union_definition(same_birth_fact: bool) -> Value {
         "::ANCHOR(@distributor::depot.ship.manifest)".to_string()
     };
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "mint_union_probe" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "probe-core" },
-            "taskPatterns": [
-                { "name": "dispatch", "stages": [{
-                    "name": "main",
-                    "source": "producer",
-                    "receiveSignals": { "PUBLISH": "producer::dispatch.main.seed" },
-                    "sendSignals": ["smart_contract", "seed"],
-                    "executor": { "supplierType": "organization", "supplierID": "dispatch-main" }
-                }]},
-                { "name": "depot", "stages": [{
-                    "name": "ship",
-                    "source": "distributor",
-                    "receiveSignals": { "PUBLISH": "distributor::depot.ship.seed" },
-                    "sendSignals": ["manifest", "seed"],
-                    "executor": { "supplierType": "organization", "supplierID": "depot-ship" }
-                }]},
-                { "name": "orchard", "stages": [{
-                    "name": "retail",
-                    "source": "buyer",
-                    "receiveSignals": { "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" },
-                    "sendSignals": ["ack"],
-                    "mint": "per-fact",
-                    "executor": { "supplierType": "organization", "supplierID": "orchard-retail" }
-                }]},
-                { "name": "cellar", "stages": [{
-                    "name": "store",
-                    "source": "cellar",
-                    "receiveSignals": { "SPAWN": cellar_birth },
-                    "sendSignals": ["shelve"],
-                    "mint": "per-fact",
-                    "executor": { "supplierType": "organization", "supplierID": "cellar-store" }
-                }]},
-            ]
-        }
-    })
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "mint_union_probe" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "probe-core" },
+                "taskPatterns": [
+                    { "name": "dispatch", "stages": [{
+                        "name": "main",
+                        "source": "producer",
+                        "receiveSignals": { "PUBLISH": "producer::dispatch.main.seed" },
+                        "sendSignals": [
+    { "name": "smart_contract" },
+    { "name": "seed" }
+    ],
+                        "executor": { "supplierType": "organization", "supplierID": "dispatch-main" }
+                    }]},
+                    { "name": "depot", "stages": [{
+                        "name": "ship",
+                        "source": "distributor",
+                        "receiveSignals": { "PUBLISH": "distributor::depot.ship.seed" },
+                        "sendSignals": [
+    { "name": "manifest" },
+    { "name": "seed" }
+    ],
+                        "executor": { "supplierType": "organization", "supplierID": "depot-ship" }
+                    }]},
+                    { "name": "orchard", "stages": [{
+                        "name": "retail",
+                        "source": "buyer",
+                        "receiveSignals": { "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" },
+                        "sendSignals": [{ "name": "ack" }],
+                        "mint": "per-fact",
+                        "executor": { "supplierType": "organization", "supplierID": "orchard-retail" }
+                    }]},
+                    { "name": "cellar", "stages": [{
+                        "name": "store",
+                        "source": "cellar",
+                        "receiveSignals": { "SPAWN": cellar_birth },
+                        "sendSignals": [{ "name": "shelve" }],
+                        "mint": "per-fact",
+                        "executor": { "supplierType": "organization", "supplierID": "cellar-store" }
+                    }]},
+                ]
+            }
+        })
 }
 
 /// 计数闸探针基底：机械生成的合法形态定义——`tasks` 个 task、每 task
@@ -988,7 +1001,7 @@ fn mechanical_definition(tasks: usize, stages: usize, hooks: usize) -> Value {
                     format!("H{hook_index}"),
                     Value::String(format!("buyer::{task}.{stage}.{signal}")),
                 );
-                send_signals.push(Value::String((*signal).to_string()));
+                send_signals.push(json!({ "name": signal }));
             }
             stage_values.push(json!({
                 "name": stage,

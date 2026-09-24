@@ -100,6 +100,43 @@ pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
     Ok(())
 }
 
+/// 过滤档（发射适格面）校验：与钩子档并立、互不污染（不触碰
+/// validate_anchors）。过滤只在信号到达的一拍对已提交事实集求值、不参与
+/// 任何调度，因此任何位置的瞬时值都良定义——无正锚要求、衰减否决位
+/// `~(A+duration)` 位置全放开（根/Or/Not/延时操作数内均合法）。保留的
+/// 闸只剩结构性词表：NOT 操作数仅裸 Signal 或 Delay 结果，duration 恒正
+/// （字面量语法与 30d 上限由解析器/解码层共用闸把守）。
+pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
+    match expr {
+        Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
+        Expr::Not(inner) => match inner.as_ref() {
+            Expr::Signal(_) => Ok(()),
+            // 衰减否决位：位置在此不设闸（一拍求值下任何位置良定义），
+            // 时长正性仍按 Delay 分支复核。
+            Expr::Delay { .. } => validate_filter_hook(inner),
+            _ => Err(HookError::Message(
+                "negation only supports direct signal references".to_string(),
+            )),
+        },
+        Expr::Delay {
+            expr,
+            duration_seconds,
+            ..
+        } => {
+            if *duration_seconds <= 0 {
+                return Err(HookError::Message("delay must be positive".to_string()));
+            }
+            validate_filter_hook(expr)
+        }
+        Expr::And(terms) | Expr::Or(terms) => {
+            for term in terms {
+                validate_filter_hook(term)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// `veto_slot`：当前节点是否是某个 And 的直接子项——这是衰减否决位
 /// `~(A + duration)` 的合法位置。`inside_delay_operand`：当前子树是否
 /// 位于某个 Delay 的操作数内——否决位的 Ready 会衰减，而 Delay 的成熟

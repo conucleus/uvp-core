@@ -497,6 +497,82 @@
           }
         ]
       }
+    },
+    {
+      "name": "filter gate admits a bare decaying veto at the root",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "~(task.cancel.cmp+14d)",
+        "normalizedExpression": "buyer::~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "filter gate admits a decaying veto under an OR branch",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.ship.cmp | ~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.ship.cmp|~(task.cancel.cmp+14d)",
+        "normalizedExpression": "buyer::task.ship.cmp|~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "filter gate admits a decaying veto inside a delay operand",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::(task.ship.cmp & ~(task.cancel.cmp +14d)) +5s",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "(task.ship.cmp&~(task.cancel.cmp+14d))+5s",
+        "normalizedExpression": "buyer::(task.ship.cmp&~(task.cancel.cmp+14d))+5s",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "task.ship.cmp",
+            "delaySeconds": 5
+          }
+        ]
+      }
     }
   ],
   "evalCases": [
@@ -1208,6 +1284,94 @@
         "state": "wait",
         "readyAt": "2026-04-27T00:00:05.000Z"
       }
+    },
+    {
+      "name": "filter admission passes while the vetoed approval is absent",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.locked",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:02.000Z",
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "filter admission rejects while the positive anchor is missing",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.approved",
+          "receivedAt": "2026-04-27T00:00:08.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more",
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "filter admission passes one second before the window closes",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:04.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.locked",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.execute.approved",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:02.000Z",
+        "expiresAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "filter admission rejects exactly at the window boundary",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:05.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.locked",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.execute.approved",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "negated condition exists: task.execute.approved+5s"
+      }
     }
   ],
   "invalidCases": [
@@ -1399,6 +1563,22 @@
       "hookName": "BAD#KEY",
       "hook": "buyer::task.main.cmp",
       "messageContains": "must not contain '.' or '#'"
+    },
+    {
+      "name": "filter gate keeps the composite negation vocabulary",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~(task.a.cmp & task.b.cmp)",
+      "messageContains": "negation only supports direct signal references"
+    },
+    {
+      "name": "filter gate keeps the 30d delay cap",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~(task.a.cmp +31d)",
+      "messageContains": "exceeds the maximum allowed delay"
     }
   ],
   "replayCases": [
@@ -4096,6 +4276,109 @@
             "0x0000000000000000000000000000000000000000000000000000000000000b35": "ready"
           }
         }
+      }
+    },
+    {
+      "name": "admission-declared plan registers and replays without replay-side filtering",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x01",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+            "zhixuId": "corpus-replay-admission",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b06",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c06",
+                "stageIdentifier": "task.execute",
+                "hookName": "OBSERVE",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06"
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f06": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b06"
+              ]
+            },
+            "admissions": [
+              {
+                "admissionId": "0x0000000000000000000000000000000000000000000000000000000000000a61",
+                "stageIdentifier": "task.execute",
+                "signalName": "launch",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f07"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 1209600
+                  },
+                  {
+                    "op": "NOT"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x02",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+          "zhixuId": "corpus-replay-admission",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+          "zhixuId": "corpus-replay-admission",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+          "senderId": "executor",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+          "zhixuId": "corpus-replay-admission",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b06",
+          "stageIdentifier": "task.execute",
+          "hookName": "OBSERVE"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a06::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+        "senderId": "executor",
+        "eventId": "3:0:0x03",
+        "observedCount": 1,
+        "mismatchCount": 0
       }
     }
   ]

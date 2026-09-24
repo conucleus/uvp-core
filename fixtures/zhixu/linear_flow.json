@@ -27,8 +27,12 @@
                 "BEGIN": "buyer::flow.start.seed"
               },
               "sendSignals": [
-                "seed",
-                "step_done"
+                {
+                  "name": "seed"
+                },
+                {
+                  "name": "step_done"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -42,7 +46,9 @@
                 "FINISH": "buyer::flow.start.step_done"
               },
               "sendSignals": [
-                "cmp"
+                {
+                  "name": "cmp"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

@@ -27,8 +27,12 @@
                 "PUBLISH": "seller::supply.listing.seed"
               },
               "sendSignals": [
-                "listing_ready",
-                "seed"
+                {
+                  "name": "listing_ready"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -47,7 +51,9 @@
                 "WATCH": "seller::supply.listing.listing_ready"
               },
               "sendSignals": [
-                "ack"
+                {
+                  "name": "ack"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

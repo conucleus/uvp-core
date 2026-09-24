@@ -6,13 +6,15 @@ use serde_json::Value;
 
 use crate::ast::{
     cloud_ast_for, compatibility_for, hook_mode, hook_to_value, is_plain_identifier,
-    is_strict_signal_ref, normalize_condition, runtime_condition, validate_hook,
-    validate_subscription_position, Compatibility, Expr, HookExpr, HookMode, NormalizeStyle,
-    SubscriptionTarget,
+    is_strict_signal_ref, normalize_condition, runtime_condition, validate_filter_hook,
+    validate_hook, validate_subscription_position, Compatibility, Expr, HookExpr, HookMode,
+    NormalizeStyle, SubscriptionTarget,
 };
 use crate::dependency::{extract_dependencies, Dependency};
 use crate::lint::Span;
-use crate::{HookError, Profile, Result, CORE_VERSION, RETIRED_KEYWORDS_HINT, SEMANTIC_VERSION};
+use crate::{
+    Gate, HookError, Profile, Result, CORE_VERSION, RETIRED_KEYWORDS_HINT, SEMANTIC_VERSION,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +44,10 @@ pub struct ParseHookOutput {
 pub struct ParseHookRequest {
     #[serde(default)]
     pub profile: Profile,
+    /// 校验档（默认 hook）：既有调用方不携带该字段时语义不变（与
+    /// profile 字段同先例）。gate=filter 走过滤档校验（发射适格面）。
+    #[serde(default)]
+    pub gate: Gate,
     #[serde(default)]
     pub hook_name: String,
     pub hook: String,
@@ -51,10 +57,13 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     let profile = req.profile;
     let hook_name = req.hook_name;
     validate_hook_name(&hook_name)?;
-    // 解析行为与 profile 无关（profile 只影响归一化/兼容性输出），
-    // 因此 parse_hook_expr 不接收 profile。
+    // 解析行为与 profile/gate 无关（二者只影响校验与归一化输出），
+    // 因此 parse_hook_expr 不接收 profile/gate。
     let (hook, _spans) = parse_hook_expr_with_spans(&req.hook)?;
-    validate_hook(&hook.condition)?;
+    match req.gate {
+        Gate::Hook => validate_hook(&hook.condition)?,
+        Gate::Filter => validate_filter_hook(&hook.condition)?,
+    }
 
     let raw_condition = req
         .hook

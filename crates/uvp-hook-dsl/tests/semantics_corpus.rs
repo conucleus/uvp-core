@@ -1,7 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 use uvp_hook_dsl::{
-    eval_compiled_hook, parse_hook, EvalCompiledHookRequest, ParseHookRequest, Profile, SignalFact,
+    eval_compiled_hook, parse_hook, EvalCompiledHookRequest, Gate, ParseHookRequest, Profile,
+    SignalFact,
 };
 
 const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
@@ -20,6 +21,10 @@ struct Corpus {
 struct ParseCase {
     name: String,
     profile: String,
+    /// 校验档（缺省 hook）：发射适格面（filter）用例走过滤档——与
+    /// ParseHookRequest.gate 同先例，缺省保持既有钩子档语义。
+    #[serde(default)]
+    gate: Option<String>,
     hook_name: String,
     hook: String,
     expect: ParseExpect,
@@ -40,6 +45,8 @@ struct ParseExpect {
 struct EvalCase {
     name: String,
     profile: String,
+    #[serde(default)]
+    gate: Option<String>,
     hook_name: String,
     hook: String,
     signals: Vec<SignalFact>,
@@ -61,6 +68,8 @@ struct EvalExpect {
 struct InvalidCase {
     name: String,
     profile: String,
+    #[serde(default)]
+    gate: Option<String>,
     hook_name: String,
     hook: String,
     message_contains: String,
@@ -85,11 +94,20 @@ fn profile(value: &str) -> Profile {
     }
 }
 
+fn gate(value: &Option<String>) -> Gate {
+    match value.as_deref() {
+        None | Some("hook") => Gate::Hook,
+        Some("filter") => Gate::Filter,
+        other => panic!("unknown gate {other:?}"),
+    }
+}
+
 #[test]
 fn parses_semantic_corpus() {
     for case in load_corpus().parse_cases {
         let output = parse_hook(ParseHookRequest {
             profile: profile(&case.profile),
+            gate: gate(&case.gate),
             hook_name: case.hook_name.clone(),
             hook: case.hook.clone(),
         })
@@ -121,14 +139,17 @@ fn parses_semantic_corpus() {
 fn evaluates_semantic_corpus() {
     for case in load_corpus().eval_cases {
         let profile = profile(&case.profile);
+        let gate = gate(&case.gate);
         let parsed = parse_hook(ParseHookRequest {
             profile,
+            gate,
             hook_name: case.hook_name.clone(),
             hook: case.hook.clone(),
         })
         .unwrap_or_else(|err| panic!("{} failed to parse for eval: {err}", case.name));
         let output = eval_compiled_hook(EvalCompiledHookRequest {
             profile,
+            gate,
             ast: parsed.cloud_ast,
             signals: case.signals,
             now: case.now,
@@ -167,6 +188,7 @@ fn rejects_invalid_semantic_corpus() {
     for case in load_corpus().invalid_cases {
         let err = parse_hook(ParseHookRequest {
             profile: profile(&case.profile),
+            gate: gate(&case.gate),
             hook_name: case.hook_name.clone(),
             hook: case.hook.clone(),
         })

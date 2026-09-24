@@ -225,7 +225,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
     match fixture.target.as_str() {
         "hook_plan" | "evm" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.hookPlan.v2",
+                value["schemaVersion"], "uvp.hookPlan.v3",
                 "{}",
                 fixture.name
             );
@@ -233,7 +233,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
         }
         "cloud" | "cloud_db" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.cloudArtifact.v2",
+                value["schemaVersion"], "uvp.cloudArtifact.v3",
                 "{}",
                 fixture.name
             );

@@ -39,8 +39,12 @@
                 "BEGIN": "buyer::guest.host.seed"
               },
               "sendSignals": [
-                "go",
-                "seed"
+                {
+                  "name": "go"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "selectedStages": [
                 "guest.arrival"
@@ -57,7 +61,9 @@
                 "DOCK_ENTER": "buyer::guest.arrival.enter"
               },
               "sendSignals": [
-                "cmp"
+                {
+                  "name": "cmp"
+                }
               ]
             }
           ]

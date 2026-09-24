@@ -29,7 +29,9 @@
                 "LOCK": "buyer::escrow.hold.locked"
               },
               "sendSignals": [
-                "locked"
+                {
+                  "name": "locked"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

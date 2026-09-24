@@ -24,7 +24,9 @@
               "name": "listing",
               "source": "seller",
               "sendSignals": [
-                "cmp"
+                {
+                  "name": "cmp"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -35,7 +37,9 @@
               "name": "intent",
               "source": "buyer",
               "sendSignals": [
-                "cmp"
+                {
+                  "name": "cmp"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -55,7 +59,9 @@
                 "PAIR_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
               },
               "sendSignals": [
-                "paired"
+                {
+                  "name": "paired"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

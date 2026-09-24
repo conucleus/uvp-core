@@ -30,8 +30,12 @@
                 "ORDER": "purchaser::procurement.confirm.seed"
               },
               "sendSignals": [
-                "cmp",
-                "seed"
+                {
+                  "name": "cmp"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "source": "purchaser"
             }
@@ -65,8 +69,12 @@
                 "EXECUTE": "purchaser::procurement.confirm.cmp"
               },
               "sendSignals": [
-                "str",
-                "cmp"
+                {
+                  "name": "str"
+                },
+                {
+                  "name": "cmp"
+                }
               ],
               "source": "purchaser"
             },
@@ -91,8 +99,12 @@
                 "READ": "recycler::sourcing.source_evidence.seed"
               },
               "sendSignals": [
-                "cmp",
-                "seed"
+                {
+                  "name": "cmp"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "source": "recycler"
             }

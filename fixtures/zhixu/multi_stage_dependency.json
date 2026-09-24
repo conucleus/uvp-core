@@ -27,8 +27,12 @@
                 "RUN": "buyer::pipeline.one.seed"
               },
               "sendSignals": [
-                "done",
-                "seed"
+                {
+                  "name": "done"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -42,8 +46,12 @@
                 "RUN": "buyer::pipeline.two.seed"
               },
               "sendSignals": [
-                "done",
-                "seed"
+                {
+                  "name": "done"
+                },
+                {
+                  "name": "seed"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -57,7 +65,9 @@
                 "FINISH": "buyer::(pipeline.one.done & pipeline.two.done)"
               },
               "sendSignals": [
-                "cmp"
+                {
+                  "name": "cmp"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

@@ -3343,3 +3343,214 @@ fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
         "{error}"
     );
 }
+
+// ------------------------------------------------------------------
+// 适格面注册门镜像（_validateAdmission）：过滤档——无正锚、否决位
+// 位置放开；词表/时长/栈形态保留。
+// ------------------------------------------------------------------
+
+/// 带 admissions 数组的单 watcher plan（适格面注册门探针基底）。
+fn admission_plan(admissions: Value) -> Value {
+    let mut plan = watcher_plan(
+        "flow.pay#OBSERVE",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" }
+        ]),
+    );
+    plan["admissions"] = admissions;
+    plan
+}
+
+fn admission_entry(label: &str, instructions: Value) -> Value {
+    json!({
+        "admissionId": label,
+        "stageIdentifier": "flow.pay",
+        "signalName": label,
+        "instructions": instructions,
+    })
+}
+
+#[test]
+fn admission_decaying_veto_positions_register_under_the_filter_gate() {
+    // 适格一拍求值、不参与调度：钩子档拒绝的三类否决位位置（根/Or 子项/
+    // Delay 操作数内）在适格面注册放行——镜像合约 _validateAdmission 对
+    // _validateHook 的差异面。
+    let admissions = json!([
+        admission_entry(
+            "root_veto",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "NOT" }
+            ])
+        ),
+        admission_entry(
+            "or_veto",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "NOT" },
+                { "op": "OR", "arity": 2 }
+            ])
+        ),
+        admission_entry(
+            "delay_operand_veto",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "NOT" },
+                { "op": "AND", "arity": 2 },
+                { "op": "DELAY", "delaySeconds": 10 }
+            ])
+        ),
+        admission_entry(
+            "no_positive_anchor",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "NOT" }
+            ])
+        )
+    ]);
+    replay_chain_events(
+        vec![plan_registered_event(admission_plan(admissions))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("filter-gate admission shapes register");
+}
+
+#[test]
+fn admission_not_vocabulary_and_delay_bounds_are_enforced_at_registration() {
+    // 保留闸：NOT 操作数仅裸 SIGNAL 或 DELAY 产出（组合否定拒绝）、
+    // DELAY 时长恒正且 ≤30d——两档同守的结构词表。
+    let composite_not = admission_plan(json!([admission_entry(
+        "cmp",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "AND", "arity": 2 },
+            { "op": "NOT" }
+        ])
+    )]));
+    let error = replay_chain_events(
+        vec![plan_registered_event(composite_not)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("admission cmp applies NOT to a non-bare-SIGNAL operand"),
+        "{error}"
+    );
+
+    for (label, seconds) in [("zero", 0i64), ("over_30d", 2592001)] {
+        let over = admission_plan(json!([admission_entry(
+            label,
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "DELAY", "delaySeconds": seconds }
+            ])
+        )]));
+        let error = replay_chain_events(
+            vec![plan_registered_event(over)],
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("DELAY")
+                && (error.to_string().contains("must be positive")
+                    || error
+                        .to_string()
+                        .contains("exceeds the maximum allowed delay")),
+            "{label}: {error}"
+        );
+    }
+}
+
+#[test]
+fn admission_declared_plans_replay_without_replay_side_filtering() {
+    // 适格求值在链上 _submitSignal 内部 revert，revert 不发事件——回放
+    // 对适格面零过滤，事件流形态与无适格声明的 plan 完全一致（被拒提交
+    // 不出现，出现的都是已落库事实）。
+    let mut plan = watcher_plan(
+        "flow.pay#OBSERVE",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" }
+        ]),
+    );
+    plan["admissions"] = json!([admission_entry(
+        "cmp",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "DELAY", "delaySeconds": 1209600 },
+            { "op": "NOT" }
+        ])
+    )]);
+    let events = vec![
+        plan_registered_event(plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0xd0",
+            "signalId": "0xe0",
+            "signalKey": "0x50",
+            "senderId": "executor",
+            "submittedAt": "2026-04-27T00:00:01.000Z"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 4,
+            "logIndex": 0,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "flow.pay#OBSERVE",
+            "stageIdentifier": "flow.pay",
+            "hookName": "OBSERVE"
+        }),
+    ];
+    let result = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("admission-declared plans replay like ordinary plans");
+    let observed = result["observed"].as_array().expect("observed array");
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|item| item["eventName"] == "HookReady")
+            .count(),
+        1,
+        "the single settled fact still drives the hook: {result}"
+    );
+}

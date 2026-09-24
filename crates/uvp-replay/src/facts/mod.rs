@@ -138,6 +138,160 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
         validate_hook_registration_shape(hook)?;
         validate_hook_dependency_index_mirror(hook, dependency_index)?;
     }
+    // 适格面注册门镜像（_validateAdmission）：admissions 是可选键——
+    // 无适格声明的 plan 与既有形态完全一致；携带时逐条按过滤档校验。
+    if let Some(admissions) = plan.get("admissions") {
+        let admissions = admissions.as_array().ok_or_else(|| {
+            ReplayError::Message("chain oracle plan admissions must be an array".to_string())
+        })?;
+        for admission in admissions {
+            validate_admission_registration_shape(admission)?;
+        }
+    }
+    Ok(())
+}
+
+/// 合约 `_validateAdmission` 的注册门镜像（_validateHook 的过滤档兄弟，
+/// 链轨 uvp-protocol 侧同构）：适格面只在外部提交的一拍对 pre-state 求值、
+/// 不参与任何调度——无正锚要求、衰减否决位位置全放开（根/Or 子项/延时
+/// 操作数内均合法）。保留的结构闸与钩子档同源：NOT 操作数词表（裸
+/// SIGNAL 或 DELAY 产出，组合否定拒绝）、DELAY 时长 ∈ (0, 30d]、
+/// AND/OR arity ≥ 2、栈深充足、嵌套深度 ≤ 120、结束恰一值。自引用/
+/// 出生锚/订阅原子是编译期拒绝（uvp-compiler D028-D030），注册门不重复
+/// ——链上注册看到的只有指令形态。
+fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
+    let label = admission
+        .get("admissionId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "{}.{}",
+                admission
+                    .get("stageIdentifier")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unknown-stage>"),
+                admission
+                    .get("signalName")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unknown-signal>")
+            )
+        });
+    let instructions = admission
+        .get("instructions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ReplayError::Message(format!(
+                "chain oracle admission {label} missing instructions (the onchain admission track is produced by the TS compiler; a plan compiled by the Rust core does not carry it and cannot be replayed)"
+            ))
+        })?;
+    if instructions.is_empty() {
+        return Err(ReplayError::Message(format!(
+            "malformed instruction plan: admission {label} carries no instructions (contract commitPlan reverts InvalidHook)"
+        )));
+    }
+    // 过滤档的槽分析只需词表/时长/栈形态：bare_signal 与 delay_result
+    // 服务 NOT 操作数词表（正锚与否决位位置不设闸）。
+    struct AdmissionSlot {
+        bare_signal: bool,
+        delay_result: bool,
+        depth: usize,
+    }
+    let mut stack: Vec<AdmissionSlot> = Vec::new();
+    for instruction in instructions {
+        match value_str(instruction, "op")? {
+            "SIGNAL" => stack.push(AdmissionSlot {
+                bare_signal: true,
+                delay_result: false,
+                depth: 0,
+            }),
+            "NOT" => {
+                let Some(slot) = stack.pop() else {
+                    return Err(ReplayError::Message(
+                        "malformed instruction plan: NOT requires one operand on the stack"
+                            .to_string(),
+                    ));
+                };
+                if !slot.bare_signal && !slot.delay_result {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: admission {label} applies NOT to a non-bare-SIGNAL operand (composite negation diverges from compiler-produced shapes; contract _validateAdmission reverts InvalidInstruction)"
+                    )));
+                }
+                stack.push(AdmissionSlot {
+                    bare_signal: false,
+                    delay_result: false,
+                    depth: slot.depth + 1,
+                });
+            }
+            "DELAY" => {
+                let Some(slot) = stack.pop() else {
+                    return Err(ReplayError::Message(
+                        "malformed instruction plan: DELAY requires one operand on the stack"
+                            .to_string(),
+                    ));
+                };
+                let delay_seconds = value_i64(instruction, "delaySeconds")?;
+                if delay_seconds <= 0 {
+                    return Err(ReplayError::Message(
+                        "malformed instruction plan: DELAY delaySeconds must be positive"
+                            .to_string(),
+                    ));
+                }
+                if delay_seconds > MAX_DELAY_SECONDS {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: DELAY delaySeconds {delay_seconds} exceeds the maximum allowed delay of {MAX_DELAY_SECONDS}s (30d) (contract commitPlan reverts HookDelayTooLong)"
+                    )));
+                }
+                stack.push(AdmissionSlot {
+                    bare_signal: false,
+                    delay_result: true,
+                    depth: slot.depth + 1,
+                });
+            }
+            "AND" | "OR" => {
+                let op_name = value_str(instruction, "op")?;
+                let arity = value_i64(instruction, "arity")?;
+                if arity < 2 {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: {op_name} arity must be at least 2"
+                    )));
+                }
+                let arity = arity as usize;
+                if stack.len() < arity {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: {op_name} requires {arity} operands but {} remain",
+                        stack.len()
+                    )));
+                }
+                let terms = stack.split_off(stack.len() - arity);
+                let depth = terms.iter().map(|term| term.depth).max().unwrap_or(0) + 1;
+                stack.push(AdmissionSlot {
+                    bare_signal: false,
+                    delay_result: false,
+                    depth,
+                });
+            }
+            other => {
+                return Err(ReplayError::Message(format!(
+                    "unsupported chain-mode instruction {other}"
+                )))
+            }
+        }
+        if stack
+            .last()
+            .is_some_and(|slot| slot.depth > MAX_INSTRUCTION_DEPTH)
+        {
+            return Err(ReplayError::Message(format!(
+                "malformed instruction plan: admission {label} instruction nesting exceeds the maximum depth of {MAX_INSTRUCTION_DEPTH}"
+            )));
+        }
+    }
+    if stack.len() != 1 {
+        return Err(ReplayError::Message(format!(
+            "malformed instruction plan: admission {label} expected exactly one result value, found {}",
+            stack.len()
+        )));
+    }
     Ok(())
 }
 

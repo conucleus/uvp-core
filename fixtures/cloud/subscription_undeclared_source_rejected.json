@@ -24,7 +24,9 @@
               "name": "gate",
               "source": "farmer",
               "sendSignals": [
-                "picked"
+                {
+                  "name": "picked"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -43,7 +45,9 @@
                 "PICK": "::ANCHOR(@ghost::orchard.gate.picked)"
               },
               "sendSignals": [
-                "seen"
+                {
+                  "name": "seen"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
