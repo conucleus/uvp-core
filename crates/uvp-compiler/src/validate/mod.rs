@@ -170,8 +170,8 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
             // stage.source：非空、plain identifier 字符集、≤36（与
             // hook-dsl 标头/订阅目标的 source 类上限同口径）。
             // 空串会以空键混进 mintedSources；含空格/Unicode 的 source
-            // 是路由键，两侧必须逐字节一致（Go 镜像 zhixu_schema.go 同款
-            // 字符集校验；36 严于落库列宽 source_zhixu_id VARCHAR(64)）。
+            // 是路由键，两侧必须逐字节一致（36 严于落库列宽
+            // source_zhixu_id VARCHAR(64)）。
             if stage.source.trim().is_empty() {
                 issues.push(format!(
                     "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be non-empty"
@@ -388,7 +388,7 @@ pub(crate) fn validate_onchain_stage_materialization(
     issues
 }
 
-/// UVP-01（模-1 同族裁决，对齐 Go 镜像 zhixu_schema.go 的同款检查）：zhixu
+/// UVP-01（模-1 同族裁决）：zhixu
 /// 委托执行器的信封恒为 NewSource=false 的订单锚定子信号，无法携带通道
 /// 事实身份。本域 source 类无 mint 声明时订阅注入 route=fanin、投递落通道
 /// 维度（order_id=''），委托信封缺 order_id 会被状态机按永久错误拒绝——

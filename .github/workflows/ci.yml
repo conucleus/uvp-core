@@ -21,6 +21,9 @@ jobs:
         with:
           repository: conucleus/uvp-protocol
           path: uvp-protocol
+          # 协议联动 PR 用同名分支验证真实组合；非 PR 检默认分支
+          #（协议仓无 pin 载体，默认分支即其发布面）。
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

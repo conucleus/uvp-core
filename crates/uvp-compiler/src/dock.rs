@@ -343,8 +343,7 @@ pub fn parse_zhixu_executor_config(
     }
 
     // D006：signalMap key 必须是本地 send signal。key 同时是运行期 hook
-    // 命名空间：'.' 是信号名分隔符、组合长度受 signal_name 列宽约束
-    // （与 Go 镜像 zhixu_schema.go 同款校验）。
+    // 命名空间：'.' 是信号名分隔符、组合长度受 signal_name 列宽约束。
     let mut parsed_signal = BTreeMap::new();
     for (signal_name, port) in &signal_map {
         if signal_name.contains('.') || signal_name.len() > MAX_SIGNAL_MAP_KEY_LENGTH {

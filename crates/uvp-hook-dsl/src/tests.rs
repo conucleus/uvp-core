@@ -1294,8 +1294,7 @@ fn duration_with_multibyte_tail_fails_bounded_instead_of_panicking() {
 #[test]
 fn non_subscription_source_header_requires_plain_identifier_of_at_most_36() {
     // 标头 source 类是路由键：编译期上限 36 字节（严于落库列宽
-    // source_zhixu_id VARCHAR(64)，对齐 Go 镜像 zhixu_schema.go 的
-    // ≤36 与标识符规则），超长/非法字符集在解析期拒绝。
+    // source_zhixu_id VARCHAR(64)），超长/非法字符集在解析期拒绝。
     let overlong = "s".repeat(37);
     for raw in [
         format!("{overlong}::task.main.cmp"),

@@ -439,9 +439,10 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &ZhixuSendSignal
 }
 
 /// 发射适格面（admissions）编译：逐条解析 sendSignals 条目的 validWhen
-/// （过滤档），产出两个 target 共用的条目集。编译期三条拒绝（D028 自引用/
-/// D029 出生锚/D030 订阅原子）与 D027 空白表达式在此收口；缺省 validWhen
-/// 的条目完全绕过适格面（行为与无条件发射等价），不产出条目。
+/// （过滤档），产出两个 target 共用的条目集。编译期拒绝（D028 自引用/
+/// D029 出生锚与 signalMap 回传目标/D030 订阅原子）与 D027 空白表达式
+/// 在此收口；缺省 validWhen 的条目完全绕过适格面（行为与无条件发射
+/// 等价），不产出条目。
 fn build_signal_admissions(
     entries: &[StageEntry],
     dock_state: &crate::docking::DockState,
@@ -485,6 +486,14 @@ fn build_signal_admissions(
             if birth_anchors.contains(&full_name) {
                 return Err(CompilerError::Issues(format!(
                     "D029 {}.sendSignals[{}].validWhen: {} is a birth-anchor signal (mint SPAWN birth target or dock order.mode=new birth-anchor input; birth writes bypass the admission face, a validWhen here is dead code)",
+                    entry.stage_identifier, declared.name, full_name
+                )));
+            }
+            // signalMap 回传落点：目标输出按绑定回写父侧事实，走引擎内部
+            // 事务入口（ownsTx=false），整段绕过适格筛——声明即死代码。
+            if dock_state.output_relay_signals.contains(&full_name) {
+                return Err(CompilerError::Issues(format!(
+                    "D029 {}.sendSignals[{}].validWhen: {} is a signalMap relay target (dock output relay writes the fact through the engine-internal ingress, which bypasses the admission face; a validWhen here is dead code)",
                     entry.stage_identifier, declared.name, full_name
                 )));
             }

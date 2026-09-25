@@ -33,6 +33,11 @@ pub(crate) struct DockState {
     /// 路径：出生通道键并集查重（mint 出生键 ∪ dock entrance 键）的
     /// dock 侧输入。
     pub(crate) entrance_fact_keys: BTreeMap<(String, String), Vec<String>>,
+    /// signalMap 绑定的本地信号全名（`<task>.<stage>.<signal>`，静态与
+    /// target:null 动态 route 一并收集）：dock 输出回传的父侧落点。回传
+    /// 事实由引擎内部事务入口写入，不经发射适格面——对这些信号声明
+    /// validWhen 是永不求值的死代码，build_signal_admissions 按 D029 拒绝。
+    pub(crate) output_relay_signals: BTreeSet<String>,
 }
 
 pub(crate) fn compile_dock_state(
@@ -43,6 +48,20 @@ pub(crate) fn compile_dock_state(
 ) -> Result<DockState> {
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
+
+    // 回传落点从声明面全量收集（解析后、分流静态/动态之前）：动态选择
+    // route 的 signalMap 一旦被选择记录补齐目标即参与回传，与静态 route
+    // 同一面。
+    let output_relay_signals = unlinked
+        .iter()
+        .flat_map(|route| {
+            route
+                .config
+                .signal_map
+                .keys()
+                .map(|key| format!("{}.{}", route.stage_identifier, key))
+        })
+        .collect();
 
     // 声明面收集：target:null 的动态选择 route 不进
     // link（目标空缺，无 D008 可言），改入未解析清单随产物携带（云轨
@@ -115,6 +134,7 @@ pub(crate) fn compile_dock_state(
         input_port_hook_ids,
         entrance_hook_ids,
         entrance_fact_keys,
+        output_relay_signals,
     })
 }
 

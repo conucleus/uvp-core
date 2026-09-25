@@ -3100,6 +3100,40 @@ fn admission_on_birth_anchors_is_rejected() {
 }
 
 #[test]
+fn admission_on_signal_map_relay_targets_is_rejected() {
+    // 回传经引擎内部事务入口（ownsTx=false）进场，整段绕过适格筛：
+    // signalMap 绑定的本地信号声明 validWhen 是"想设闸没设成"的死代码，
+    // 与出生锚同族（D029），两个 target 一致拒绝。settlement.execute_payment
+    // 的 signalMap 绑定 str/cmp/err，cxl 未绑定。
+    let mut parent = parent_settlement_definition(TARGET_NAME);
+    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"][0]["validWhen"] =
+        json!("buyer::checkout.confirm.cmp");
+    for target in ["hook_plan", "cloud"] {
+        let result = if target == "hook_plan" {
+            compile_zhixu_hook_plan(&parent, None, true)
+        } else {
+            compile_cloud_artifact(&parent, None, true)
+        };
+        let error = result.expect_err("validWhen on a signalMap relay target must fail");
+        assert!(
+            error.to_string().contains(
+                "D029 settlement.execute_payment.sendSignals[str].validWhen: settlement.execute_payment.str is a signalMap relay target"
+            ),
+            "{target}: {error}"
+        );
+    }
+
+    // 正例对照：同一阶段未被 signalMap 绑定的外部信号带 validWhen 合法，
+    // 适格面照常产出条目。
+    let mut plain = parent_settlement_definition(TARGET_NAME);
+    plain["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"][3]["validWhen"] =
+        json!("buyer::checkout.confirm.cmp");
+    let plan = compile_zhixu_hook_plan(&plain, None, true)
+        .expect("validWhen on a signal outside signalMap stays legal");
+    assert_eq!(plan["admissions"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
 fn admission_subscription_atom_is_rejected() {
     // 适格是本单状态判定，订阅原子（ANCHOR）是逐事件投递通道——
     // 语义面互斥，编译期拒绝（D030）。过滤档解析放行订阅形态，拒绝

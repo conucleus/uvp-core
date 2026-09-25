@@ -253,7 +253,7 @@ Stage 字段总表（目标态）：
 | 裁决 | 结论 | 落地 |
 |---|---|---|
 | 模-1 静态执行者 | 出生/订阅阶段必须编译期静态绑定执行者（出生阶段必须非委托 executor；有锚订阅阶段允许绑定 zhixu 委托的唯一例外见上表"有锚订阅阶段绑定 zhixu 委托执行者"）；运行时 patch 一律拒绝（既有门禁不变） | Go validator 去豁免（uvp f724212 之后批次）；uvp-core validate_mint_anchors 增查；bootstrap child.main 前置注册静态执行者、register_select 撤销对该阶段的 patch |
-| 模-2 出生入口组成 | 出生入口只能是 ANCHOR 订阅；"订阅之外附加单正普通 hook"形态废除 | Go validateMintStages + zhixu_schema、uvp-core validate_mint_anchors 三处拒绝；TS 测试对齐 |
+| 模-2 出生入口组成 | 出生入口只能是 ANCHOR 订阅；"订阅之外附加单正普通 hook"形态废除 | uvp-core validate_mint_anchors 拒绝；TS 测试对齐 |
 | 模-3 域边界 | 域 = zhixu 实例。订阅按类匹配只在本实例内解析；跨秩序扇入要求 rel_zhixu_dock 显式对接（双向记录，compiler 新增 POST /zhixu-dock 登记，dbops.RegisterZhixuDock）。依赖按秩序 id 显式绑定（委托接缝/同单锚定）不受 dock 门限制 | uvp core-ddl + loadAffectedHooks + 契约测试 |
 | 事实标签 tie-break | hook_state.id 与 hook_delivery.id 改从共享序列 fact_label_seq 取值，标签对全部输出事实严格全序 | core-ddl |
 | nonce 防重放 | HMAC 入口的 nonce 查重已落地（`(senderID, nonce)` 原子 check-and-record，TTL 缓存、进程内单实例——多副本需共享存储）；升级 JWT 随商店身份落地一并做。未开 HMAC 的入口退化为 first-win 幂等吸收 | 决策记录 |
@@ -263,7 +263,7 @@ Stage 字段总表（目标态）：
 
 #10 残余风险说明：capability 对称后，攻击者理论上仍可镜像目标 plan 的 capability 声明（plan 公开可读）；该残余与 #10 的订单寻址迁移一并在解冻窗口下一批次处置（选项：origin 侧 link 授权）。
 
-模-3 域边界张力说明（待裁决，如实披露）：`rel_zhixu_dock` 门目前只在云侧投递路径落地（core-ddl + `loadAffectedHooks` + 契约测试，登记入口 `POST /zhixu-dock`）；该门在链轨/uvp-core 编译边界是否同步强制（或明确不强制）、以及 `rel_zhixu_dock` 登记与委托 dock（2.4）两条通道的职责分界，均尚无统一口径——裁决落定前，本规格不替任何一侧预设强制语义。
+模-3 域边界口径：`rel_zhixu_dock` 门落在云侧投递路径（core-ddl + `loadAffectedHooks` + 契约测试，登记入口 `POST /zhixu-dock`）。对接与授权的登记必须先于目标事实投递，违反即静默丢——该次投递不可达、无排队、无回扫补投，事后补建对接不会把错过的事实重新送进来；`rel_zhixu_dock` 登记与委托 dock（2.4）两条通道受同一条时序纪律约束（链轨同口径，见链轨《跨秩序协作与对接》业务叙述）。
 
 ### 裁决落地（2026-09-01，商店=框架不=内容）
 

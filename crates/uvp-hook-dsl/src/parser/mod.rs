@@ -161,8 +161,7 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
     }
     if !source.is_empty() {
         // 标头 source 类是路由键：解析期钉死长度与字符集（编译期 ≤36 上限
-        // 严于落库列宽 source_zhixu_id VARCHAR(64)，对齐 Go 镜像
-        // zhixu_schema.go 的 ≤36 与 plain-identifier 规则）。订阅形态
+        // 严于落库列宽 source_zhixu_id VARCHAR(64)）。订阅形态
         // （::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
         // source 在解析 ANCHOR 目标时按同值（≤36 + plain identifier）校验。
         if source.len() > 36 {
