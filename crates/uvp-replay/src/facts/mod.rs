@@ -138,6 +138,21 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
         validate_hook_registration_shape(hook)?;
         validate_hook_dependency_index_mirror(hook, dependency_index)?;
     }
+    // hookId 唯一性镜像（合约 HookAlreadyRegistered）：注册门按 hookId
+    // 逐键建档，重复 id 在链上 revert——投影片携带重复 hookId 时按"首个
+    // 匹配"求值会让第二份成为静默死钩子，本应暴露的流异常被吞。
+    let mut seen_hook_ids = std::collections::BTreeSet::new();
+    for hook in hooks {
+        let hook_id = hook
+            .get("hookId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ReplayError::Message("chain oracle plan hook missing hookId".to_string()))?;
+        if !seen_hook_ids.insert(hook_id) {
+            return Err(ReplayError::Message(format!(
+                "chain oracle plan carries duplicate hookId {hook_id}: the contract reverts HookAlreadyRegistered, a plan with duplicate ids is not a contract-reachable state"
+            )));
+        }
+    }
     // 适格面注册门镜像（_validateAdmission）：admissions 是可选键——
     // 无适格声明的 plan 与既有形态完全一致；携带时逐条按过滤档校验。
     if let Some(admissions) = plan.get("admissions") {

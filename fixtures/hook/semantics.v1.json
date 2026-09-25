@@ -320,79 +320,6 @@
       }
     },
     {
-      "name": "nested delay parses as chained postfix over a grouped operand",
-      "profile": "evm_strict",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "expect": {
-        "source": "buyer",
-        "mode": "normal",
-        "runtimeCondition": "(task.a.cmp+5s)+10s",
-        "normalizedExpression": "buyer::(task.a.cmp+5s)+10s",
-        "dependencies": [
-          {
-            "kind": "positive",
-            "source": "buyer",
-            "signalName": "task.a.cmp"
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 5
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 15
-          }
-        ]
-      }
-    },
-    {
-      "name": "outer delay over an and operand accumulates per-fact offsets",
-      "profile": "evm_strict",
-      "hookName": "STACK",
-      "hook": "buyer::((task.a.cmp +5s) & task.b.cmp) +10s",
-      "expect": {
-        "source": "buyer",
-        "mode": "normal",
-        "runtimeCondition": "(task.a.cmp+5s&task.b.cmp)+10s",
-        "normalizedExpression": "buyer::(task.a.cmp+5s&task.b.cmp)+10s",
-        "dependencies": [
-          {
-            "kind": "positive",
-            "source": "buyer",
-            "signalName": "task.a.cmp"
-          },
-          {
-            "kind": "positive",
-            "source": "buyer",
-            "signalName": "task.b.cmp"
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 5
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 15
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.b.cmp",
-            "delaySeconds": 10
-          }
-        ]
-      }
-    },
-    {
       "name": "n-ary and of three operands stays one flat join",
       "profile": "evm_strict",
       "hookName": "HOOK",
@@ -539,37 +466,6 @@
             "kind": "positive",
             "source": "buyer",
             "signalName": "task.ship.cmp"
-          }
-        ]
-      }
-    },
-    {
-      "name": "filter gate admits a decaying veto inside a delay operand",
-      "profile": "evm_strict",
-      "gate": "filter",
-      "hookName": "ADMIT",
-      "hook": "buyer::(task.ship.cmp & ~(task.cancel.cmp +14d)) +5s",
-      "expect": {
-        "source": "buyer",
-        "mode": "normal",
-        "runtimeCondition": "(task.ship.cmp&~(task.cancel.cmp+14d))+5s",
-        "normalizedExpression": "buyer::(task.ship.cmp&~(task.cancel.cmp+14d))+5s",
-        "dependencies": [
-          {
-            "kind": "negative",
-            "source": "buyer",
-            "signalName": "task.cancel.cmp"
-          },
-          {
-            "kind": "positive",
-            "source": "buyer",
-            "signalName": "task.ship.cmp"
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.ship.cmp",
-            "delaySeconds": 5
           }
         ]
       }
@@ -832,78 +728,6 @@
       }
     },
     {
-      "name": "nested delay passes inner wait through before inner due",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:02.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "wait",
-        "readyAt": "2026-04-27T00:00:05.000Z"
-      }
-    },
-    {
-      "name": "nested delay waits on the chained outer due after inner due poke",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:06.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "wait",
-        "readyAt": "2026-04-27T00:00:15.000Z"
-      }
-    },
-    {
-      "name": "nested delay readies at the chained outer due",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:15.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "ready",
-        "readyAt": "2026-04-27T00:00:15.000Z"
-      }
-    },
-    {
-      "name": "nested delay still chained when outer window not reached",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:10.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "wait",
-        "readyAt": "2026-04-27T00:00:15.000Z"
-      }
-    },
-    {
       "name": "or composite delay anchors on earliest maturing branch (waiting)",
       "profile": "evm_strict",
       "hookName": "TRIGGER",
@@ -957,42 +781,6 @@
       "expect": {
         "state": "ready",
         "readyAt": "2026-04-27T00:00:50.000Z"
-      }
-    },
-    {
-      "name": "evm nested delay waits on the chained outer due after the inner due",
-      "profile": "evm_strict",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:06.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.900Z"
-        }
-      ],
-      "expect": {
-        "state": "wait",
-        "readyAt": "2026-04-27T00:00:15.000Z"
-      }
-    },
-    {
-      "name": "evm nested delay readies at the chained outer due on chain second precision",
-      "profile": "evm_strict",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:15.001Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.900Z"
-        }
-      ],
-      "expect": {
-        "state": "ready",
-        "readyAt": "2026-04-27T00:00:15.000Z"
       }
     },
     {
@@ -1548,7 +1336,7 @@
       "profile": "evm_strict",
       "hookName": "WINDOW",
       "hook": "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
-      "messageContains": "only allowed as a direct operand of a conjunction"
+      "messageContains": "no nested delays"
     },
     {
       "name": "channel name containing the signal separator dot is rejected",
@@ -1579,6 +1367,91 @@
       "hookName": "ADMIT",
       "hook": "buyer::~(task.a.cmp +31d)",
       "messageContains": "exceeds the maximum allowed delay"
+    },
+    {
+      "name": "double ampersand operator rejected with precise error",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::task.main.cmp && task2.main.cmp",
+      "messageContains": "unsupported operator"
+    },
+    {
+      "name": "double percent operator rejected with precise error",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::task.main.cmp %% task2.main.cmp",
+      "messageContains": "unsupported operator"
+    },
+    {
+      "name": "veto operand must contain no nested delays (hook gate)",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::task.b.cmp & ~((task.a.cmp +5s) +10s)",
+      "messageContains": "nested delay"
+    },
+    {
+      "name": "veto operand must contain no nested delays (filter gate)",
+      "profile": "cloud_compat",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~((task.a.cmp +5s) +10s)",
+      "messageContains": "nested delay"
+    },
+    {
+      "name": "nested delay passes inner wait through before inner due (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "nested delay waits on the chained outer due after inner due poke (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "nested delay readies at the chained outer due (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "nested delay still chained when outer window not reached (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "evm nested delay waits on the chained outer due after the inner due (now rejected: nested delay)",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "evm nested delay readies at the chained outer due on chain second precision (now rejected: nested delay)",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "outer delay over an and operand accumulates per-fact offsets (now rejected: nested delay)",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::((task.a.cmp +5s) & task.b.cmp) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "filter gate admits a decaying veto inside a delay operand (now rejected: nested delay)",
+      "profile": "evm_strict",
+      "hookName": "ADMIT",
+      "hook": "buyer::(task.ship.cmp & ~(task.cancel.cmp +14d)) +5s",
+      "messageContains": "no nested delays"
     }
   ],
   "replayCases": [

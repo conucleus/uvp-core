@@ -620,19 +620,13 @@ fn eval_expr(
             let evaluated = eval_expr(expr, source, signals, now)?;
             match evaluated.state {
                 EvalState::Impossible | EvalState::NeedsMore => Ok(evaluated),
-                // 内层已处于 Wait（嵌套延时如 (A +5s) +10s，或延时复合式中间
-                // 态）：把内层的 due_at 原样上浮为本次等待期限。否则这里返回
-                // NeedsMore（语义="缺正锚"）会让 adapter 不持久化任何定时，
-                // 内层到期后不再有新事件触发重评，订单永久卡在中间态。到期后
-                // poke 重评时内层锚点就位，本层再按自身时长推进（与回放
-                // oracle 的 delay_value 语义一致）。
-                EvalState::Wait => Ok(InternalEval {
-                    state: EvalState::Wait,
-                    anchors: Vec::new(),
-                    ready_at: evaluated.ready_at,
-                    expires_at: None,
-                    reason: None,
-                }),
+                // 操作数子树不含延时（语法面两档拒绝嵌套延时），而 Wait 只能
+                // 由延时节点产生——此臂对语法合法输入不可达。防御性响亮失败：
+                // 静默上浮操作数 due 会把嵌套语义重新引入求值面。
+                EvalState::Wait => Err(HookError::Message(
+                    "delay operand is in a wait state: nested delays are rejected by the grammar, this state must be unreachable"
+                        .to_string(),
+                )),
                 EvalState::Ready => {
                     let Some(anchor) = evaluated.anchors.iter().max().copied() else {
                         return Ok(InternalEval {

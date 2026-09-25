@@ -93,8 +93,8 @@ pub struct ZhixuStage {
 }
 
 /// sendSignals 条目（发射适格面）：`name` 沿用既有信号声明值空间
-/// （裸名 / canonical 三段式自指 / `<target>::<signal>` trigger-origin）；
-/// `validWhen` 是钩子方言表达式（过滤档），缺省 = 无条件发射。
+/// （裸名 / canonical 三段式自指）；`validWhen` 是钩子方言表达式
+/// （过滤档），缺省 = 无条件发射。
 /// 键闭集 `{name, validWhen}` 与 Go DisallowUnknownFields / TS 闭集三面同形。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

@@ -112,7 +112,7 @@ pub fn lint_hook_json(input: &str) -> String {
     let result = serde_json::from_str::<ParseHookRequest>(input)
         .map_err(|err| HookError::Message(format!("invalid lint hook request: {err}")))
         .and_then(|req| {
-            lint_hook(req.profile, &req.hook_name, &req.hook)
+            lint_hook(req.profile, req.gate, &req.hook_name, &req.hook)
                 .map_err(|err| HookError::Message(err.to_string()))
         });
     envelope_json(result)

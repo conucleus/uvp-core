@@ -702,6 +702,19 @@ pub(crate) fn validate_receive_signal_references(
     issues
 }
 
+// 供 admissions（sendSignals 的 validWhen 过滤档）复用的引用存在性裁决：
+// 与 receiveSignals 共用同一 catalog、同一口径——标头 source 必须是本域
+// 声明的 source 类，每个 task.stage.signal 必须落在真实存在、source 一致
+// 且声明了该信号的阶段上。
+pub(crate) fn validate_signal_references(
+    hook: &ParseHookOutput,
+    path: &str,
+    entries: &[StageEntry],
+) -> Vec<String> {
+    let catalog = SignalReferenceCatalog::new(entries);
+    validate_hook_dependency_references(hook, path, &catalog)
+}
+
 // receiveSignals key 即阶段内 hook_name，落 hook_name 列（VARCHAR(36)）。
 // 语法手册 §7.4："key 不可为空且不能含 '.'"；'#' 是 hookId 分隔符
 // （stage#hook_name）——key 携带任一分隔符都会让 hookId 命名空间含混。
@@ -766,10 +779,10 @@ fn validate_hook_dependency_references(
             continue;
         }
         if !catalog.local_sources.contains(&dependency.source) {
-            // 订阅寻址只在本域解析（subscription-mint-spec §2.1）：receive
-            // 钩子的依赖 source 必须 ∈ 本域 source 类集合。
+            // 依赖 source（含表达式标头 source）必须 ∈ 本域声明的 source 类
+            // 集合（subscription-mint-spec §2.1：寻址只在本域解析）。
             issues.push(format!(
-                "{path} subscription source {} is not a declared source in this zhixu",
+                "{path} references source {} that is not a declared source in this zhixu",
                 dependency.source
             ));
             continue;
@@ -810,18 +823,13 @@ fn validate_hook_dependency_references(
 /// 声明阶段前缀 + 信号名；canonical 三段式（强制自指，见
 /// parse_signal_capability）本身就是全名。引用存在性（本函数）、
 /// capability 去重与 D014 一律按展开后的全名统一比较——只比第三段会把
-/// canonical 声明判成悬空引用（"声明即死"）。`<target>::<signal>`
-/// triggerOrigin 声明不参与该比较：它声明的是跨源触发能力（relation=1，
-/// 合约消费），不是本阶段 current 事实。
+/// canonical 声明判成悬空引用（"声明即死"）。
 pub(crate) fn declares_signal_expanding_to(
     send_signals: &[uvp_model::ZhixuSendSignal],
     stage_identifier: &str,
     full_signal_name: &str,
 ) -> bool {
     send_signals.iter().any(|declared| {
-        if declared.name.contains("::") {
-            return false;
-        }
         if declared.name == full_signal_name {
             return true;
         }

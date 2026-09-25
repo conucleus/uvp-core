@@ -81,7 +81,37 @@ pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<
     }
 }
 
+
+/// 嵌套延时一律拒绝（正位与否决位同闸）：Delay 的操作数子树内不得再含
+/// 任何延时节点。链式延时对锚点是纯加法，合并为单一时长书写
+/// （`((A+5s)+10s)` 即 `(A+15s)`）——嵌套没有等价改写覆盖不了的表达力，
+/// 唯一换来的是单段 30d 上限被逐段叠加绕过（累计等待无总预算）与
+/// 调度面多段逐醒的复杂度。`~((A+5s)+10s)` 与 `((A+5s)+10s)` 都应写作
+/// `~(A+15s)` / `(A+15s)`。
+fn reject_nested_delay(expr: &Expr, inside_delay: bool) -> Result<()> {
+    match expr {
+        Expr::Delay { expr, .. } => {
+            if inside_delay {
+                return Err(HookError::Message(
+                    "delay operand must contain no nested delays: collapse the delay chain into a single duration (e.g. ((A +5s) +10s) is (A +15s))"
+                        .to_string(),
+                ));
+            }
+            reject_nested_delay(expr, true)
+        }
+        Expr::Not(inner) => reject_nested_delay(inner, inside_delay),
+        Expr::And(terms) | Expr::Or(terms) => {
+            for term in terms {
+                reject_nested_delay(term, inside_delay)?;
+            }
+            Ok(())
+        }
+        Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
+    }
+}
+
 pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
+    reject_nested_delay(expr, false)?;
     let anchored = validate_anchors(expr, false, false)?;
     if !anchored {
         return Err(HookError::Message(
@@ -107,6 +137,7 @@ pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
 /// 闸只剩结构性词表：NOT 操作数仅裸 Signal 或 Delay 结果，duration 恒正
 /// （字面量语法与 30d 上限由解析器/解码层共用闸把守）。
 pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
+    reject_nested_delay(expr, false)?;
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
         Expr::Not(inner) => match inner.as_ref() {

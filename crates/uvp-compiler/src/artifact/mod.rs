@@ -341,22 +341,19 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     let mut capabilities = Vec::new();
     let mut seen = BTreeSet::new();
     // 镜像 TS onchain-hook-plan 的 duplicateCurrentOrderFactKeyIssues：
-    // relation=current 的事实键 (targetSource, targetSignalName) 在 plan 内
-    // 唯一属主——双属主会让携证解析无法唯一定位属主阶段（一个事实键只
-    // 能落一棵能力叶）；链上能力表以整棵 Merkle root 一次承诺、无逐条
-    // 注册循环，编译期按同一展开后的全名同口径拒绝。
-    // triggerOrigin（relation=1）不在此列：合约与 TS 预检都允许跨阶段
-    // 声明同一触发源能力。
+    // 事实键 (targetSource, targetSignalName) 在 plan 内唯一属主——双属主
+    // 会让携证解析无法唯一定位属主阶段（一个事实键只能落一棵能力叶）；
+    // 链上能力表以整棵 Merkle root 一次承诺、无逐条注册循环，编译期按
+    // 同一展开后的全名同口径拒绝。
     let mut current_order_owners: BTreeMap<(String, String), String> = BTreeMap::new();
     for entry in entries {
         for declared_signal in &entry.stage.send_signals {
             let capability = parse_signal_capability(entry, declared_signal)?;
             let key = format!(
-                "{}\0{}\0{}\0{}",
+                "{}\0{}\0{}",
                 value_str(&capability, "stageIdentifier"),
                 value_str(&capability, "targetSource"),
-                value_str(&capability, "targetSignalName"),
-                value_str(&capability, "targetOrderRelation")
+                value_str(&capability, "targetSignalName")
             );
             if !seen.insert(key) {
                 return Err(CompilerError::Issues(format!(
@@ -364,21 +361,19 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
                     entry.stage_identifier, declared_signal.name
                 )));
             }
-            if value_str(&capability, "targetOrderRelation") == "current" {
-                let fact_key = (
-                    value_str(&capability, "targetSource").to_string(),
-                    value_str(&capability, "targetSignalName").to_string(),
-                );
-                if let Some(owner) = current_order_owners.get(&fact_key) {
-                    if *owner != entry.stage_identifier {
-                        return Err(CompilerError::Issues(format!(
-                            "{}.sendSignals declares the current-order fact key ({}, {}) already owned by {}: one capability has one owner (declare the fact key on a single stage)",
-                            entry.stage_identifier, fact_key.0, fact_key.1, owner
-                        )));
-                    }
+            let fact_key = (
+                value_str(&capability, "targetSource").to_string(),
+                value_str(&capability, "targetSignalName").to_string(),
+            );
+            if let Some(owner) = current_order_owners.get(&fact_key) {
+                if *owner != entry.stage_identifier {
+                    return Err(CompilerError::Issues(format!(
+                        "{}.sendSignals declares the current-order fact key ({}, {}) already owned by {}: one capability has one owner (declare the fact key on a single stage)",
+                        entry.stage_identifier, fact_key.0, fact_key.1, owner
+                    )));
                 }
-                current_order_owners.insert(fact_key, entry.stage_identifier.clone());
             }
+            current_order_owners.insert(fact_key, entry.stage_identifier.clone());
             capabilities.push(capability);
         }
     }
@@ -390,9 +385,6 @@ fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
             .cmp(value_str(right, "stageIdentifier"))
             .then(value_str(left, "targetSource").cmp(value_str(right, "targetSource")))
             .then(value_str(left, "targetSignalName").cmp(value_str(right, "targetSignalName")))
-            .then(
-                value_str(left, "targetOrderRelation").cmp(value_str(right, "targetOrderRelation")),
-            )
     });
     Ok(capabilities)
 }
@@ -409,25 +401,6 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &ZhixuSendSignal
         )));
     }
     let declared_signal = declared_signal.name.as_str();
-    if let Some((target_source, target_signal_name)) = declared_signal.split_once("::") {
-        // `<target>::<signal>` 跨源触发形态：目标半段是 source 类，与信号
-        // 半段（裸名或 task.stage.signal）共用信号名同款标识符文法——
-        // `::` 再现（a::b::c）、空白、非标识符字符在此拒绝。
-        if !valid_identifier_part(target_source) || !valid_signal_declaration(target_signal_name) {
-            return Err(CompilerError::Issues(format!(
-                "{}.sendSignals contains invalid target signal {:?}: <target>::<signal> requires identifier-grammar halves (ASCII letter start, letters/digits/'_'/'-'; signal half may be a bare name or task.stage.signal)",
-                entry.stage_identifier, declared_signal
-            )));
-        }
-        return Ok(json!({
-            "stageIdentifier": entry.stage_identifier,
-            "source": entry.stage.source,
-            "declaredSignal": declared_signal,
-            "targetSource": target_source,
-            "targetSignalName": target_signal_name,
-            "targetOrderRelation": "triggerOrigin",
-        }));
-    }
     let target_signal_name = if declared_signal.contains('.') {
         if !valid_signal_declaration(declared_signal) {
             return Err(CompilerError::Issues(format!(
@@ -498,12 +471,6 @@ fn build_signal_admissions(
                     entry.stage_identifier, declared.name
                 )));
             }
-            if declared.name.contains("::") {
-                return Err(CompilerError::Issues(format!(
-                    "D029 {}.sendSignals[{}].validWhen: `<target>::<signal>` trigger-origin entries are birth anchors (birth writes bypass the admission face; a validWhen here is dead code)",
-                    entry.stage_identifier, declared.name
-                )));
-            }
             if anchorless_channel {
                 return Err(CompilerError::Issues(format!(
                     "D029 {}.sendSignals[{}].validWhen: {} is an anchorless channel stage (fan-in subscription delivery has no order to judge; the admission face is a per-order state judgment)",
@@ -543,16 +510,31 @@ fn build_signal_admissions(
             }
             // 自引用：求值吃 pre-state（不含本发），引用本信号自身是
             // 自证无效——事实键维度上该原子永不可满足（或恒绕过）。
-            if parsed.source == entry.stage.source
-                && parsed
-                    .dependencies
-                    .iter()
-                    .any(|dependency| dependency.signal_name == full_name)
+            if parsed
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.signal_name == full_name)
             {
                 return Err(CompilerError::Issues(format!(
-                    "D028 {}.sendSignals[{}].validWhen: expression addresses the declaring signal itself ({}::{}); admission judges the pre-state, which never contains the emission being judged",
-                    entry.stage_identifier, declared.name, entry.stage.source, full_name
+                    "D028 {}.sendSignals[{}].validWhen: expression addresses the declaring signal itself ({}); admission judges the pre-state, which never contains the emission being judged",
+                    entry.stage_identifier, declared.name, full_name
                 )));
+            }
+            // 引用存在性与 receiveSignals 同口径：标头 source 必须是本域
+            // 声明的 source 类，每个 task.stage.signal 必须落在真实存在且
+            // source 一致的阶段、并在其 sendSignals 中声明。放行悬空引用
+            // 会把死依赖从编译期推迟为运行期静默 init（正锚永不 Ready）或
+            // 静默失活的负门。
+            let admission_issues = crate::validate::validate_signal_references(
+                &parsed,
+                &format!(
+                    "{}.sendSignals[{}].validWhen",
+                    entry.stage_identifier, declared.name
+                ),
+                entries,
+            );
+            if !admission_issues.is_empty() {
+                return Err(CompilerError::Issues(admission_issues.join("; ")));
             }
             let mut admission = Map::new();
             admission.insert(

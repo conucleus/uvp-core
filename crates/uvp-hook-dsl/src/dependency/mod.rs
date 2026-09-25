@@ -29,33 +29,24 @@ pub(crate) fn extract_dependencies(hook: &HookExpr, _profile: Profile) -> Vec<De
     dedupe_dependencies(deps)
 }
 
-/// 收集延时操作数子树内的全部正向事实锚点，及其"从操作数根到该事实的
-/// 累计延时"（路径上 Delay 节点的时长之和）。延时节点自身的 timer 依赖
-/// 由 collect_dependencies 的 Delay 分支产出；此处只为外层延时计算
-/// "操作数成熟时刻距事实到达的偏移"。否定子树不产生正向锚（与
-/// validate_anchors 的口径一致：延时要求正锚）。
-fn collect_positive_anchors(
-    expr: &Expr,
-    source: &str,
-    offset: i64,
-    out: &mut Vec<(String, String, i64)>,
-) {
+/// 收集延时操作数子树内的正向事实锚点（延时节点自身的 timer 依赖由
+/// collect_dependencies 的 Delay 分支产出）。语法面两档拒绝嵌套延时后，
+/// 操作数子树不含 Delay 节点，锚点即操作数内的正向信号本身；否定子树
+/// 不产生锚（与 validate_anchors 的口径一致：延时要求正锚）。
+fn collect_positive_anchors(expr: &Expr, source: &str, out: &mut Vec<(String, String)>) {
     match expr {
-        Expr::Signal(signal) => out.push((source.to_string(), signal.clone(), offset)),
+        Expr::Signal(signal) => out.push((source.to_string(), signal.clone())),
         // 解析期位置约束下订阅不可出现在延时操作数内；按 Signal 同形处理
         // 保持与正向依赖收集同口径。
         Expr::Subscription { source, target } => {
-            out.push((source.clone(), target.clone(), offset));
+            out.push((source.clone(), target.clone()));
         }
         Expr::Not(_) => {}
-        Expr::Delay {
-            expr,
-            duration_seconds,
-            ..
-        } => collect_positive_anchors(expr, source, offset + duration_seconds, out),
+        // 嵌套延时对合法输入不可达；防御性下钻保持 match 全覆盖。
+        Expr::Delay { expr, .. } => collect_positive_anchors(expr, source, out),
         Expr::And(terms) | Expr::Or(terms) => {
             for term in terms {
-                collect_positive_anchors(term, source, offset, out);
+                collect_positive_anchors(term, source, out);
             }
         }
     }
@@ -89,20 +80,16 @@ fn collect_dependencies(expr: &Expr, source: &str, negated: bool, out: &mut Vec<
         } => {
             collect_dependencies(expr, source, negated, out);
             if !negated {
-                // 链式延时的外层 timer 必须基于内层到期累计：(A+5s)+10s 的
-                // 真实到期是 A+15s——只按本层时长出 timer(A,10s) 会把最终
-                // 到期低估一个内层延时。内层延时节点自己的 timer（如
-                // timer(A,5s) 的中间 poke 期限）由上方递归照常产出，与求值
-                // 器的分段等待口径一致（内层到期前上浮内层 due，poke 后
-                // 本层再按自身时长推进）。
-                let mut inner_anchors = Vec::new();
-                collect_positive_anchors(expr, source, 0, &mut inner_anchors);
-                for (anchor_source, signal_name, inner_offset) in inner_anchors {
+                // 每个延时节点产出一个 timer：到期 = 锚点事实到达 + 本层
+                // 时长。嵌套延时被语法面拒绝，不存在内层到期累计。
+                let mut anchors = Vec::new();
+                collect_positive_anchors(expr, source, &mut anchors);
+                for (anchor_source, signal_name) in anchors {
                     out.push(Dependency {
                         kind: DependencyKind::Timer,
                         source: anchor_source,
                         signal_name,
-                        delay_seconds: Some(inner_offset + duration_seconds),
+                        delay_seconds: Some(*duration_seconds),
                     });
                 }
             }

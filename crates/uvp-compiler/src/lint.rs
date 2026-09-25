@@ -22,7 +22,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 use uvp_hook_dsl::{
-    contradicts, lint_hook_with_condition, ready_implies, Category, Expr, LintDiagnostic,
+    contradicts, lint_hook_with_condition, ready_implies, Category, Expr, Gate, LintDiagnostic,
     LintError, LintProof, Profile, ProofResult, Severity, MAX_PAIRWISE_HOOKS,
 };
 use uvp_model::ZhixuDefinition;
@@ -62,7 +62,7 @@ pub fn lint_zhixu(definition: &ZhixuDefinition) -> Result<ZhixuLintReport, LintE
         let mut hooks = Vec::new();
         for (hook_name, raw_expression) in &entry.stage.receive_signals {
             let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
-            let linted = lint_hook_with_condition(Profile::CloudCompat, hook_name, raw_expression)?;
+            let linted = lint_hook_with_condition(Profile::CloudCompat, Gate::Hook, hook_name, raw_expression)?;
             for mut diagnostic in linted.report.diagnostics {
                 // 单 Hook 诊断在 Zhixu 语境下按 hookId（stage#hook）定位，
                 // 与编译产物的命名空间一致。

@@ -3554,3 +3554,139 @@ fn admission_declared_plans_replay_without_replay_side_filtering() {
         "the single settled fact still drives the hook: {result}"
     );
 }
+
+// 注册门镜像补全：hookId 唯一性（合约 HookAlreadyRegistered）——重复
+// id 的投影片按"首个匹配"求值会让第二份成为静默死钩子，必须响亮失败。
+#[test]
+fn duplicate_hook_id_in_plan_is_a_structural_error() {
+    let events = vec![
+        json!({
+            "eventName": "PlanRegistered",
+            "blockNumber": 1,
+            "logIndex": 0,
+            "transactionHash": "0x01",
+            "plan": {
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "compiledHooks": [
+                    {
+                        "hookId": "match.exchange#PAIR",
+                        "stageId": "match.exchange",
+                        "stageIdentifier": "match.exchange",
+                        "hookName": "PAIR",
+                        "orderTriggerKind": "mint",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    },
+                    {
+                        "hookId": "match.exchange#PAIR",
+                        "stageId": "match.exchange",
+                        "stageIdentifier": "match.exchange",
+                        "hookName": "PAIR",
+                        "orderTriggerKind": "none",
+                        "emitReady": false,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }
+                ],
+                "dependencyIndex": { "0x50": ["match.exchange#PAIR"] }
+            }
+        }),
+    ];
+    let error = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("duplicate hookId"),
+        "{error}"
+    );
+}
+
+// 矛盾流检测：同键订单的第二次 OrderTriggered 携带不同事务哈希时响亮
+// 失败（合约一单恰发一次；静默覆盖会改写出生通道判别基準）。
+#[test]
+fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
+    let base_events = |trigger_tx: &str| {
+        vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": {
+                    "planId": "0x01",
+                    "zhixuId": "demo",
+                    "compiledHooks": [{
+                        "hookId": "linked.entry#BIRTH",
+                        "stageId": "linked.entry",
+                        "stageIdentifier": "linked.entry",
+                        "hookName": "BIRTH",
+                        "orderTriggerKind": "mint",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }],
+                    "dependencyIndex": { "0x50": ["linked.entry#BIRTH"] }
+                }
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-7",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "OrderTriggered",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": trigger_tx,
+                "planId": "0x01",
+                "orderId": "order-7"
+            }),
+        ]
+    };
+    // 同哈希重放：同一事件被投递两次，吸收为 no-op。
+    replay_chain_events(
+        {
+            let mut events = base_events("0x03");
+            let replayed = events[2].clone();
+            events.push(replayed);
+            events
+        },
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("same-tx duplicate OrderTriggered must be absorbed");
+    // 异哈希矛盾流：响亮失败。
+    let error = replay_chain_events(
+        {
+            let mut events = base_events("0x03");
+            let mut conflicting = events[2].clone();
+            conflicting["transactionHash"] = json!("0x09");
+            conflicting["blockNumber"] = json!(4);
+            conflicting["logIndex"] = json!(0);
+            events.push(conflicting);
+            events
+        },
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate OrderTriggered"),
+        "{error}"
+    );
+}

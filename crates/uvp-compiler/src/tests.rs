@@ -1838,11 +1838,12 @@ fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
 #[test]
 fn send_signal_declarations_use_a_single_exact_surface() {
     // 声明面单一精确口径：declared 与 capability 同一原文（不 trim），
-    // `<target>::<signal>` 与裸名都按信号名同款标识符文法闸——空白、
-    // `::` 再现、非标识符字符、数字开头在此响亮拒绝（capability 侧
-    // trim 归一会产出死能力并与其它声明撞 duplicate）。
+    // 裸名与 canonical 名都按信号名同款标识符文法闸——空白、非标识符
+    // 字符、数字开头、错误的段数在此响亮拒绝（capability 侧 trim 归一
+    // 会产出死能力并与其它声明撞 duplicate）。
     for (label, signal) in [
         ("leading whitespace bare", " str"),
+        ("target separator form", "Seller::NOTED"),
         ("trailing whitespace target", "buyer::cmp "),
         ("whitespace inside target", "buy er::cmp"),
         ("double separator", "a::b::c"),
@@ -1865,26 +1866,6 @@ fn send_signal_declarations_use_a_single_exact_surface() {
             "{label} ({signal:?}): {error}"
         );
     }
-
-    // 合法形态钉住：`<target>::<signal>` 携带合法标识符文法（大写与
-    // task/stage 名同文法合法——身份大小写敏感、无折叠）照常编译，
-    // capability 携带与声明逐字节相同的精确值。
-    let mut definition = target_payment_definition();
-    definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({ "name": "Seller::NOTED" }));
-    let plan = compile_zhixu_hook_plan(&definition, None, true)
-        .expect("identifier-grammar target signal compiles");
-    let capability = plan["signalCapabilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|capability| capability["declaredSignal"] == json!("Seller::NOTED"))
-        .expect("capability carries the exact declared value");
-    assert_eq!(capability["targetSource"], json!("Seller"));
-    assert_eq!(capability["targetSignalName"], json!("NOTED"));
-    assert_eq!(capability["targetOrderRelation"], json!("triggerOrigin"));
 
     // "str" 与 " str" 不再撞 duplicate 误判：" str" 在形态闸被拒绝。
     let mut definition = target_payment_definition();
@@ -2945,52 +2926,90 @@ fn admissions_compile_into_both_targets() {
 
 #[test]
 fn admission_self_reference_is_rejected_in_both_targets() {
-    // pre-state 不含本发：表达式引用本信号自身是自证无效（D028）。
-    // 同名不同 source 类的事实不是本信号——正例对照照常编译。
+    // pre-state 不含本发：表达式引用本信号自身是自证无效（D028）——按
+    // 展开后的全名比对，与标头 source 无关（换一个 source 类标头引用
+    // 本信号的全名同样是自引用）。
     for target in ["hook_plan", "cloud"] {
-        let mut definition = target_payment_definition();
-        definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
-            json!("payment::payment_flow.settle.cmp & payment_flow.init.str");
-        let result = if target == "hook_plan" {
-            compile_zhixu_hook_plan(&definition, None, true)
-        } else {
-            compile_cloud_artifact(&definition, None, true)
-        };
-        let error = result.expect_err("self-referencing validWhen must fail");
-        assert!(
-            error.to_string().contains(
-                "D028 payment_flow.settle.sendSignals[cmp].validWhen: expression addresses the declaring signal itself (payment::payment_flow.settle.cmp)"
-            ),
-            "{target}: {error}"
-        );
+        for header in ["payment", "seller"] {
+            let mut definition = target_payment_definition();
+            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+                json!(format!("{header}::payment_flow.settle.cmp & payment_flow.init.str"));
+            let result = if target == "hook_plan" {
+                compile_zhixu_hook_plan(&definition, None, true)
+            } else {
+                compile_cloud_artifact(&definition, None, true)
+            };
+            let error = result.expect_err("self-referencing validWhen must fail");
+            assert!(
+                error.to_string().contains(
+                    "D028 payment_flow.settle.sendSignals[cmp].validWhen: expression addresses the declaring signal itself (payment_flow.settle.cmp)"
+                ),
+                "{target}/{header}: {error}"
+            );
+        }
     }
 
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
         json!("seller::payment_flow.settle.cmp & payment_flow.init.str");
-    compile_zhixu_hook_plan(&definition, None, true)
-        .expect("a same-named fact under another source class is not the declaring signal");
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("a same-named fact under another source class still addresses the declaring signal's fact key");
+    assert!(
+        error.to_string().contains("D028 payment_flow.settle.sendSignals[cmp].validWhen"),
+        "{error}"
+    );
+}
+
+#[test]
+fn admission_dangling_references_are_rejected() {
+    // validWhen 引用存在性与 receiveSignals 同口径：悬空 stage / 目标
+    // stage 存在但信号未声明 / 标头 source 未在本域声明，三个形态在两个
+    // target 的编译期都响亮拒绝——放行会把死依赖推迟为运行期静默 init
+    // （正锚永不 Ready）或静默失活的负门。
+    for (label, expression, needle) in [
+        (
+            "unknown stage",
+            "payment::task.nothere.nosignal",
+            "references unknown stage task.nothere",
+        ),
+        (
+            "undeclared signal",
+            "payment::payment_flow.init.never_declared",
+            "references unknown signal payment_flow.init.never_declared",
+        ),
+        (
+            "undeclared source",
+            "ghost::payment_flow.init.str",
+            "is not a declared source in this zhixu",
+        ),
+    ] {
+        for target in ["hook_plan", "cloud"] {
+            let mut definition = target_payment_definition();
+            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+                json!(expression);
+            let result = if target == "hook_plan" {
+                compile_zhixu_hook_plan(&definition, None, true)
+            } else {
+                compile_cloud_artifact(&definition, None, true)
+            };
+            let error = result.expect_err(&format!("{label} ({target}) must be rejected"));
+            assert!(
+                error.to_string().contains(".sendSignals[cmp].validWhen"),
+                "{label} ({target}): {error}"
+            );
+            assert!(
+                error.to_string().contains(needle),
+                "{label} ({target}): {error}"
+            );
+        }
+    }
 }
 
 #[test]
 fn admission_on_birth_anchors_is_rejected() {
-    // 出生写入不经适格面，声明即死代码（D029）。四个编译可见面：
-    // trigger-origin 条目 / mint SPAWN 出生目标 / dock new 模式出生锚
-    // 输入端口 / 无锚通道阶段。
-    let mut trigger_origin = target_payment_definition();
-    trigger_origin["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({ "name": "seller::noted", "validWhen": SETTLE_ADMISSION }));
-    let error = compile_zhixu_hook_plan(&trigger_origin, None, true)
-        .expect_err("validWhen on a trigger-origin entry must fail");
-    assert!(
-        error.to_string().contains(
-            "D029 payment_flow.init.sendSignals[seller::noted].validWhen: `<target>::<signal>` trigger-origin entries are birth anchors"
-        ),
-        "{error}"
-    );
-
+    // 出生写入不经适格面，声明即死代码（D029）。三个编译可见面：
+    // mint SPAWN 出生目标 / dock new 模式出生锚输入端口 / 无锚通道阶段。
+    //
     // mint SPAWN 出生目标：orchard.retail 订阅 payment_flow.init.str，
     // 该事实同时由 init 声明为 sendSignal——其 validWhen 即死代码。
     let mut minted = target_payment_definition();

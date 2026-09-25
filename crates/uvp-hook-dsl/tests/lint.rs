@@ -18,6 +18,7 @@ const CORPUS: &str = include_str!("../../../fixtures/hook/lint.v1.json");
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LintCorpus {
+    schema_version: String,
     cases: Vec<LintCase>,
     #[serde(rename = "invalidCases")]
     invalid_cases: Vec<InvalidCase>,
@@ -44,7 +45,14 @@ struct InvalidCase {
 }
 
 fn load_corpus() -> LintCorpus {
-    serde_json::from_str(CORPUS).expect("lint corpus fixture should parse")
+    let corpus: LintCorpus = serde_json::from_str(CORPUS).expect("lint corpus fixture should parse");
+    // 语料格式版本钉住：文件升版时这里必须先响亮失败（semantics/
+    // closed-sets 消费面同款纪律）。
+    assert_eq!(
+        corpus.schema_version, "uvp.hookLintCorpus.v1",
+        "lint corpus schemaVersion drifted; migrate this consumer before trusting the file"
+    );
+    corpus
 }
 
 fn codes(report: &uvp_hook_dsl::LintReport) -> Vec<String> {
@@ -63,7 +71,7 @@ fn lint_corpus_positive_and_negative_cases() {
     let corpus = load_corpus();
     assert!(!corpus.cases.is_empty());
     for case in &corpus.cases {
-        let report = lint_hook(Profile::EvmStrict, &case.hook_name, &case.hook)
+        let report = lint_hook(Profile::EvmStrict, Gate::Hook, &case.hook_name, &case.hook)
             .unwrap_or_else(|err| panic!("case {:?} must be a legal hook: {err}", case.name));
         let mut expected = case.expect_codes.clone();
         expected.sort();
@@ -102,7 +110,7 @@ fn lint_corpus_positive_and_negative_cases() {
 fn lint_corpus_semantic_validation_rejections() {
     let corpus = load_corpus();
     for case in &corpus.invalid_cases {
-        match lint_hook(Profile::EvmStrict, &case.hook_name, &case.hook) {
+        match lint_hook(Profile::EvmStrict, Gate::Hook, &case.hook_name, &case.hook) {
             Err(err) => assert!(
                 err.to_string().contains(&case.message_contains),
                 "case {:?}: unexpected error {err}",
@@ -133,7 +141,7 @@ fn lint_does_not_change_parse_semantics() {
             hook: hook.to_string(),
         })
         .expect("hook must parse");
-        let lint_report = lint_hook(Profile::EvmStrict, "HOOK", hook).expect("hook must lint");
+        let lint_report = lint_hook(Profile::EvmStrict, Gate::Hook, "HOOK", hook).expect("hook must lint");
         let after = uvp_hook_dsl::parse_hook(uvp_hook_dsl::ParseHookRequest {
             profile: Profile::EvmStrict,
             gate: Gate::Hook,
@@ -155,6 +163,7 @@ fn lint_does_not_change_parse_semantics() {
 fn diagnostic_spans_point_at_real_source_fragments() {
     let report = lint_hook(
         Profile::EvmStrict,
+        Gate::Hook,
         "DUP",
         "buyer::task.pay.cmp  &  task.pay.cmp",
     )
@@ -183,6 +192,7 @@ fn diagnostic_spans_point_at_real_source_fragments() {
     // 外观边界，诊断仍能精确指向操作数）。
     let report = lint_hook(
         Profile::EvmStrict,
+        Gate::Hook,
         "ABS",
         "buyer::task.pay.cmp & (task.pay.cmp | task.refund.cmp)",
     )
@@ -208,7 +218,7 @@ fn excessive_boolean_depth_is_reported() {
         condition = format!("({condition} & task.b.cmp)");
     }
     let hook = format!("buyer::{condition}");
-    let report = lint_hook(Profile::EvmStrict, "DEEP", &hook).unwrap();
+    let report = lint_hook(Profile::EvmStrict, Gate::Hook, "DEEP", &hook).unwrap();
     assert!(
         report
             .diagnostics
@@ -225,7 +235,7 @@ fn excessive_boolean_depth_is_reported() {
         condition = format!("({condition} & task.b.cmp)");
     }
     let hook = format!("buyer::{condition}");
-    let report = lint_hook(Profile::EvmStrict, "DEEP", &hook).unwrap();
+    let report = lint_hook(Profile::EvmStrict, Gate::Hook, "DEEP", &hook).unwrap();
     assert!(
         !report
             .diagnostics
@@ -244,7 +254,7 @@ fn excessive_operand_count_is_reported() {
         .collect::<Vec<_>>()
         .join(" & ");
     let hook = format!("buyer::{operands}");
-    let report = lint_hook(Profile::EvmStrict, "WIDE", &hook).unwrap();
+    let report = lint_hook(Profile::EvmStrict, Gate::Hook, "WIDE", &hook).unwrap();
     assert!(
         report
             .diagnostics
@@ -398,7 +408,7 @@ fn random_expressions_never_panic_in_lint() {
     for iteration in 0..2000 {
         let hook = generate_random_hook(&mut rng);
         let result = std::panic::catch_unwind(|| {
-            lint_hook(Profile::EvmStrict, &format!("R{iteration}"), &hook)
+            lint_hook(Profile::EvmStrict, Gate::Hook, &format!("R{iteration}"), &hook)
         });
         assert!(
             result.is_ok(),
@@ -467,4 +477,17 @@ fn generate_random_hook(rng: &mut Lcg) -> String {
     };
     let source = ["buyer", "seller", "platform"][rng.below(3) as usize];
     format!("{source}::{joined}")
+}
+
+#[test]
+fn lint_gate_filter_accepts_admission_forms() {
+    // 过滤档（发射适格面）的合法形态不得被 lint 误报：裸衰减根在钩子档
+    // 因缺正锚被拒，在过滤档位置全放开、lint 通过。
+    let filter_request = r#"{"profile":"cloud_compat","gate":"filter","hookName":"ADMIT","hook":"buyer::~(task.cancel.cmp +14d)"}"#;
+    let envelope = lint_hook_json(filter_request);
+    assert!(envelope.contains("\"ok\":true"), "{envelope}");
+
+    let hook_request = r#"{"profile":"cloud_compat","gate":"hook","hookName":"ADMIT","hook":"buyer::~(task.cancel.cmp +14d)"}"#;
+    let envelope = lint_hook_json(hook_request);
+    assert!(envelope.contains("\"ok\":false"), "{envelope}");
 }

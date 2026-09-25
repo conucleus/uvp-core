@@ -184,13 +184,24 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
             }
             // OrderTriggered 被记录为出生事务标记（outside 出生事实与其同
             // 事务；order-link 出生不 _recordSignal，见 record_signal_and_evaluate
-            // 的出生通道判别）。
+            // 的出生通道判别）。合约一单恰发一次 OrderTriggered：同键再次
+            // 到达且事务哈希不同是损坏的事件流——静默覆盖会改写出生通道
+            // 判别基準，响亮失败（与 OrderRegistered 的矛盾流检测同形）。
             "OrderTriggered" => {
                 let order_key =
                     order_key(value_str(event, "planId")?, value_str(event, "orderId")?);
-                state
-                    .order_trigger_tx
-                    .insert(order_key, value_str(event, "transactionHash")?.to_string());
+                let trigger_tx = value_str(event, "transactionHash")?.to_string();
+                match state.order_trigger_tx.get(&order_key) {
+                    Some(existing) if *existing != trigger_tx => {
+                        return Err(ReplayError::Message(format!(
+                            "duplicate OrderTriggered for {order_key} carries a different transactionHash ({existing} != {trigger_tx}): a contradictory event stream"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        state.order_trigger_tx.insert(order_key, trigger_tx);
+                    }
+                }
             }
             "OrderMaterialized" | "OrderLinked" => {}
             other => {

@@ -1628,57 +1628,51 @@ fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
 }
 
 #[test]
-fn chained_delay_timers_accumulate_inner_expiry() {
-    // 链式延时口径：(A+5s)+10s 的外层 timer 必须按内层到期累计——
-    // timer(A,15) 是最终到期；timer(A,5) 是内层延时自己的中间 poke
-    // 期限（与求值器分段等待语义一致），不再产出低估的 timer(A,10)。
-    let out = parse_hook(ParseHookRequest {
-        profile: Profile::EvmStrict,
-        gate: Gate::Hook,
-        hook_name: "NESTED".to_string(),
-        hook: "buyer::(task.a.cmp +5s) +10s".to_string(),
-    })
-    .unwrap();
-    assert_eq!(
-        out.dependencies,
-        vec![
-            Dependency {
-                kind: DependencyKind::Positive,
-                source: "buyer".to_string(),
-                signal_name: "task.a.cmp".to_string(),
-                delay_seconds: None,
-            },
-            Dependency {
-                kind: DependencyKind::Timer,
-                source: "buyer".to_string(),
-                signal_name: "task.a.cmp".to_string(),
-                delay_seconds: Some(5),
-            },
-            Dependency {
-                kind: DependencyKind::Timer,
-                source: "buyer".to_string(),
-                signal_name: "task.a.cmp".to_string(),
-                delay_seconds: Some(15),
-            },
-        ]
-    );
+fn nested_delays_are_rejected_in_both_positions() {
+    // 嵌套延时一律拒绝（正位与否决位同闸）：链式对锚点纯加法，合并为
+    // 单一时长书写——嵌套没有表达力收益，只会让单段 30d 上限被逐段
+    // 叠加绕过（累计等待无总预算）。报错统一指引平铺合并。
+    for (gate, hook) in [
+        (Gate::Hook, "buyer::(task.a.cmp +5s) +10s"),
+        (Gate::Hook, "buyer::((task.a.cmp +1s) +2s) +3s"),
+        (Gate::Hook, "buyer::task.b.cmp & ~((task.a.cmp +5s) +10s)"),
+        (Gate::Filter, "buyer::(task.a.cmp +5s) +10s"),
+        (Gate::Filter, "buyer::~((task.a.cmp +5s) +10s)"),
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate,
+            hook_name: "NESTED".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("no nested delays"),
+            "{hook}: {err}"
+        );
+    }
+    // 对照：合并后的平铺形态两档合法，timer 语义不变（单段一个 timer）。
+    for hook in ["buyer::task.a.cmp +15s", "buyer::task.b.cmp & ~(task.a.cmp +15s)"] {
+        let out = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Hook,
+            hook_name: "FLAT".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_or_else(|err| panic!("flat form must parse: {hook}: {err}"));
+        assert!(
+            out.dependencies
+                .iter()
+                .filter(|dep| dep.kind == DependencyKind::Timer)
+                .all(|dep| dep.delay_seconds == Some(15)),
+            "{hook}: {:?}",
+            out.dependencies
+        );
+    }
+}
 
-    // 三层链：((A+1s)+2s)+3s → 中间期限 1、3，最终到期 6。
-    let out = parse_hook(ParseHookRequest {
-        profile: Profile::EvmStrict,
-        gate: Gate::Hook,
-        hook_name: "CHAIN".to_string(),
-        hook: "buyer::((task.a.cmp +1s) +2s) +3s".to_string(),
-    })
-    .unwrap();
-    let timers = out
-        .dependencies
-        .iter()
-        .filter(|dep| dep.kind == DependencyKind::Timer)
-        .map(|dep| dep.delay_seconds.unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(timers, vec![1, 3, 6]);
-
+#[test]
+fn negated_operands_do_not_anchor_timers() {
     // 否定子树不产生 timer 锚：(A & ~B)+5s 只对 A 出 timer。
     let out = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
@@ -1702,65 +1696,6 @@ fn chained_delay_timers_accumulate_inner_expiry() {
 }
 
 #[test]
-fn decaying_veto_three_window_states() {
-    // 窗口三态：A 缺席 → 放行（无有效期）；A 在案未熟 → 放行至成熟时刻；
-    // A 已熟 → 否决（Impossible）。成熟边界含端点：now == 成熟时刻即否决。
-    let fact = |signal: &str, received_at: &str| SignalFact {
-        source: "buyer".to_string(),
-        signal_name: signal.to_string(),
-        received_at: received_at.to_string(),
-    };
-
-    let absent = evaluate_compiled(
-        "WINDOW",
-        "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
-        Profile::EvmStrict,
-        vec![fact("task.ship.cmp", "2026-04-27T00:00:05.000Z")],
-        "2026-04-27T00:00:10.000Z",
-    );
-    assert_eq!(absent.state, EvalState::Ready);
-    assert_eq!(absent.expires_at, None, "absent veto must not decay");
-
-    let immature = evaluate_compiled(
-        "WINDOW",
-        "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
-        Profile::EvmStrict,
-        vec![
-            fact("task.ship.cmp", "2026-04-27T00:00:05.000Z"),
-            fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z"),
-        ],
-        "2026-04-27T00:00:10.000Z",
-    );
-    assert_eq!(immature.state, EvalState::Ready);
-    assert_eq!(
-        immature.expires_at.as_deref(),
-        Some("2026-05-11T00:00:00.000Z"),
-        "validity must end at the negated delay's maturity"
-    );
-
-    let matured = evaluate_compiled(
-        "WINDOW",
-        "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
-        Profile::EvmStrict,
-        vec![
-            fact("task.ship.cmp", "2026-04-27T00:00:05.000Z"),
-            fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z"),
-        ],
-        "2026-05-11T00:00:00.000Z",
-    );
-    assert_eq!(matured.state, EvalState::Impossible);
-    assert!(
-        matured
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("negated condition exists: task.cancel.cmp+14d"),
-        "unexpected reason: {:?}",
-        matured.reason
-    );
-}
-
-#[test]
 fn decaying_veto_position_rules_reject_non_conjunction_slots() {
     // 否决位仅合取直接子项合法：根位 / Or 子项 / Not 操作数 / Delay
     // 操作数内（任意深度，含 Delay 内嵌套 And/Or 再包衰减）一律编译期拒绝。
@@ -1768,6 +1703,22 @@ fn decaying_veto_position_rules_reject_non_conjunction_slots() {
     for hook in [
         "buyer::~(task.cancel.cmp +14d)",
         "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Hook,
+            hook_name: "WINDOW".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains(position_error),
+            "unexpected error for {hook}: {err}"
+        );
+    }
+    // Delay 操作数内的否决位现在先被嵌套延时闸拦截（正位与否决位同闸）：
+    // 报错换为 no-nested-delays 口径。
+    for hook in [
         "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
         "buyer::((task.a.cmp & (task.b.cmp & ~(task.cancel.cmp +14d))) | task.c.cmp) +5s",
     ] {
@@ -1779,7 +1730,7 @@ fn decaying_veto_position_rules_reject_non_conjunction_slots() {
         })
         .unwrap_err();
         assert!(
-            err.to_string().contains(position_error),
+            err.to_string().contains("no nested delays"),
             "unexpected error for {hook}: {err}"
         );
     }
@@ -2007,8 +1958,8 @@ fn filter_gate_opens_every_decaying_veto_position() {
     for hook in [
         "buyer::~(task.cancel.cmp +14d)",
         "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
-        "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
-        "buyer::((task.a.cmp | (task.b.cmp & ~(task.cancel.cmp +14d))) +5s) & task.d.cmp",
+        "buyer::(task.a.cmp & ~(task.cancel.cmp +14d) & (task.e.cmp +5s)) & task.d.cmp",
+        "buyer::((task.a.cmp | (task.b.cmp & ~(task.cancel.cmp +14d))) & task.d.cmp) & ~(task.f.cmp +1s)",
     ] {
         parse_hook(ParseHookRequest {
             profile: Profile::EvmStrict,
