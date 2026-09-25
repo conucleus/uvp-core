@@ -60,7 +60,7 @@
                     "str": "started"
                   },
                   "target": {
-                    "zhixu": "friction_wheel_production"
+                    "zhixu": "zx-0123456789abcdef0123456789abcdef"
                   }
                 }
               },
@@ -90,7 +90,7 @@
                     "cmp": "scrap_declared"
                   },
                   "target": {
-                    "zhixu": "friction_wheel_production"
+                    "zhixu": "zx-0123456789abcdef0123456789abcdef"
                   }
                 }
               },
@@ -113,53 +113,6 @@
       ]
     }
   },
-  "resolutionManifest": {
-    "schemaVersion": "uvp.dock.resolution.v2",
-    "definitions": [
-      {
-        "name": "friction_wheel_production",
-        "dockEdges": [],
-        "interfaces": [
-          {
-            "name": "production_evidence",
-            "orderModes": [
-              "existing"
-            ],
-            "inputs": {},
-            "outputs": {
-              "scrap_declared": {
-                "signal": "factory::manufacturing.produce.scrap_created"
-              }
-            }
-          },
-          {
-            "name": "production_service",
-            "orderModes": [
-              "new"
-            ],
-            "inputs": {
-              "amend": {
-                "source": "factory",
-                "hook": "manufacturing.produce#DOCK_AMEND"
-              },
-              "execute": {
-                "source": "factory",
-                "hook": "manufacturing.intake#EXECUTE"
-              }
-            },
-            "outputs": {
-              "completed": {
-                "signal": "factory::manufacturing.produce.cmp"
-              },
-              "started": {
-                "signal": "factory::manufacturing.intake.str"
-              }
-            }
-          }
-        ]
-      }
-    ]
-  },
   "expect": {
     "platform": "cloud",
     "hookDependencyCounts": {
@@ -173,5 +126,74 @@
       "sourcing.source_evidence#READ"
     ],
     "dockRouteCount": 2
-  }
+  },
+  "dockTargets": [
+    {
+      "uid": "zx-0123456789abcdef0123456789abcdef",
+      "definition": {
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {
+          "name": "friction_wheel_production"
+        },
+        "spec": {
+          "platform": {
+            "type": "cloud"
+          },
+          "nucleation": {
+            "id": "friction-wheel-core"
+          },
+          "taskPatterns": [
+            {
+              "name": "manufacturing",
+              "stages": [
+                {
+                  "name": "intake",
+                  "source": "factory"
+                },
+                {
+                  "name": "produce",
+                  "source": "factory"
+                }
+              ]
+            }
+          ],
+          "dockInterface": {
+            "production_evidence": {
+              "orderModes": [
+                "existing"
+              ],
+              "inputs": {},
+              "outputs": {
+                "scrap_declared": {
+                  "signal": "factory::manufacturing.produce.scrap_created"
+                }
+              }
+            },
+            "production_service": {
+              "orderModes": [
+                "new"
+              ],
+              "inputs": {
+                "amend": {
+                  "hook": "manufacturing.produce#DOCK_AMEND"
+                },
+                "execute": {
+                  "hook": "manufacturing.intake#EXECUTE"
+                }
+              },
+              "outputs": {
+                "completed": {
+                  "signal": "factory::manufacturing.produce.cmp"
+                },
+                "started": {
+                  "signal": "factory::manufacturing.intake.str"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

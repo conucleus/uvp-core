@@ -43,7 +43,7 @@ pub(crate) struct DockState {
 pub(crate) fn compile_dock_state(
     definition: &ZhixuDefinition,
     stage_pairs: &[(String, ZhixuStage)],
-    resolution_manifest: Option<&Value>,
+    dock_targets: Option<&Value>,
     allow_unresolved: bool,
 ) -> Result<DockState> {
     let unlinked =
@@ -71,7 +71,7 @@ pub(crate) fn compile_dock_state(
     let mut static_routes = Vec::new();
     let mut unresolved_json = Vec::new();
     for route in unlinked {
-        match route.config.target_name.as_ref() {
+        match route.config.target_uid.as_ref() {
             Some(_) => {
                 if allow_unresolved {
                     unresolved_json.push(route.unresolved_json());
@@ -102,17 +102,17 @@ pub(crate) fn compile_dock_state(
     let routes = if static_routes.is_empty() {
         Vec::new()
     } else {
-        match resolution_manifest {
-            Some(manifest_value) => {
-                let manifest = dock::parse_resolution_manifest(manifest_value)
+        match dock_targets {
+            Some(targets_value) => {
+                let targets = dock::parse_dock_targets(targets_value)
                     .map_err(|issues| issues_from_dock(&issues))?;
-                dock::link_dock_routes(&definition.metadata.name, &static_routes, &manifest)
+                dock::link_dock_routes(&definition.metadata.name, &static_routes, &targets)
                     .map_err(|issues| issues_from_dock(&issues))?
             }
             None if allow_unresolved => Vec::new(),
             None => {
                 return Err(CompilerError::Message(
-                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes with static targets but no resolutionManifest was provided; runnable compilation requires linking against published target interfaces".to_string(),
+                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes with static targets but no registered targets were provided; runnable compilation requires linking against published target interfaces".to_string(),
                 ));
             }
         }

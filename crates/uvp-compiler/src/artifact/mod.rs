@@ -22,12 +22,12 @@ use crate::{join_issues_bounded, CompilerError, Result};
 /// HookPlan 产物信封版本（TS 权威 uvp-protocol compiler types 的
 /// HOOK_PLAN_SCHEMA_VERSION 镜像）。pub 供 uvp-node NAPI 导出
 /// hookPlanSchemaVersion：TS 侧兼容门逐字比对两侧常量，防漂移。
-/// v3：产物新增顶层 `admissions`（发射适格面）数组。
-pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v3";
+/// v4：dockRoutes 元素目标寻址单键 uid（target.uid）。
+pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v4";
 /// cloud 编译产物的信封版本：Go 侧 pkg/version.CloudArtifactSchema 镜像此值，
 /// parity 测试按 `pub const` 声明逐字比对，必须保持 pub。
-/// v3：产物新增顶层 `admissions`（发射适格面）数组。
-pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v3";
+/// v4：dockRoutes 元素目标寻址单键 uid（target.uid）。
+pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v4";
 // 能力表无规模上限（Merkle 化）：链上不逐条注册 signalCapabilities，
 // 由链下 TS 编译器建树以 capabilitiesRoot 承诺；Rust 按架构契约保持
 // 中性语义权威、不产哈希、不建树，仅保留逐条语义校验（空串/重复/
@@ -38,7 +38,7 @@ pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v3";
 /// 身份归 DB——core 不产出任何身份字段。
 pub fn compile_zhixu_hook_plan(
     definition_value: &Value,
-    resolution_manifest: Option<&Value>,
+    dock_targets: Option<&Value>,
     allow_unresolved: bool,
 ) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
@@ -63,7 +63,7 @@ pub fn compile_zhixu_hook_plan(
     let dock_state = compile_dock_state(
         &definition,
         &stage_pairs,
-        resolution_manifest,
+        dock_targets,
         allow_unresolved,
     )?;
 
@@ -134,7 +134,7 @@ pub fn compile_zhixu_hook_plan(
 
 pub fn compile_cloud_artifact(
     definition_value: &Value,
-    resolution_manifest: Option<&Value>,
+    dock_targets: Option<&Value>,
     allow_unresolved: bool,
 ) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
@@ -157,7 +157,7 @@ pub fn compile_cloud_artifact(
     let dock_state = compile_dock_state(
         &definition,
         &stage_pairs,
-        resolution_manifest,
+        dock_targets,
         allow_unresolved,
     )?;
 
@@ -290,7 +290,7 @@ fn cloud_hook_artifact(
         );
     }
     // dependencies 此处只投 signalName/dependencyKind 两维：Go 主链路按
-    // (signalName, kind) 消费该结构（uvp.cloudArtifact.v3 冻结面），source
+    // (signalName, kind) 消费该结构（uvp.cloudArtifact.v4 冻结面），source
     // 维度不在其中——依赖的真实 source 由 astJson 恢复（普通 hook = 产物
     // sourceZhixuRef/self，ANCHOR 订阅 = subscriptionTarget.source 或 root
     // 订阅节点）。补 source 需改产物 schema 并同步 Go 消费方，属两轨变更，

@@ -84,7 +84,7 @@
 ### 2.4 跨域：委托 dock + 接口映射
 
 - 委托是一个秩序 dock 另一个秩序：目标定义在 `spec.dockInterface` 发布**具名接口 map**（接口名 → {orderModes, inputs, outputs}），调用方 stage 在 `executor.zhixuExecutorConfig` 按接口名引用，`inputMap`/`signalMap` 是接缝上的对译表；A 的委托 stage 与 B 被绑定的端口在接缝处视为**同一个 source** 的两半（单源 seam，被绑定端口范围）。
-- `target.zhixu` 填目标定义的 `metadata.name`（slug）或显式 `null`（动态选择）。DSL 壳不携带任何派生身份（`metadata.uid` 不是作者可写字段）；身份权威分治——链轨由 uvp-protocol TS 从内容派生 `zx-<32hex>`（内幕），云轨由 DB 唯一 name + 主键承载，共享 core 产物为中性形状（`zhixuName` 键，无 uid/hash/root 字段）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚，云轨幂等=建立自然唯一键、链轨幂等=链上确定性承诺），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）——`existing` 与 `target: null` 的组合语义单点收敛于下「对等挂接五点」（语法与结构层）及「对等挂接 · 运行时语义」五点（运行时层）。
+- `target.zhixu` 填目标定义的内容派生身份 uid（`zx-<32hex>`）或显式 `null`（动态选择）。DSL 壳不携带任何身份（`metadata.uid` 不是作者可写字段）；uid 由定义内容派生（preimage 剔除 `metadata.name`/`metadata.annotations` 等展示字段），同内容跨轨同 uid、重复发布幂等，内容一变即新身份——派生公式跨轨同族（链轨 uvp-protocol TS 与云轨 FFI 以共享金向量互钉），云轨以该 uid 为 `global_zhixu` 主键、运行时零哈希；共享 core 产物为中性形状（`zhixuName` 仅展示投影，无 hash/root 字段）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚，云轨幂等=建立自然唯一键、链轨幂等=链上确定性承诺），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）——`existing` 与 `target: null` 的组合语义单点收敛于下「对等挂接五点」（语法与结构层）及「对等挂接 · 运行时语义」五点（运行时层）。
 - 委托声明至少一项输入或输出映射（无需虚构 str/cmp 映射满足格式）；接口输出不自动置任何一方为终态，终态只由本地阶段/订单结束驱动。
 - 委托共享订单上下文（现有 zhixu 执行器 `NewSource=false` 通道不变）；事实经 signalMap 逐条映射回父阶段。
 - 委托关系一次性绑定、禁 patch（现有门禁不变）。
@@ -104,7 +104,7 @@
 1. **挂接同意模型**：建立挂接（`existing` 连接既有目标订单）的动作方必须命中目标侧同意集合；语义两轨统一，同意集合的形态各取其信任域。链轨是无许可世界（任何人可发交易、接口承诺 word 公开可复算），同意必须证明到链上：目标订单创建者（creator）、目标订单在任执行者、或目标侧显式授权（EIP-712 attach permit）三者之一，三者皆缺即响亮拒绝（`UVPDockingModule._requireAttachConsent`）。云轨经产品裁决钉死为永久单运营方信任域（2026-09-23）：三条腿在单信任域内坍缩为同一主体——`/dock-selection` 选择记录持有凭据的提交方即同意集合，鉴权边界外无挂接建立入口，`pkg/docking` 建立路径不另设进程内同意门；这是该语义在单信任域下的完整形态，不是待补齐的缺口。该前提若变更（云轨承载多方互挂），须先为同意模型定义身份原语（云轨无地址，身份是 API 凭据主体），属协议演进而非补实现。
 2. **回填口径（两轨唯一语义）**：挂接建立时，目标接口输出中在该时点已成立的事实按 signalMap 回填父侧。回填是引用不是搬运：事实保持自己的家（§1.3），历史不改写、事实不重发。云轨现行回填行为即唯一语义，链轨不另立口径。
 3. **input 恰一次交付**：对接实例的每个 input 端口恰交付一次；此后对该端口的提交一律是幂等重放面——吸收、不交付新事实，幂等由（实例, 端口）投递唯一键承载（上五点第 4 条）。跨单的持续信息流只有 output 方向（signalMap 回传）。
-4. **`null` 解析时点（建立期解析、终身钉住）**：`target: null` 只在挂接建立期由选择权威经选择记录（`/dock-selection`）解析为具体目标——目标定义与 `existing` 的 orderRef——解析结果对该挂接终身钉住，不随运行推进重开；定义重发布只影响后续建立（上五点第 3 条）。选择权威即选择记录的写入方：云轨为 `/dock-selection` 选择记录的提交方（记录按（父秩序, 父订单, 父阶段）逐单登记——见上五点第 3 条，一个父订单缺自己的记录即等待，别单的记录不满足它）；链轨为携候选集 membership proof 发起 `attachDockedOrder` 的一方（链轨无独立选择记录面，选定即随建立交易写入实例身份、终身钉住）。缺选择记录属等待性错误：退避重试、计入投递预算、预算耗尽落死信（§6 投递层同款纪律）；不猜单（A07 existing 明确端点：缺 orderRef 时待解析，不猜「最新一单」——出处 `PRD_100_Dock_Final.md` §16 验收清单，`uvp-eth/docs/product/`）。
+4. **`null` 解析时点（建立期解析、终身钉住）**：`target: null` 只在挂接建立期由选择权威经选择记录（`/dock-selection`）解析为具体目标——目标定义与 `existing` 的 orderRef——解析结果对该挂接终身钉住，不随运行推进重开；目标升级（引用方显式改绑新 uid 重新发布，旧 route 恒指旧 uid）只影响后续建立（上五点第 3 条）。选择权威即选择记录的写入方：云轨为 `/dock-selection` 选择记录的提交方（记录按（父秩序, 父订单, 父阶段）逐单登记——见上五点第 3 条，一个父订单缺自己的记录即等待，别单的记录不满足它）；链轨为携候选集 membership proof 发起 `attachDockedOrder` 的一方（链轨无独立选择记录面，选定即随建立交易写入实例身份、终身钉住）。缺选择记录属等待性错误：退避重试、计入投递预算、预算耗尽落死信（§6 投递层同款纪律）；不猜单（A07 existing 明确端点：缺 orderRef 时待解析，不猜「最新一单」——出处 `PRD_100_Dock_Final.md` §16 验收清单，`uvp-eth/docs/product/`）。
 5. **挂接后与 `new` 完全同构**：两模式的全部差异都在建立动作上（`new` 建新单、`existing` 挂接既有单）；建立之后走同一套运行时语义——input 每端口恰交付一次（第 3 条）、output 经 signalMap 回传父侧、终态只由本地阶段/订单结束驱动（接口输出不自动置任何一方为终态）。建立之后不存在第二条语义路径。
 
 本运行时五点在两轨均生效：第 2-5 点两轨逐字统一；第 1 点语义统一、同意集合形态各取信任域（见该点）。链轨挂接建立入口已落地（`UVPDockingModule` 4.4 `attachDockedOrder`，定性见上五点第 5 条）。补齐状态仍以兼容矩阵（`uvp-deploy/deploy/compatibility/uvp-stack.v1.json`，§7）为准，不在 spec 登记状态——第 1 点的两个形态是语义本身，无补齐可言、不进矩阵。
@@ -181,7 +181,7 @@ Stage 字段总表（目标态）：
 | `mint` | 新增，可选，仅 `per-fact`；由出生阶段声明，是该类铸单的唯一声明点 |
 | `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
 | `sendSignals` | 保留，条目对象化 `{name, validWhen?}`：`name` 必填非空、归一后不可重复；`validWhen` 是发射适格声明（过滤档钩子方言），语义权威见两轨文法手册 §5.7，本规格不重述 |
-| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(目标定义name|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
+| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(目标定义uid|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
 | `trigger` | **删除**（原必填入口表） |
 | `externalSignals` | **删除** |
 | `fileResources`、`selectedStages` | 保留 |
@@ -210,8 +210,8 @@ Stage 字段总表（目标态）：
 
 ## 7. 版本与兼容
 
-- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v3`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v3`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v5 编号制品，无兼容义务。
-- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v3`、`onchainHookPlan.v3`、`cloudArtifact.v3`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
+- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v4`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v4`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v5 编号制品，无兼容义务。
+- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v4`、`onchainHookPlan.v3`、`cloudArtifact.v4`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v3`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
 - `UVPStateMachine` 0.12 的六域 PlanCommit（含 capabilitiesRoot）、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.4 的 open/attach/input/output boundary（output 端口叶为 V3：叶直接钉绑定侧的 targetSourceId/targetSignalId 事实键分量）必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
 - OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals 不在语法面、两侧语料与两侧文档表述内。其中 trigger 入口表与 externalSignals 零存在；`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 由解析器词法识别并精确拒绝，报错统一指引 `::ANCHOR(@source::task.stage.signal)` 订阅入口，扇入类标头按通用语法错误拒绝（语法面排除的完整口径见 2.2）。
 

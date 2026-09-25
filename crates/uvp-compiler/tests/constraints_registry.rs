@@ -120,13 +120,13 @@ fn probe_compile(definition: Value) -> (bool, String) {
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
 
-/// link 级探针：target=hook_plan + resolution manifest（D009/D020 等
+/// link 级探针：target=hook_plan + dockTargets 注册表（D009/D020 等
 /// link 期校验的可达路径）。
-fn probe_link(definition: Value, manifest: Value) -> (bool, String) {
+fn probe_link(definition: Value, dock_targets: Value) -> (bool, String) {
     let request = json!({
         "target": "hook_plan",
         "definition": definition,
-        "resolutionManifest": manifest,
+        "dockTargets": dock_targets,
     });
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
@@ -242,27 +242,18 @@ fn target_interface_definition() -> Value {
         })
 }
 
-fn target_interface_name() -> &'static str {
-    "constraints_target"
-}
+/// 目标定义的 uid 形态占位（^zx-[0-9a-f]{32}$）：内容派生过程是各轨内务，
+/// 探针语义只依赖形态与相等性。
+const TARGET_UID: &str = "zx-0123456789abcdef0123456789abcdef";
 
-/// resolution manifest v2（中性 name→interfaces 目录）：由目标侧编译产物
-/// 组装；真实流程由 Store/发布系统生成。
-fn interface_manifest() -> Value {
-    let target = target_interface_definition();
-    let request = json!({ "target": "parse", "definition": target });
-    let output = uvp_compiler::compile_json(&request.to_string());
-    let (ok, message) = envelope_message(&output);
-    assert!(ok, "target interface definition compiles: {message}");
-    let envelope: Value = serde_json::from_str(&output).expect("envelope");
-    let plan = envelope["value"].clone();
-    json!({
-        "schemaVersion": "uvp.dock.resolution.v2",
-        "definitions": [{
-            "name": target_interface_name(),
-            "interfaces": plan["dockInterface"],
-        }]
-    })
+/// dockTargets 注册表（{uid, definition} 条目：目标定义原文入场，接口
+/// 声明与静态出边由 core 单源提取）；uid 用形态合法的固定占位——内容
+/// 派生过程是各轨内务，真实流程由发布系统在目标发布后生成。
+fn target_dock_targets() -> Value {
+    json!([{
+        "uid": TARGET_UID,
+        "definition": target_interface_definition(),
+    }])
 }
 
 /// 带 zhixu 委托 executor 的定义（调用方 config 探针基底）。
@@ -278,7 +269,7 @@ fn dock_definition_with(mode: &str) -> Value {
     stage["executor"] = json!({
         "supplierType": "zhixu",
         "zhixuExecutorConfig": {
-            "target": { "zhixu": target_interface_name() },
+            "target": { "zhixu": TARGET_UID },
             "interface": "production_service",
             "order": { "mode": mode },
             "inputMap": { "START": "execute" },
@@ -368,7 +359,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                     d
                 })
             },
-            "exceeds 100 bytes (global_zhixu.name)",
+            "exceeds 100 bytes",
         ),
     ));
     probes.push((
@@ -814,8 +805,8 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "dock-order-mode-allowed-by-interface".into(),
         (
-            || probe_link(dock_definition_with("new"), interface_manifest()),
-            || probe_link(dock_definition_with("existing"), interface_manifest()),
+            || probe_link(dock_definition_with("new"), target_dock_targets()),
+            || probe_link(dock_definition_with("existing"), target_dock_targets()),
             "allows orderModes",
         ),
     ));
@@ -837,7 +828,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
-    // --- dock 级计数闸：接口端口 / manifest 条目 ---
+    // --- dock 级计数闸：接口端口 / dockTargets 条目 ---
     probes.push((
         "interface-ports-max-count".into(),
         (
@@ -864,23 +855,20 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "manifest-definitions-max-count".into(),
         (
-            || probe_link(dock_definition(), interface_manifest()),
+            || probe_link(dock_definition(), target_dock_targets()),
             || {
-                let mut manifest = interface_manifest();
-                let mut definitions = manifest["definitions"]
+                let mut targets = target_dock_targets()
                     .as_array()
-                    .expect("interface manifest carries definitions")
+                    .expect("dock targets carry an entry array")
                     .clone();
                 for index in 0..256 {
-                    definitions.push(json!({
-                        "name": format!("filler{index:03}"),
-                        "interfaces": [{ "name": "svc", "orderModes": ["existing"] }]
-                    }));
+                    // 计数闸先行于条目消费（超限直接整体拒绝），填充条目
+                    // 只需占位，不参与解析。
+                    targets.push(json!({ "uid": format!("zx-{index:032x}") }));
                 }
-                manifest["definitions"] = Value::Array(definitions);
-                probe_link(dock_definition(), manifest)
+                probe_link(dock_definition(), Value::Array(targets))
             },
-            "manifest carries 257 definitions, limit is 256",
+            "dockTargets carries 257 definitions, limit is 256",
         ),
     ));
 

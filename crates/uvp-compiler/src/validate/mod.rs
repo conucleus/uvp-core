@@ -14,7 +14,7 @@ use crate::lower::{is_zhixu_executor_stage, parse_hook_for_compiler, value_str, 
 /// source 是"声明即死"命名空间——所有 hook/订阅引用在解析层被拒。严于
 /// 落库列宽（source_zhixu_id VARCHAR(64)），上限在编译期拒绝。
 const MAX_STAGE_SOURCE_BYTES: usize = 36;
-/// DDL 维度镜像：global_zhixu.name / global_stage.stage_identifier
+/// DDL 维度镜像：文档 metadata.name（展示属性）与 global_stage.stage_identifier
 /// VARCHAR(100)。
 const MAX_IDENTIFIER_BYTES: usize = 100;
 /// DDL 维度镜像：canonical 三段式 task.stage.signal 落
@@ -51,7 +51,7 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
     }
     if definition.metadata.name.len() > MAX_IDENTIFIER_BYTES {
         issues.push(format!(
-            "metadata.name {:?} exceeds {MAX_IDENTIFIER_BYTES} bytes (global_zhixu.name)",
+            "metadata.name {:?} exceeds {MAX_IDENTIFIER_BYTES} bytes",
             definition.metadata.name
         ));
     }
@@ -245,6 +245,16 @@ fn file_resource_type_issue(path: &str, key: &str, resource: &Value) -> Option<S
             .join(", "),
         resource.get("fileType")
     ))
+}
+
+/// 定义身份 uid：`zx-<32hex>`（内容派生，uvp:definition-uid:v2 域）。
+pub(crate) fn is_definition_uid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 35
+        && bytes.starts_with(b"zx-")
+        && bytes[3..]
+            .iter()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
 }
 
 /// `^[a-z][a-z0-9_-]{0,99}$`（字节口径）。

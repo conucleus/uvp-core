@@ -71,12 +71,12 @@ pub struct CompileRequest {
     #[serde(default = "default_target")]
     pub target: String,
     pub definition: Value,
-    /// Dock resolution manifest：由 Store/发布系统或离线
-    /// lock 文件提供；静态目标 route 缺 manifest 的可运行编译返回
+    /// Dock 目标注册表：编译入口按引用 uid 从权威存储直读后注入；
+    /// 静态目标 route 缺注册目标的可运行编译返回
     /// `UNRESOLVED_DOCK_TARGET`（`target: null` 的动态选择 route 走
-    /// 未解析声明面，不要求 manifest）。
+    /// 未解析声明面）。
     #[serde(default)]
-    pub resolution_manifest: Option<Value>,
+    pub dock_targets: Option<Value>,
 }
 
 fn default_target() -> String {
@@ -91,14 +91,14 @@ pub fn compile_json(input: &str) -> String {
 }
 
 pub fn compile_request(req: &CompileRequest) -> Result<Value> {
-    let manifest = req.resolution_manifest.as_ref();
+    let dock_targets = req.dock_targets.as_ref();
     match req.target.as_str() {
-        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, manifest, false),
-        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, manifest, false),
+        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, dock_targets, false),
+        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, dock_targets, false),
         // parse-only：允许 unresolved route。
-        "parse" => compile_zhixu_hook_plan(&req.definition, manifest, true),
+        "parse" => compile_zhixu_hook_plan(&req.definition, dock_targets, true),
         // 不存在 dock link 编译 target（uvp.dock-link v1 产物面）：
-        // link 校验由 hook_plan/cloud/parse 在 resolutionManifest
+        // link 校验由 hook_plan/cloud/parse 在 dockTargets
         // 在场时同一链路承担，无独立产物面。
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"

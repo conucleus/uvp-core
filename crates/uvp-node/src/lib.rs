@@ -66,7 +66,7 @@ pub fn semantic_version() -> String {
 }
 
 #[napi]
-/// HookPlan 产物信封版本（uvp.hookPlan.v3）：TS 侧兼容门与 uvp-protocol
+/// HookPlan 产物信封版本（uvp.hookPlan.v4）：TS 侧兼容门与 uvp-protocol
 /// compiler 的 HOOK_PLAN_SCHEMA_VERSION 逐字比对，防两轨信封版本漂移。
 pub fn hook_plan_schema_version() -> String {
     uvp_compiler::HOOK_PLAN_SCHEMA_VERSION.to_string()
@@ -91,9 +91,9 @@ mod tests {
         assert_eq!(uvp_hook_dsl::SEMANTIC_VERSION, "uvp.semantic.v1");
         assert_eq!(
             uvp_compiler::HOOK_PLAN_SCHEMA_VERSION,
-            "uvp.hookPlan.v3",
+            "uvp.hookPlan.v4",
             "TS authority literal is uvp.protocol compiler HOOK_PLAN_SCHEMA_VERSION"
         );
-        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v3");
+        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v4");
     }
 }

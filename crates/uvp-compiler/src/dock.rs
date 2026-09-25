@@ -4,16 +4,16 @@
 //! - 调用方 `executor.zhixuExecutorConfig`（键闭集 {target, interface,
 //!   order, inputMap, signalMap}）与目标 `spec.dockInterface`（具名接口
 //!   map）的 source 语义；
-//! - 跨定义 linker（resolution manifest 输入，纯函数，无网络；目标按
-//!   name 解析）；
+//! - 跨定义 linker（dockTargets 注册表输入，纯函数，无网络；目标按
+//!   uid 解析）；
 //! - 中性 route/接口声明产物形状；
 //! - 编译期错误码 D001-D016、D019-D020、D025、接口形状错误码
 //!   D021/D022；发射适格面 D026-D031（artifact/validate）。
 //! - D007/D011/D017/D018/D023/D024 不在本协议编号面内，永久空缺不复用。
 //!
-//! 哈希承诺与派生身份是各轨权威的内务（链轨 TS、云轨 DB），不入共享
-//! core：目标引用一律走 `metadata.name`（slug），产物不携带任何
-//! uid/hash/root 字段。
+//! 哈希承诺与身份派生是各轨权威的内务（链轨 TS、云轨 DB），core 不计算
+//! 任何 hash/uid：目标引用消费已派生的内容身份 uid（`zx-<32hex>`），产物
+//! 不携带 hash/root 字段。
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -24,12 +24,11 @@ use uvp_model::{DockInterfaceSpec, ZhixuStage};
 // 冻结常量
 // ---------------------------------------------------------------------------
 
-pub const DOCK_ROUTE_SCHEMA_VERSION: &str = "uvp.dockRoute.v2";
+pub const DOCK_ROUTE_SCHEMA_VERSION: &str = "uvp.dockRoute.v3";
 /// 未解析 route 的声明面产物形态：本地声明完整——
 /// target:null 动态选择的目标空缺（云轨运行时由选择记录补齐）；静态
 /// 目标 route 在 parse-only 产物中同面携带作者声明的 target.zhixu。
 pub const DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION: &str = "uvp.dockRoute.unresolved.v1";
-pub const DOCK_RESOLUTION_SCHEMA_VERSION: &str = "uvp.dock.resolution.v2";
 
 pub const MAX_DOCK_INPUTS: usize = 8;
 pub const MAX_DOCK_OUTPUTS: usize = 16;
@@ -55,10 +54,9 @@ pub const MAX_SIGNAL_NAME_BYTES: usize = 100;
 /// 端口计数无闸时声明面规模随 plan 输入无界增长（计数闸）。
 pub const MAX_INTERFACE_PORTS: usize = 64;
 
-/// resolution manifest 的 definitions 条目上限：manifest 是发布方数据，
-/// 计数无闸时毒 manifest 可让 link 期的图规模无界增长（计数闸）。
+/// dockTargets 注册表条目上限：注册表是注入数据，计数无闸时毒载荷可让
+/// link 期的图规模无界增长（计数闸）。
 pub const MAX_MANIFEST_DEFINITIONS: usize = 256;
-
 /// order.mode 与接口 orderModes 的闭集取值。
 pub const ORDER_MODE_NEW: &str = "new";
 pub const ORDER_MODE_EXISTING: &str = "existing";
@@ -105,8 +103,8 @@ const UNSUPPORTED_HINT: &str = "Zhixu delegation binds a named target interface:
 #[derive(Debug, Clone)]
 pub struct ZhixuExecutorConfig {
     /// `None` = `target: null`（动态选择，运行时由选择记录补齐）；
-    /// `Some(name)` = 目标定义的 `metadata.name`。
-    pub target_name: Option<String>,
+    /// `Some(uid)` = 目标定义的内容派生身份 uid。
+    pub target_uid: Option<String>,
     pub interface_name: String,
     /// `new` | `existing`。
     pub order_mode: String,
@@ -163,14 +161,14 @@ pub fn parse_zhixu_executor_config(
         }
     }
 
-    // D003：target 必填键——{zhixu: <目标定义 metadata.name>} 或显式 null
-    // （动态选择）。跨轨引用一律走 name，壳上不携带任何派生身份。
-    let target_name = match config_object.get("target") {
+    // D003：target 必填键——{zhixu: <目标定义 uid>} 或显式 null（动态
+    // 选择）。引用按内容精确指向，壳上不携带展示名。
+    let target_uid = match config_object.get("target") {
         None => {
             issues.push(DockIssue::new(
                 "D003",
                 format!("{path}.target"),
-                "target is required: {zhixu: <target definition metadata.name>} for a static target, or null for runtime selection",
+                "target is required: {zhixu: <target definition uid>} for a static target, or null for runtime selection",
             ));
             None
         }
@@ -186,24 +184,24 @@ pub fn parse_zhixu_executor_config(
                 }
             }
             match target.get("zhixu").and_then(Value::as_str) {
-                Some(name) => {
-                    let name = name.trim();
-                    if !crate::validate::is_name_slug(name) {
+                Some(uid) => {
+                    let uid = uid.trim();
+                    if !crate::validate::is_definition_uid(uid) {
                         issues.push(DockIssue::new(
                             "D003",
                             format!("{path}.target.zhixu"),
                             format!(
-                                "target.zhixu must be the target definition's metadata.name, matching ^[a-z][a-z0-9_-]{{0,99}}$, found {name:?}; {UNSUPPORTED_HINT}"
+                                "target.zhixu must be the target definition's content-derived uid, matching ^zx-[0-9a-f]{{32}}$, found {uid:?}; {UNSUPPORTED_HINT}"
                             ),
                         ));
                     }
-                    Some(name.to_string())
+                    Some(uid.to_string())
                 }
                 None => {
                     issues.push(DockIssue::new(
                         "D003",
                         format!("{path}.target.zhixu"),
-                        "target.zhixu is required when target is an object (the target definition metadata.name)",
+                        "target.zhixu is required when target is an object (the target definition uid)",
                     ));
                     None
                 }
@@ -213,7 +211,7 @@ pub fn parse_zhixu_executor_config(
             issues.push(DockIssue::new(
                 "D003",
                 format!("{path}.target"),
-                "target must be an object {zhixu: <target definition metadata.name>} or null (dynamic selection)",
+                "target must be an object {zhixu: <target definition uid>} or null (dynamic selection)",
             ));
             None
         }
@@ -463,7 +461,7 @@ pub fn parse_zhixu_executor_config(
         return Err(issues);
     }
     Ok(ZhixuExecutorConfig {
-        target_name,
+        target_uid,
         interface_name,
         order_mode,
         input_map: parsed_input,
@@ -559,7 +557,7 @@ impl UnlinkedDockRoute {
     /// 未解析 route 的声明面产物：本地声明完整、不携带
     /// 任何派生字段。target:null（动态选择）的目标空缺——目标身份/承诺
     /// 由各轨在选择记录补齐后自行计算；静态目标 route 携带作者声明的
-    /// target.zhixu（name 引用，非派生身份），与动态目标对称进声明面。
+    /// target.zhixu（目标定义 uid 引用），与动态目标对称进声明面。
     pub fn unresolved_json(&self) -> Value {
         let mut route = json!({
             "schemaVersion": DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION,
@@ -576,8 +574,8 @@ impl UnlinkedDockRoute {
                 "port": port,
             })).collect::<Vec<_>>(),
         });
-        if let Some(target_name) = &self.config.target_name {
-            route["target"] = json!({ "zhixu": target_name });
+        if let Some(target_uid) = &self.config.target_uid {
+            route["target"] = json!({ "zhixu": target_uid });
         }
         route
     }
@@ -606,7 +604,7 @@ pub struct InterfacePortOutput {
     pub signal: String,
 }
 
-/// 一个具名接口的中性声明（与 resolution manifest 的接口元素同形状）。
+/// 一个具名接口的中性声明（与 dockTargets 条目的接口元素同形状）。
 #[derive(Debug, Clone)]
 pub struct InterfaceDeclaration {
     pub name: String,
@@ -617,7 +615,7 @@ pub struct InterfaceDeclaration {
 
 /// 编译本地 `spec.dockInterface` 的产物：中性接口声明 + entrance 出生
 /// 事实键（出生通道键并集查重的 dock 侧输入）。entrance 键只从本地
-/// 接口编译收集——manifest 侧接口是远端目标的声明面，不参与本 plan 的
+/// 接口编译收集——dockTargets 侧接口是远端目标的声明面，不参与本 plan 的
 /// 出生通道键并集。
 #[derive(Debug, Clone)]
 pub struct CompiledInterfaces {
@@ -1008,181 +1006,267 @@ fn parse_canonical_signal(signal: &str) -> Option<(String, String, String)> {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution manifest + linker
+// Dock targets + linker
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub struct ResolutionTarget {
-    pub name: String,
+pub struct DockTarget {
+    /// 目标定义身份 uid（内容派生，`zx-<32hex>`）。编译入口从注册表
+    /// （云侧 DB / 链侧 resolution）按 uid 读出目标定义——引用按内容
+    /// 精确指向，目标内容变即新 uid，旧引用不静默跟随。
+    pub uid: String,
     pub interfaces: Vec<InterfaceDeclaration>,
-    /// 该定义声明的静态 dock 出边（目标定义 name）。linker 用它做 D015
+    /// 该定义声明的静态 dock 出边（目标定义 uid）。linker 用它做 D015
     /// 环/深度检测；缺省 = 无出边，运行时建立的边由各轨解析面兜底。
     pub dock_edges: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ResolutionManifest {
-    pub targets: Vec<ResolutionTarget>,
+pub struct DockTargets {
+    pub targets: Vec<DockTarget>,
 }
 
-/// 解析 resolution manifest（Store/发布系统或离线 lock 文件提供）。
-/// manifest 是中性 name 目录：name→interfaces 是 linker 的解析面（manifest
-/// 内 name 重名是发布方数据错误，响亮拒绝；name 到实体的解析权威在各
-/// 轨），可选 dockEdges 声明目标自身的静态出边供启动图检测。
-pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest> {
-    let mut issues = Vec::new();
-    let schema = value
-        .get("schemaVersion")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if schema != DOCK_RESOLUTION_SCHEMA_VERSION {
-        issues.push(DockIssue::new(
-            "D008",
-            "resolutionManifest.schemaVersion",
-            format!("must be \"{DOCK_RESOLUTION_SCHEMA_VERSION}\", found {schema:?}"),
-        ));
-        return Err(issues);
+/// 目标定义的静态 dock 出边：全部 executor 的静态 target uid。D015 启动
+/// 图的边集来源（定义声明的静态边；运行时建立的边由各轨解析面兜底）。
+fn extract_static_target_uids(definition: &uvp_model::ZhixuDefinition) -> Vec<String> {
+    let mut edges = Vec::new();
+    for pattern in &definition.spec.task_patterns {
+        for stage in &pattern.stages {
+            let Some(executor) = &stage.executor else {
+                continue;
+            };
+            let Some(config) = &executor.zhixu_executor_config else {
+                continue;
+            };
+            if let Some(uid) = config
+                .get("target")
+                .and_then(|target| target.get("zhixu"))
+                .and_then(Value::as_str)
+            {
+                edges.push(uid.to_string());
+            }
+        }
     }
+    edges
+}
+
+/// 解析编译入口注入的 dock 目标注册表（云侧按 uid 直读注册表、链侧从
+/// resolution 收集）。条目 {uid, definition}：目标定义原文入场，接口声明
+/// 与静态出边由 core 从原文提取——调用方不再自报接口清单，提取规则单源。
+/// uid 是解析键：条目重复即注入数据错误，响亮拒绝。
+pub fn parse_dock_targets(value: &Value) -> DockResult<DockTargets> {
+    let mut issues = Vec::new();
     let mut targets = Vec::new();
-    let mut names_seen = BTreeSet::new();
-    let definitions = value.get("definitions").and_then(Value::as_array);
-    // D008（manifest 计数闸）：definitions 条目数上限——发布方数据错误
-    // 的规模面在解析期收口，不给 link 期留下无界图。闸按引用取 len 先行、
-    // 过闸后才逐条消费：闸门前深拷贝整个数组会让拒绝路径的成本正比于
-    // 载荷规模（毒 manifest 越大越贵），条目解析在超限时一次都不发生。
-    let definitions_len = definitions.map_or(0, Vec::len);
-    if definitions_len > MAX_MANIFEST_DEFINITIONS {
+    let entries = value.as_array();
+    let mut uids_seen = BTreeSet::new();
+    // D008（计数闸）：条目数上限——注入数据错误的规模面在解析期收口，
+    // 不给 link 期留下无界图。闸按引用取 len 先行、过闸后才逐条消费。
+    let entries_len = entries.map_or(0, Vec::len);
+    if entries_len > MAX_MANIFEST_DEFINITIONS {
         issues.push(DockIssue::new(
             "D008",
-            "resolutionManifest.definitions",
+            "dockTargets",
             format!(
-                "manifest carries {definitions_len} definitions, limit is {MAX_MANIFEST_DEFINITIONS}"
+                "dockTargets carries {entries_len} definitions, limit is {MAX_MANIFEST_DEFINITIONS}"
             ),
         ));
         return Err(issues);
     }
-    for (index, entry) in definitions.into_iter().flatten().enumerate() {
-        let path = format!("resolutionManifest.definitions[{index}]");
-        // 条目级键闭集与 interface/dockEdges 闸口同口径：拼错的字段（如
-        // interface 单数、dockEdgess）被静默吸收会让发布方数据错误以缺省
-        // 语义参与 link。
+    for (index, entry) in entries.into_iter().flatten().enumerate() {
+        let path = format!("dockTargets[{index}]");
+        // 条目级键闭集与 interface/dockEdges 闸口同口径：拼错的字段被静默
+        // 吸收会让注入数据错误以缺省语义参与 link。
         if let Some(entry_object) = entry.as_object() {
             for key in entry_object.keys() {
-                if !matches!(key.as_str(), "name" | "dockEdges" | "interfaces") {
+                if !matches!(key.as_str(), "uid" | "definition") {
                     issues.push(DockIssue::new(
                         "D008",
                         format!("{path}.{key}"),
-                        format!(
-                            "unknown field {key:?}; allowed: [\"name\", \"dockEdges\", \"interfaces\"]"
-                        ),
+                        format!("unknown field {key:?}; allowed: [\"uid\", \"definition\"]"),
                     ));
                 }
             }
         }
-        let name = entry
-            .get("name")
+        let uid = entry
+            .get("uid")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .trim()
             .to_string();
-        if name.is_empty() {
+        if uid.is_empty() {
             issues.push(DockIssue::new(
                 "D008",
-                format!("{path}.name"),
-                "name is required (the target definition metadata.name)",
+                format!("{path}.uid"),
+                "uid is required (the target definition content-derived identity)",
             ));
             continue;
         }
-        if !crate::validate::is_name_slug(&name) {
+        if !crate::validate::is_definition_uid(&uid) {
             issues.push(DockIssue::new(
                 "D008",
-                format!("{path}.name"),
+                format!("{path}.uid"),
                 format!(
-                    "name must be the target definition metadata.name, matching ^[a-z][a-z0-9_-]{{0,99}}$, found {name:?}"
+                    "uid must be the target definition content-derived identity, matching ^zx-[0-9a-f]{{32}}$, found {uid:?}"
                 ),
             ));
             continue;
         }
-        if !names_seen.insert(name.clone()) {
+        if !uids_seen.insert(uid.clone()) {
             issues.push(DockIssue::new(
                 "D008",
                 &path,
-                format!("duplicate definition name {name:?}: names are the resolution key and must be unique in the manifest"),
+                format!("duplicate definition uid {uid:?}: uid is the resolution key and must be unique"),
             ));
             continue;
         }
-        // 可选 dockEdges：[{target: <definition name>}]，纯 name 出边。
-        // 缺省视为无出边；形状/残留键非法按 D008 响亮拒绝。
-        let mut dock_edges = Vec::new();
-        match entry.get("dockEdges") {
-            None => {}
-            Some(Value::Array(edge_values)) => {
-                for (edge_index, edge) in edge_values.iter().enumerate() {
-                    let edge_path = format!("{path}.dockEdges[{edge_index}]");
-                    let Some(edge_object) = edge.as_object() else {
-                        issues.push(DockIssue::new(
-                            "D008",
-                            &edge_path,
-                            "dock edge must be an object {target: <definition name>}",
-                        ));
-                        continue;
-                    };
-                    for key in edge_object.keys() {
-                        if key != "target" {
-                            issues.push(DockIssue::new(
-                                "D008",
-                                format!("{edge_path}.{key}"),
-                                format!("unknown field {key:?}; allowed: [\"target\"]"),
-                            ));
-                        }
-                    }
-                    let edge_target = edge_object
-                        .get("target")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    if !crate::validate::is_name_slug(&edge_target) {
-                        issues.push(DockIssue::new(
-                            "D008",
-                            format!("{edge_path}.target"),
-                            format!(
-                                "target must be a definition metadata.name, matching ^[a-z][a-z0-9_-]{{0,99}}$, found {edge_target:?}"
-                            ),
-                        ));
-                        continue;
-                    }
-                    dock_edges.push(edge_target);
+        // 目标定义原文：接口声明与静态出边由 core 从原文单源提取——
+        // 调用方自报接口清单的时代已退役。
+        let definition_value = entry.get("definition").cloned().unwrap_or(Value::Null);
+        let definition: uvp_model::ZhixuDefinition =
+            match serde_json::from_value(definition_value.clone()) {
+                Ok(definition) => definition,
+                Err(err) => {
+                    issues.push(DockIssue::new(
+                        "D008",
+                        format!("{path}.definition"),
+                        format!("target definition is not a valid Zhixu document: {err}"),
+                    ));
+                    continue;
                 }
-            }
-            Some(_) => {
+            };
+
+        // 静态出边：目标定义自身全部静态 dock target uid（D015 启动图）。
+        // 边值来自原文 executor config 的 target.zhixu，uid 形态与 D003
+        // 同口径——形态非法的边进入 D015 图会成为永不匹配的寻址键。
+        let dock_edges = extract_static_target_uids(&definition);
+        for edge in &dock_edges {
+            if !crate::validate::is_definition_uid(edge) {
                 issues.push(DockIssue::new(
                     "D008",
-                    format!("{path}.dockEdges"),
-                    "dockEdges must be an array of {target: <definition name>}",
+                    format!("{path}.definition"),
+                    format!(
+                        "static dock edge target must be a definition uid, matching ^zx-[0-9a-f]{{32}}$, found {edge:?}"
+                    ),
                 ));
+            }
+        }
+        if !issues.is_empty() {
+            continue;
+        }
+
+        // 接口声明：spec.dockInterface 的端口值 {hook}/{signal} 与中性
+        // 形态同构；input 端口的 source 单源推导自 hook 引用所属 stage
+        // 的 source 字段（文法 §8.2——source 是 owning stage 的因果身份）。
+        // 以限定标识 <task>.<stage> 为键：裸 stage 名跨 task pattern 可合法
+        // 重名（treat.main 与 bc.main），裸名索引会后写覆盖并把 seam 推错。
+        let mut stages_by_identifier: BTreeMap<String, &ZhixuStage> = BTreeMap::new();
+        for pattern in &definition.spec.task_patterns {
+            for stage in &pattern.stages {
+                stages_by_identifier.insert(format!("{}.{}", pattern.name, stage.name), stage);
             }
         }
         let mut interfaces = Vec::new();
         let mut interfaces_valid = true;
-        for (interface_index, interface_value) in entry
-            .get("interfaces")
-            .and_then(Value::as_array)
-            .unwrap_or(&Vec::new())
-            .iter()
-            .enumerate()
-        {
-            let interface_path = format!("{path}.interfaces[{interface_index}]");
-            match parse_interface_declaration(interface_value) {
-                Ok(interface) => interfaces.push(interface),
-                Err(mut interface_issues) => {
-                    for issue in &mut interface_issues {
-                        issue.path = format!("{interface_path}.{}", issue.path);
-                    }
-                    issues.append(&mut interface_issues);
-                    interfaces_valid = false;
-                }
+        for (interface_name, spec) in &definition.spec.dock_interface {
+            let interface_path = format!("{path}.definition.spec.dockInterface.{interface_name}");
+            // 接口名与端口名同规则（同 compile_dock_interface 的 D021 口径）：
+            // 调用方按名引用接口，非法名是不可寻址的承诺面。
+            if !valid_port_name(interface_name) {
+                issues.push(DockIssue::new(
+                    "D008",
+                    &interface_path,
+                    format!(
+                        "interface name must match ^[a-z][a-z0-9_]{{0,31}}$, found {interface_name:?}"
+                    ),
+                ));
+                interfaces_valid = false;
+                continue;
             }
+            let mut order_modes = spec.order_modes.clone();
+            order_modes.sort();
+            if !valid_order_modes(&order_modes) {
+                issues.push(DockIssue::new(
+                    "D008",
+                    format!("{interface_path}.orderModes"),
+                    "orderModes must be a non-empty subset of {new, existing} without duplicates",
+                ));
+                interfaces_valid = false;
+                continue;
+            }
+            let mut inputs = Vec::new();
+            for (port_name, port) in &spec.inputs {
+                if !valid_port_name(port_name) {
+                    issues.push(DockIssue::new(
+                        "D008",
+                        format!("{interface_path}.inputs.{port_name}"),
+                        "port name must match ^[a-z][a-z0-9_]{0,31}$",
+                    ));
+                    interfaces_valid = false;
+                    continue;
+                }
+                let Some((stage_identifier, _hook)) = parse_hook_reference(&port.hook) else {
+                    issues.push(DockIssue::new(
+                        "D008",
+                        format!("{interface_path}.inputs.{port_name}.hook"),
+                        format!(
+                            "hook must be <task>.<stage>#<receiveHookName>, found {:?}",
+                            port.hook
+                        ),
+                    ));
+                    interfaces_valid = false;
+                    continue;
+                };
+                let Some(owning_stage) = stages_by_identifier.get(stage_identifier.as_str()) else {
+                    issues.push(DockIssue::new(
+                        "D008",
+                        format!("{interface_path}.inputs.{port_name}.hook"),
+                        format!("hook {:?} references stage {:?} which does not exist in the target definition", port.hook, stage_identifier),
+                    ));
+                    interfaces_valid = false;
+                    continue;
+                };
+                inputs.push(InterfacePortInput {
+                    port: port_name.clone(),
+                    source: owning_stage.source.clone(),
+                    hook: port.hook.clone(),
+                });
+            }
+            let mut outputs = Vec::new();
+            for (port_name, port) in &spec.outputs {
+                if !valid_port_name(port_name) {
+                    issues.push(DockIssue::new(
+                        "D008",
+                        format!("{interface_path}.outputs.{port_name}"),
+                        "port name must match ^[a-z][a-z0-9_]{0,31}$",
+                    ));
+                    interfaces_valid = false;
+                    continue;
+                }
+                // output 形状：canonical 三段式寻址键（与 D014 同口径）——
+                // 空段拼出的键永不匹配，seam 前缀观测同样失真。
+                if parse_canonical_signal(&port.signal).is_none() {
+                    issues.push(DockIssue::new(
+                        "D008",
+                        format!("{interface_path}.outputs.{port_name}.signal"),
+                        format!(
+                            "signal must be <source>::<task>.<stage>.<signal>, found {:?}",
+                            port.signal
+                        ),
+                    ));
+                    interfaces_valid = false;
+                    continue;
+                }
+                outputs.push(InterfacePortOutput {
+                    port: port_name.clone(),
+                    signal: port.signal.clone(),
+                });
+            }
+            interfaces.push(InterfaceDeclaration {
+                name: interface_name.clone(),
+                order_modes,
+                inputs,
+                outputs,
+            });
         }
         if !interfaces_valid {
             continue;
@@ -1190,7 +1274,7 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
         if interfaces.is_empty() {
             issues.push(DockIssue::new(
                 "D008",
-                format!("{path}.interfaces"),
+                format!("{path}.definition.spec.dockInterface"),
                 "target must publish at least one named interface",
             ));
             continue;
@@ -1208,8 +1292,8 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
         if !issues.is_empty() {
             continue;
         }
-        targets.push(ResolutionTarget {
-            name,
+        targets.push(DockTarget {
+            uid,
             interfaces,
             dock_edges,
         });
@@ -1217,215 +1301,7 @@ pub fn parse_resolution_manifest(value: &Value) -> DockResult<ResolutionManifest
     if !issues.is_empty() {
         return Err(issues);
     }
-    Ok(ResolutionManifest { targets })
-}
-
-fn parse_interface_declaration(value: &Value) -> DockResult<InterfaceDeclaration> {
-    let mut issues = Vec::new();
-    let Some(object) = value.as_object() else {
-        return Err(vec![DockIssue::new(
-            "D008",
-            "",
-            "interface must be an object",
-        )]);
-    };
-    // 键闭集：拼错的字段不得被静默忽略成零值语义。
-    for key in object.keys() {
-        if !matches!(key.as_str(), "name" | "orderModes" | "inputs" | "outputs") {
-            issues.push(DockIssue::new(
-                "D008",
-                "",
-                format!("unknown field {key:?}; allowed: [\"name\", \"orderModes\", \"inputs\", \"outputs\"]"),
-            ));
-        }
-    }
-    let name = object
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if !valid_port_name(&name) {
-        issues.push(DockIssue::new(
-            "D008",
-            "name",
-            format!("interface name must match ^[a-z][a-z0-9_]{{0,31}}$, found {name:?}"),
-        ));
-    }
-    // orderModes：数组形态 + 字符串项都按确定性非法输入响亮拒绝——
-    // filter_map 吞掉非字符串项会让 ["new", 123] 静默解析成 ["new"]，
-    // 发布方数据错误以缺省语义参与 link。
-    let mut order_modes = Vec::new();
-    match object.get("orderModes") {
-        None => {}
-        Some(Value::Array(modes)) => {
-            for mode in modes {
-                match mode.as_str() {
-                    Some(mode) => order_modes.push(mode.to_string()),
-                    None => issues.push(DockIssue::new(
-                        "D008",
-                        "orderModes",
-                        format!("orderModes entries must be strings, found {mode}"),
-                    )),
-                }
-            }
-        }
-        Some(other) => issues.push(DockIssue::new(
-            "D008",
-            "orderModes",
-            format!("orderModes must be an array of strings, found {other}"),
-        )),
-    }
-    if !valid_order_modes(&order_modes) {
-        issues.push(DockIssue::new(
-            "D008",
-            "orderModes",
-            "orderModes must be a non-empty subset of {new, existing} without duplicates",
-        ));
-    }
-
-    let mut inputs = Vec::new();
-    // inputs/outputs 的类型非法（字符串、数组等）是确定性发布方数据错误，
-    // 响亮拒绝——as_object().unwrap_or(&Map::new()) 会把 "inputs":
-    // "OOPS" 静默吞成空 map，link 按"无端口"继续。
-    let mut input_ports: Option<&Map<String, Value>> = None;
-    match object.get("inputs") {
-        None => {}
-        Some(Value::Object(ports)) => input_ports = Some(ports),
-        Some(other) => issues.push(DockIssue::new(
-            "D008",
-            "inputs",
-            format!(
-                "inputs must be an object mapping port names to {{source, hook}}, found {other}"
-            ),
-        )),
-    }
-    for (port_name, port) in input_ports.into_iter().flatten() {
-        let port_path = format!("inputs.{port_name}");
-        if !valid_port_name(port_name) {
-            issues.push(DockIssue::new(
-                "D008",
-                &port_path,
-                "port name must match ^[a-z][a-z0-9_]{0,31}$",
-            ));
-            continue;
-        }
-        let Some(port_object) = port.as_object() else {
-            issues.push(DockIssue::new(
-                "D008",
-                &port_path,
-                "input port must be an object {source, hook}",
-            ));
-            continue;
-        };
-        for key in port_object.keys() {
-            if !matches!(key.as_str(), "source" | "hook") {
-                issues.push(DockIssue::new(
-                    "D008",
-                    format!("{port_path}.{key}"),
-                    format!("unknown field {key:?}; allowed: [\"source\", \"hook\"]"),
-                ));
-            }
-        }
-        // source 必填（单源 seam 的 input 侧观测面）：缺失/空白即响亮失败，
-        // 不回退、不臆造——linker 的双侧单源校验依赖该字段。
-        let source = port_object
-            .get("source")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if source.is_empty() {
-            issues.push(DockIssue::new(
-                "D008",
-                format!("{port_path}.source"),
-                "source is required (the owning stage's source class); it must not be blank",
-            ));
-            continue;
-        }
-        let hook = port_object
-            .get("hook")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if parse_hook_reference(hook).is_none() {
-            issues.push(DockIssue::new(
-                "D008",
-                format!("{port_path}.hook"),
-                format!("hook must be <task>.<stage>#<receiveHookName>, found {hook:?}"),
-            ));
-            continue;
-        }
-        inputs.push(InterfacePortInput {
-            port: port_name.clone(),
-            source,
-            hook: hook.to_string(),
-        });
-    }
-
-    let mut outputs = Vec::new();
-    let mut output_ports: Option<&Map<String, Value>> = None;
-    match object.get("outputs") {
-        None => {}
-        Some(Value::Object(ports)) => output_ports = Some(ports),
-        Some(other) => issues.push(DockIssue::new(
-            "D008",
-            "outputs",
-            format!("outputs must be an object mapping port names to {{signal}}, found {other}"),
-        )),
-    }
-    for (port_name, port) in output_ports.into_iter().flatten() {
-        let port_path = format!("outputs.{port_name}");
-        if !valid_port_name(port_name) {
-            issues.push(DockIssue::new(
-                "D008",
-                &port_path,
-                "port name must match ^[a-z][a-z0-9_]{0,31}$",
-            ));
-            continue;
-        }
-        let Some(port_object) = port.as_object() else {
-            issues.push(DockIssue::new(
-                "D008",
-                &port_path,
-                "output port must be an object {signal: <source>::<task>.<stage>.<signal>}",
-            ));
-            continue;
-        };
-        for key in port_object.keys() {
-            if key != "signal" {
-                issues.push(DockIssue::new(
-                    "D008",
-                    format!("{port_path}.{key}"),
-                    format!("unknown field {key:?}; allowed: [\"signal\"]"),
-                ));
-            }
-        }
-        let signal = port_object
-            .get("signal")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if parse_canonical_signal(signal).is_none() {
-            issues.push(DockIssue::new(
-                "D008",
-                format!("{port_path}.signal"),
-                format!("signal must be <source>::<task>.<stage>.<signal>, found {signal:?}"),
-            ));
-            continue;
-        }
-        outputs.push(InterfacePortOutput {
-            port: port_name.clone(),
-            signal: signal.to_string(),
-        });
-    }
-
-    if !issues.is_empty() {
-        return Err(issues);
-    }
-    Ok(InterfaceDeclaration {
-        name,
-        order_modes,
-        inputs,
-        outputs,
-    })
+    Ok(DockTargets { targets })
 }
 
 // ---------------------------------------------------------------------------
@@ -1449,7 +1325,7 @@ pub struct DockRouteOutput {
 #[derive(Debug, Clone)]
 pub struct DockRoute {
     pub stage_identifier: String,
-    pub target_name: String,
+    pub target_uid: String,
     pub target_interface_name: String,
     /// `new` | `existing`。
     pub order_mode: String,
@@ -1465,7 +1341,7 @@ impl DockRoute {
                 "stageIdentifier": self.stage_identifier,
             },
             "target": {
-                "name": self.target_name,
+                "uid": self.target_uid,
                 "interfaceName": self.target_interface_name,
             },
             "orderMode": self.order_mode,
@@ -1481,20 +1357,19 @@ impl DockRoute {
     }
 }
 
-/// Link：本地未链接 routes + resolution manifest → 已解析 DockRoute 列表
+/// Link：本地未链接 routes + 目标注册表 → 已解析 DockRoute 列表
 /// （D008-D012、D015、D020）。纯函数，无网络、无 I/O。
-/// 目标按 name 查找；跨定义的内容校验（身份重算/哈希比对）是各轨解析
-/// 面的内务，不在 core。binding 数量上限（D016）在 parse 期钉死——
-/// target:null 的 route 不经此处，link 期不重复设闸。
+/// 目标按 uid 查找（引用按内容精确指向）；binding 数量上限（D016）在
+/// parse 期钉死——target:null 的 route 不经此处，link 期不重复设闸。
 pub fn link_dock_routes(
     local_name: &str,
     unlinked: &[UnlinkedDockRoute],
-    manifest: &ResolutionManifest,
+    targets: &DockTargets,
 ) -> DockResult<Vec<DockRoute>> {
     let mut issues = Vec::new();
 
-    let find_target = |name: &str| -> Option<&ResolutionTarget> {
-        manifest.targets.iter().find(|target| target.name == name)
+    let find_target = |uid: &str| -> Option<&DockTarget> {
+        targets.targets.iter().find(|target| target.uid == uid)
     };
 
     let mut routes = Vec::new();
@@ -1504,7 +1379,7 @@ pub fn link_dock_routes(
         let mut route_issues = Vec::new();
         let config = &route.config;
         let path = format!("{}.executor.zhixuExecutorConfig", route.stage_identifier);
-        let Some(target_name) = &config.target_name else {
+        let Some(target_uid) = &config.target_uid else {
             route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
@@ -1513,11 +1388,11 @@ pub fn link_dock_routes(
             issues.extend(route_issues);
             continue;
         };
-        let Some(target) = find_target(target_name) else {
+        let Some(target) = find_target(target_uid) else {
             route_issues.push(DockIssue::new(
                 "D008",
                 format!("{path}.target"),
-                format!("resolution manifest has no definition named {target_name:?}"),
+                format!("no published definition with uid {target_uid:?}: static targets require the target to be registered at compile time"),
             ));
             issues.extend(route_issues);
             continue;
@@ -1533,7 +1408,7 @@ pub fn link_dock_routes(
                 "D009",
                 format!("{path}.interface"),
                 format!(
-                    "target {target_name:?} has no interface {:?}",
+                    "target {target_uid:?} has no interface {:?}",
                     config.interface_name
                 ),
             ));
@@ -1550,7 +1425,7 @@ pub fn link_dock_routes(
                 "D020",
                 format!("{path}.order.mode"),
                 format!(
-                    "interface {:?} of target {target_name:?} allows orderModes {:?}, found {:?}",
+                    "interface {:?} of target {target_uid:?} allows orderModes {:?}, found {:?}",
                     config.interface_name, interface.order_modes, config.order_mode
                 ),
             ));
@@ -1566,7 +1441,7 @@ pub fn link_dock_routes(
                     "D009",
                     format!("{path}.inputMap.{local_hook}"),
                     format!(
-                        "interface {:?} of target {target_name:?} has no input port {port_name:?}",
+                        "interface {:?} of target {target_uid:?} has no input port {port_name:?}",
                         config.interface_name
                     ),
                 ));
@@ -1585,7 +1460,7 @@ pub fn link_dock_routes(
                     "D009",
                     format!("{path}.signalMap.{local_signal}"),
                     format!(
-                        "interface {:?} of target {target_name:?} has no output port {port_name:?}",
+                        "interface {:?} of target {target_uid:?} has no output port {port_name:?}",
                         config.interface_name
                     ),
                 ));
@@ -1647,7 +1522,7 @@ pub fn link_dock_routes(
 
         routes.push(DockRoute {
             stage_identifier: route.stage_identifier.clone(),
-            target_name: target_name.clone(),
+            target_uid: target_uid.clone(),
             target_interface_name: interface.name.clone(),
             order_mode: config.order_mode.clone(),
             inputs: resolved_inputs,
@@ -1659,16 +1534,16 @@ pub fn link_dock_routes(
         return Err(issues);
     }
 
-    // D015：route 启动图无环且深度受限。节点为定义 name，边 = 本地
-    // resolved route + manifest 各定义声明的静态 dockEdges；缺 dockEdges
-    // 的定义视为无出边（运行时建立的边由各轨解析面对实际父实例深度
-    // 兜底）。环拒绝先于深度计算，保证最长路径有限且确定。
+    // D015：route 启动图无环且深度受限。节点为定义 uid，边 = 本地
+    // resolved route + 各目标声明的静态 dockEdges；缺 dockEdges 的定义
+    // 视为无出边（运行时建立的边由各轨解析面对实际父实例深度兜底）。
+    // 环拒绝先于深度计算，保证最长路径有限且确定。
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let local_node = local_name.to_string();
-    for target in &manifest.targets {
+    for target in &targets.targets {
         for edge in &target.dock_edges {
             edges
-                .entry(target.name.clone())
+                .entry(target.uid.clone())
                 .or_default()
                 .insert(edge.clone());
         }
@@ -1677,7 +1552,7 @@ pub fn link_dock_routes(
         edges
             .entry(local_node.clone())
             .or_default()
-            .insert(route.target_name.clone());
+            .insert(route.target_uid.clone());
     }
     if let Some(cycle) = find_route_cycle(&edges) {
         issues.push(DockIssue::new(
@@ -1769,18 +1644,119 @@ fn max_reachable_route_depth(edges: &BTreeMap<String, BTreeSet<String>>, root: &
 mod tests {
     use super::*;
 
+    /// uid 形态的测试占位（^zx-[0-9a-f]{32}$）：测试语义只依赖形态与
+    /// 相等性，不依赖派生过程（派生是各轨内务）。
+    const TARGET_UID: &str = "zx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const EDGE_UID: &str = "zx-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    /// 最小合法 Zhixu 文档壳：单 task，stages 与 dockInterface 由用例给。
+    /// 注册表条目的 definition 必须是模型层可反序列化的完整文档。
+    fn zhixu_document(stages: Value, dock_interface: Value) -> Value {
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "target_definition" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "target-core" },
+                "taskPatterns": [{ "name": "main", "stages": stages }],
+                "dockInterface": dock_interface,
+            }
+        })
+    }
+
+    fn target_entry(definition: Value) -> Value {
+        json!({ "uid": TARGET_UID, "definition": definition })
+    }
+
+    /// 双 task pattern 文档：两个 pattern 各带一个同名裸 stage（main），
+    /// source 不同——限定标识键控的回归面。
+    fn two_pattern_document_with_same_stage_names() -> Value {
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "wwt_definition" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "wwt-core" },
+                "taskPatterns": [
+                    { "name": "treat", "stages": [plain_stage("main", "wwt")] },
+                    { "name": "bc", "stages": [plain_stage("main", "dyeing")] },
+                ],
+                "dockInterface": { "svc": interface_spec(
+                    json!(["existing"]),
+                    json!({ "amend": { "hook": "treat.main#DOCK_AMEND" } }),
+                    json!({}),
+                ) },
+            }
+        })
+    }
+
+    /// 裸 stage 名跨 pattern 重名（treat.main 与 bc.main、source 不同）时，
+    /// input 端口 seam 必须按限定标识推导出 owning stage 的 source——
+    /// 裸名索引会后写覆盖，把 treat 端口错推成 bc 的 source。
     #[test]
-    fn manifest_rejects_duplicate_definition_names() {
-        // name 是 linker 的解析键：manifest 内重名会让同名查找二义，
+    fn dock_target_input_source_survives_duplicate_bare_stage_names() {
+        let targets = json!([target_entry(two_pattern_document_with_same_stage_names())]);
+        let parsed = parse_dock_targets(&targets).expect("duplicate bare stage names parse");
+        let inputs = &parsed.targets[0].interfaces[0].inputs;
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].source, "wwt", "seam must follow the qualified owning stage");
+    }
+
+    /// 无 executor 的最小 stage（source 供 input 端口单源推导）。
+    fn plain_stage(name: &str, source: &str) -> Value {
+        json!({ "name": name, "source": source })
+    }
+
+    /// 带静态 dock target 的 zhixu executor stage（出边提取源；
+    /// target:null = 动态选择，无静态出边）。
+    fn zhixu_stage(name: &str, source: &str, target_uid: Option<&str>) -> Value {
+        json!({
+            "name": name,
+            "source": source,
+            "executor": {
+                "supplierType": "zhixu",
+                "zhixuExecutorConfig": {
+                    "target": target_uid
+                        .map(|uid| json!({ "zhixu": uid }))
+                        .unwrap_or(Value::Null),
+                    "interface": "svc",
+                    "order": { "mode": "existing" },
+                    "signalMap": { "cmp": "done" },
+                }
+            }
+        })
+    }
+
+    fn interface_spec(order_modes: Value, inputs: Value, outputs: Value) -> Value {
+        json!({ "orderModes": order_modes, "inputs": inputs, "outputs": outputs })
+    }
+
+    /// 单接口 svc 的最小目标定义：execute 端口引用 stage work。
+    fn minimal_definition() -> Value {
+        zhixu_document(
+            json!([plain_stage("work", "buyer")]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({}),
+                )
+            }),
+        )
+    }
+
+    #[test]
+    fn dock_targets_reject_duplicate_definition_uids() {
+        // uid 是 linker 的解析键：注册表内重复 uid 会让按内容查找二义，
         // 必须在解析期响亮拒绝而不是静默取第一条。
-        let manifest = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [
-                { "name": "payment_execution", "interfaces": [minimal_interface("svc")] },
-                { "name": "payment_execution", "interfaces": [minimal_interface("svc")] },
-            ]
-        });
-        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+        let definition = minimal_definition();
+        let targets = json!([
+            { "uid": TARGET_UID, "definition": definition.clone() },
+            { "uid": TARGET_UID, "definition": definition },
+        ]);
+        let issues = parse_dock_targets(&targets).unwrap_err();
         assert!(
             issues
                 .iter()
@@ -1790,165 +1766,425 @@ mod tests {
     }
 
     #[test]
-    fn manifest_parses_optional_name_dock_edges() {
-        // dockEdges 是可选的纯 name 出边：缺省=无出边；形状/残留键/非法
-        // name 都是确定性的 D008，不得静默吞成空边。
-        let manifest = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "payment_execution",
-                "interfaces": [minimal_interface("svc")],
-                "dockEdges": [{ "target": "settlement" }],
-            }]
-        });
-        let parsed = parse_resolution_manifest(&manifest).expect("dockEdges parse");
-        assert_eq!(parsed.targets[0].dock_edges, vec!["settlement".to_string()]);
-
-        let without_edges = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "payment_execution",
-                "interfaces": [minimal_interface("svc")],
-            }]
-        });
-        let parsed = parse_resolution_manifest(&without_edges).expect("missing dockEdges parses");
-        assert!(parsed.targets[0].dock_edges.is_empty());
-
-        for (label, bad) in [
-            ("not an array", json!("nope")),
-            (
-                "unknown edge field",
-                json!([{ "target": "settlement", "zhixu": "x" }]),
-            ),
-            ("bad target slug", json!([{ "target": "Not-A-Name" }])),
-            ("missing target", json!([{ "ref": "settlement" }])),
+    fn dock_targets_reject_malformed_uids() {
+        // uid 是内容派生身份（^zx-[0-9a-f]{32}$）：缺失/空白/非 uid 形态
+        // 都是确定性 D008，name 形态的旧寻址不再被接受。
+        for (label, uid) in [
+            ("missing uid", None),
+            ("blank uid", Some("  ")),
+            ("slug-shaped uid", Some("payment_execution")),
+            ("short uid", Some("zx-aaaa")),
+            ("uppercase uid", Some("zx-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
         ] {
-            let mut poisoned = manifest.clone();
-            poisoned["definitions"][0]["dockEdges"] = bad;
-            let issues = parse_resolution_manifest(&poisoned)
-                .expect_err(&format!("{label}: dockEdges must be rejected"));
+            let mut entry = target_entry(minimal_definition());
+            match uid {
+                Some(uid) => entry["uid"] = json!(uid),
+                None => {
+                    entry.as_object_mut().unwrap().remove("uid");
+                }
+            }
+            let issues = parse_dock_targets(&json!([entry]))
+                .expect_err(&format!("{label}: must be rejected"));
             assert!(
-                !issues.is_empty() && issues.iter().all(|issue| issue.code == "D008"),
+                issues
+                    .iter()
+                    .any(|issue| issue.code == "D008" && issue.path.ends_with(".uid")),
                 "{label}: {issues:?}"
             );
         }
     }
 
     #[test]
-    fn manifest_rejects_unknown_interface_fields() {
-        let interface = json!({
-            "name": "svc",
-            "orderModes": ["new"],
-            "inputs": { "execute": { "hook": "main.work#DOCK_ENTER" } },
-            "outputs": {},
-            "artifactHash": "0x00",
-        });
-        let manifest = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{ "name": "payment_execution", "interfaces": [interface] }],
-        });
-        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+    fn dock_targets_reject_invalid_definitions() {
+        // definition 必须是完整合法 Zhixu 文档（deny_unknown_fields）：
+        // 缺失/非对象/缺必填键/未知键都是确定性 D008，不得以零值语义入场。
+        for (label, entry) in [
+            ("missing definition", json!([{ "uid": TARGET_UID }])),
+            (
+                "definition not an object",
+                json!([target_entry(json!("OOPS"))]),
+            ),
+            (
+                "definition missing spec",
+                json!([target_entry(json!({
+                    "apiVersion": "uvp/v0",
+                    "kind": "Zhixu",
+                    "metadata": { "name": "target_definition" },
+                }))]),
+            ),
+            (
+                "definition unknown field",
+                json!([target_entry(json!({
+                    "apiVersion": "uvp/v0",
+                    "kind": "Zhixu",
+                    "metadata": { "name": "target_definition", "uid": "zx-0" },
+                    "spec": {
+                        "platform": { "type": "cloud" },
+                        "nucleation": { "id": "target-core" },
+                    },
+                }))]),
+            ),
+        ] {
+            let issues =
+                parse_dock_targets(&entry).expect_err(&format!("{label}: must be rejected"));
+            assert!(
+                issues.iter().any(|issue| issue.code == "D008"
+                    && issue.path.ends_with(".definition")
+                    && issue.message.contains("not a valid Zhixu document")),
+                "{label}: {issues:?}"
+            );
+        }
+        // 基线：最小合法文档照常解析。
+        parse_dock_targets(&json!([target_entry(minimal_definition())]))
+            .expect("minimal definition parses");
+    }
+
+    #[test]
+    fn dock_targets_reject_unknown_entry_fields() {
+        // 条目级键闭集 {uid, definition}：调用方预提取时代的残留键
+        // （interfaces/dockEdges）按未知字段拒绝——注入数据错误不得以
+        // 缺省语义参与 link。
+        let targets = json!([{
+            "uid": TARGET_UID,
+            "definition": minimal_definition(),
+            "interfaces": [],
+            "dockEdges": [],
+        }]);
+        let issues = parse_dock_targets(&targets).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.message.contains("unknown field")
+                && issue.message.contains("\"interfaces\"")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.message.contains("unknown field")
+                && issue.message.contains("\"dockEdges\"")),
+            "{issues:?}"
+        );
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.code == "D008" && issue.message.contains("artifactHash")),
+                .all(|issue| issue.message.contains("allowed: [\"uid\", \"definition\"]")),
             "{issues:?}"
         );
     }
 
     #[test]
-    fn manifest_rejects_unknown_definition_fields() {
-        // 条目级键闭集：interface 声明合法但残留拼错键（interface 单数）也
-        // 按未知字段拒绝——发布方数据错误不得以缺省语义参与 link。
-        let manifest = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "payment_execution",
-                "interfaces": [minimal_interface("svc")],
-                "interface": [minimal_interface("svc")],
-            }]
-        });
-        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+    fn dock_targets_extract_dock_edges_from_definition() {
+        // 出边不再由调用方声明：core 从 definition 全部 executor 的静态
+        // target.zhixu 单源提取（按 taskPattern 声明顺序）；缺省=无出边。
+        let with_edge = json!([target_entry(zhixu_document(
+            json!([zhixu_stage("work", "buyer", Some(EDGE_UID))]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({}),
+                )
+            }),
+        ))]);
+        let parsed = parse_dock_targets(&with_edge).expect("edge extraction parses");
+        assert_eq!(parsed.targets[0].dock_edges, vec![EDGE_UID.to_string()]);
+
+        // 多 executor 多出边，按声明顺序。
+        let multi_edge = json!([target_entry(zhixu_document(
+            json!([
+                zhixu_stage("work", "buyer", Some(EDGE_UID)),
+                zhixu_stage("audit", "buyer", Some(TARGET_UID)),
+            ]),
+            json!({
+                "svc": interface_spec(
+                    json!(["existing"]),
+                    json!({
+                        "execute": { "hook": "main.work#DOCK_ENTER" },
+                        "audit": { "hook": "main.audit#DOCK_AUDIT" },
+                    }),
+                    json!({ "done": { "signal": "buyer::main.work.cmp" } }),
+                )
+            }),
+        ))]);
+        let parsed = parse_dock_targets(&multi_edge).expect("multi-edge extraction parses");
+        assert_eq!(
+            parsed.targets[0].dock_edges,
+            vec![EDGE_UID.to_string(), TARGET_UID.to_string()]
+        );
+
+        // target:null（动态选择）与无 executor 的 stage 均无出边。
+        let no_edge = json!([target_entry(zhixu_document(
+            json!([
+                zhixu_stage("work", "buyer", None),
+                plain_stage("plain", "buyer")
+            ]),
+            json!({
+                "svc": interface_spec(
+                    json!(["existing"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({}),
+                )
+            }),
+        ))]);
+        let parsed = parse_dock_targets(&no_edge).expect("executor-less definition parses");
+        assert!(parsed.targets[0].dock_edges.is_empty());
+
+        // 形态非法的边值（name slug）按 D008 拒绝：进入 D015 图会成为
+        // 永不匹配的寻址键。
+        let bad_edge = json!([target_entry(zhixu_document(
+            json!([zhixu_stage("work", "buyer", Some("Not-A-Uid"))]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({}),
+                )
+            }),
+        ))]);
+        let issues = parse_dock_targets(&bad_edge).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
-                && issue.message.contains("unknown field")
-                && issue.message.contains("\"interface\"")),
+                && issue
+                    .message
+                    .contains("static dock edge target must be a definition uid")),
             "{issues:?}"
         );
-    }
-
-    fn minimal_interface(name: &str) -> Value {
-        json!({
-            "name": name,
-            "orderModes": ["new"],
-            "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
-            "outputs": {},
-        })
     }
 
     #[test]
-    fn manifest_input_ports_require_source() {
-        // input 端口的 source 兄弟键是 manifest 必填项——
-        // 缺失/空白/非字符串都是确定性 D008，不回退、不臆造。
-        let base = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "payment_execution",
-                "interfaces": [{
-                    "name": "svc",
-                    "orderModes": ["new"],
-                    "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
-                    "outputs": {},
-                }],
-            }]
-        });
-        parse_resolution_manifest(&base).expect("input port with source parses");
+    fn dock_targets_require_at_least_one_interface() {
+        // 目标无 dockInterface（键缺席或空 map）＝无可引用的承诺面：D008 拒绝。
+        let missing = json!([{
+            "uid": TARGET_UID,
+            "definition": {
+                "apiVersion": "uvp/v0",
+                "kind": "Zhixu",
+                "metadata": { "name": "target_definition" },
+                "spec": {
+                    "platform": { "type": "cloud" },
+                    "nucleation": { "id": "target-core" },
+                    "taskPatterns": [
+                        { "name": "main", "stages": [{ "name": "work", "source": "buyer" }] }
+                    ],
+                }
+            }
+        }]);
+        let empty = json!([target_entry(zhixu_document(
+            json!([plain_stage("work", "buyer")]),
+            json!({}),
+        ))]);
+        for (label, targets) in [
+            ("missing dockInterface", missing),
+            ("empty dockInterface", empty),
+        ] {
+            let issues =
+                parse_dock_targets(&targets).expect_err(&format!("{label}: must be rejected"));
+            assert!(
+                issues.iter().any(|issue| issue.code == "D008"
+                    && issue.path.ends_with(".definition.spec.dockInterface")
+                    && issue
+                        .message
+                        .contains("target must publish at least one named interface")),
+                "{label}: {issues:?}"
+            );
+        }
+    }
 
-        let mut missing = base.clone();
-        missing["definitions"][0]["interfaces"][0]["inputs"]["execute"]
-            .as_object_mut()
-            .unwrap()
-            .remove("source");
-        let issues = parse_resolution_manifest(&missing).unwrap_err();
+    #[test]
+    fn dock_targets_reject_invalid_interface_names() {
+        // 接口名与端口名同规则（^[a-z][a-z0-9_]{0,31}$）：调用方按名引用
+        // 接口，非法名是不可寻址的承诺面。
+        let mut definition = minimal_definition();
+        let svc = definition["spec"]["dockInterface"]["svc"].clone();
+        let dock = definition["spec"]["dockInterface"].as_object_mut().unwrap();
+        dock.remove("svc");
+        dock.insert("Bad-Name".to_string(), svc);
+        let issues = parse_dock_targets(&json!([target_entry(definition)])).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
-                && issue.path.ends_with("inputs.execute.source")
-                && issue.message.contains("source is required")),
+                && issue
+                    .message
+                    .contains("interface name must match ^[a-z][a-z0-9_]{0,31}$")),
             "{issues:?}"
         );
+    }
 
-        let mut blank = base.clone();
-        blank["definitions"][0]["interfaces"][0]["inputs"]["execute"]["source"] = json!("  ");
-        let issues = parse_resolution_manifest(&blank).unwrap_err();
-        assert!(
-            issues
-                .iter()
-                .any(|issue| issue.code == "D008" && issue.message.contains("must not be blank")),
-            "{issues:?}"
-        );
-
-        // 键闭集同步：source/hook 之外的兄弟键按未知字段拒绝。
-        let mut extra = base;
-        extra["definitions"][0]["interfaces"][0]["inputs"]["execute"]["sourceClass"] =
-            json!("buyer");
-        let issues = parse_resolution_manifest(&extra).unwrap_err();
+    #[test]
+    fn dock_targets_reject_invalid_port_names() {
+        // 端口名闸保留（input/output 两侧）：拼错的端口名不可被 route 绑定。
+        let mut definition = minimal_definition();
+        definition["spec"]["dockInterface"]["svc"]["inputs"]["Bad-Port"] =
+            json!({ "hook": "main.work#DOCK_ENTER" });
+        let issues = parse_dock_targets(&json!([target_entry(definition)])).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
-                && issue.message.contains("unknown field")
-                && issue.message.contains("sourceClass")),
+                && issue.path.contains(".inputs.Bad-Port")
+                && issue
+                    .message
+                    .contains("port name must match ^[a-z][a-z0-9_]{0,31}$")),
             "{issues:?}"
         );
+
+        let mut definition = minimal_definition();
+        definition["spec"]["dockInterface"]["svc"]["outputs"]["Bad-Port"] =
+            json!({ "signal": "buyer::main.work.cmp" });
+        let issues = parse_dock_targets(&json!([target_entry(definition)])).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.path.contains(".outputs.Bad-Port")
+                && issue
+                    .message
+                    .contains("port name must match ^[a-z][a-z0-9_]{0,31}$")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn dock_targets_reject_unknown_interface_fields() {
+        // 接口 spec 键闭集 {orderModes, inputs, outputs}（模型层）：
+        // 残留拼错键让原文不是合法 Zhixu 文档，按 D008 拒绝。
+        let mut definition = minimal_definition();
+        definition["spec"]["dockInterface"]["svc"]["artifactHash"] = json!("0x00");
+        let issues = parse_dock_targets(&json!([target_entry(definition)])).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.message.contains("not a valid Zhixu document")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn dock_targets_reject_invalid_order_mode_entries() {
+        // orderModes 形状（数组/字符串项）在模型反序列化即拒绝；
+        // {new, existing} 闭集与无重复由 core 校验（D025 同口径）。
+        let with_modes = |order_modes: Value| {
+            let mut definition = minimal_definition();
+            definition["spec"]["dockInterface"]["svc"]["orderModes"] = order_modes;
+            json!([target_entry(definition)])
+        };
+        for (label, modes) in [
+            ("non-string entry", json!(["new", 123])),
+            ("not an array", json!("new")),
+        ] {
+            let issues = parse_dock_targets(&with_modes(modes))
+                .expect_err(&format!("{label}: must be rejected"));
+            assert!(
+                issues.iter().any(|issue| issue.code == "D008"
+                    && issue.path.ends_with(".definition")
+                    && issue.message.contains("not a valid Zhixu document")),
+                "{label}: {issues:?}"
+            );
+        }
+        for (label, modes) in [
+            ("closed-set violation", json!(["reused"])),
+            ("empty modes", json!([])),
+            ("duplicate modes", json!(["new", "new"])),
+        ] {
+            let issues = parse_dock_targets(&with_modes(modes))
+                .expect_err(&format!("{label}: must be rejected"));
+            assert!(
+                issues.iter().any(|issue| issue.code == "D008"
+                    && issue.path.ends_with(".orderModes")
+                    && issue
+                        .message
+                        .contains("non-empty subset of {new, existing}")),
+                "{label}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dock_target_input_source_is_derived_from_owning_stage() {
+        // input 端口不再自报 source：core 从 hook 引用末段 stage 的 source
+        // 单源推导；source 键成了调用方不可写字段（模型闭集拒绝）。
+        let base = json!([target_entry(zhixu_document(
+            json!([plain_stage("work", "buyer")]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({}),
+                )
+            }),
+        ))]);
+        let parsed = parse_dock_targets(&base).expect("derivable source parses");
+        let input = &parsed.targets[0].interfaces[0].inputs[0];
+        assert_eq!(input.source, "buyer");
+        assert_eq!(input.hook, "main.work#DOCK_ENTER");
+
+        // hook 引用不存在的 stage：推导无主，D008 响亮拒绝。
+        let mut ghost = minimal_definition();
+        ghost["spec"]["dockInterface"]["svc"]["inputs"]["execute"]["hook"] =
+            json!("main.ghost#DOCK_ENTER");
+        let issues = parse_dock_targets(&json!([target_entry(ghost)])).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.path.ends_with(".hook")
+                && issue.message.contains("references stage")
+                && issue
+                    .message
+                    .contains("does not exist in the target definition")),
+            "{issues:?}"
+        );
+
+        // hook 形状非法。
+        let mut malformed = minimal_definition();
+        malformed["spec"]["dockInterface"]["svc"]["inputs"]["execute"]["hook"] = json!("main.work");
+        let issues = parse_dock_targets(&json!([target_entry(malformed)])).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue
+                    .message
+                    .contains("hook must be <task>.<stage>#<receiveHookName>")),
+            "{issues:?}"
+        );
+
+        // source 兄弟键不再是调用方字段：出现即未知字段（无效文档）。
+        let mut with_source = minimal_definition();
+        with_source["spec"]["dockInterface"]["svc"]["inputs"]["execute"]["source"] = json!("buyer");
+        let issues = parse_dock_targets(&json!([target_entry(with_source)])).unwrap_err();
+        assert!(
+            issues.iter().any(|issue| issue.code == "D008"
+                && issue.message.contains("not a valid Zhixu document")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn dock_targets_reject_invalid_interface_shapes() {
+        // inputs/outputs 类型非法（字符串/数组）在模型反序列化即拒绝：
+        // 原文不是合法 Zhixu 文档，不得静默吞成空 map 按"无端口"继续 link。
+        for (label, key, bad) in [
+            ("inputs string", "inputs", json!("OOPS-NOT-AN-OBJECT")),
+            ("inputs array", "inputs", json!([])),
+            ("outputs string", "outputs", json!("OOPS-NOT-AN-OBJECT")),
+            ("outputs number", "outputs", json!(7)),
+        ] {
+            let mut definition = minimal_definition();
+            definition["spec"]["dockInterface"]["svc"][key] = bad;
+            let issues = parse_dock_targets(&json!([target_entry(definition)]))
+                .err()
+                .unwrap_or_else(|| panic!("{label}: must be rejected"));
+            assert!(
+                issues.iter().any(|issue| issue.code == "D008"
+                    && issue.path.ends_with(".definition")
+                    && issue.message.contains("not a valid Zhixu document")),
+                "{label}: {issues:?}"
+            );
+        }
+        // 基线：键缺席（可选）与对象形态照常解析。
+        parse_dock_targets(&json!([target_entry(minimal_definition())]))
+            .expect("object-shaped inputs/outputs parse");
     }
 
     #[test]
     fn link_rejects_cross_source_seams_from_both_sides() {
-        // D012 从 input 端口 source 与 output signal 前缀双侧
-        // 观测 seam——被绑定接口的任一侧跨源即拒绝（编译期 input 侧校验）。
+        // D012 从 input 端口 source（core 由 owning stage 推导）与 output
+        // signal 前缀双侧观测 seam——被绑定接口的任一侧跨源即拒绝。
         let unlinked = vec![UnlinkedDockRoute {
             stage_identifier: "local.stage".to_string(),
             stage_source: "local-src".to_string(),
             config: ZhixuExecutorConfig {
-                target_name: Some("target_def".to_string()),
+                target_uid: Some(TARGET_UID.to_string()),
                 interface_name: "svc".to_string(),
                 order_mode: ORDER_MODE_NEW.to_string(),
                 input_map: BTreeMap::from([("ENTER".to_string(), "execute".to_string())]),
@@ -1957,45 +2193,39 @@ mod tests {
         }];
 
         // 基线：双侧同源放行。
-        let single_seam_manifest = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "target_def",
-                "interfaces": [{
-                    "name": "svc",
-                    "orderModes": ["new"],
-                    "inputs": {
-                        "execute": { "source": "alpha", "hook": "main.work#DOCK_ENTER" }
-                    },
-                    "outputs": {},
-                }],
-            }]
-        });
-        let manifest = parse_resolution_manifest(&single_seam_manifest).unwrap();
-        link_dock_routes("local", &unlinked, &manifest)
+        let single_seam_targets = json!([target_entry(zhixu_document(
+            json!([plain_stage("work", "alpha")]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({}),
+                )
+            }),
+        ))]);
+        let targets = parse_dock_targets(&single_seam_targets).unwrap();
+        link_dock_routes("local", &unlinked, &targets)
             .expect("single-seam interface on both sides links");
 
         // 未绑定的跨源 input 端口不参与 seam（文法 §8.4：seam 只覆盖本
         // route 引用的端口）：接口另有一个 beta 源端口，但本 route 只绑定
         // execute——照常链接。旧行为（被绑定接口的全部 input 端口都参与
         // 观测）会把该形态误拒。
-        let unbound_cross = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "target_def",
-                "interfaces": [{
-                    "name": "svc",
-                    "orderModes": ["new", "existing"],
-                    "inputs": {
-                        "execute": { "source": "alpha", "hook": "main.work#DOCK_ENTER" },
-                        "audit": { "source": "beta", "hook": "main.work#DOCK_AUDIT" }
-                    },
-                    "outputs": {},
-                }],
-            }]
-        });
-        let manifest = parse_resolution_manifest(&unbound_cross).unwrap();
-        link_dock_routes("local", &unlinked, &manifest)
+        let unbound_cross = json!([target_entry(zhixu_document(
+            json!([plain_stage("work", "alpha"), plain_stage("audit", "beta")]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new", "existing"]),
+                    json!({
+                        "execute": { "hook": "main.work#DOCK_ENTER" },
+                        "audit": { "hook": "main.audit#DOCK_AUDIT" },
+                    }),
+                    json!({}),
+                )
+            }),
+        ))]);
+        let targets = parse_dock_targets(&unbound_cross).unwrap();
+        link_dock_routes("local", &unlinked, &targets)
             .expect("unbound cross-source input port must not join the seam");
 
         // route 绑定的两个 input 端口跨源（existing 模式允许 0..N 条 input
@@ -2004,7 +2234,7 @@ mod tests {
             stage_identifier: "local.stage".to_string(),
             stage_source: "local-src".to_string(),
             config: ZhixuExecutorConfig {
-                target_name: Some("target_def".to_string()),
+                target_uid: Some(TARGET_UID.to_string()),
                 interface_name: "svc".to_string(),
                 order_mode: ORDER_MODE_EXISTING.to_string(),
                 input_map: BTreeMap::from([
@@ -2014,8 +2244,8 @@ mod tests {
                 signal_map: BTreeMap::new(),
             },
         }];
-        let manifest = parse_resolution_manifest(&unbound_cross).unwrap();
-        let issues = link_dock_routes("local", &inputs_cross_unlinked, &manifest).unwrap_err();
+        let targets = parse_dock_targets(&unbound_cross).unwrap();
+        let issues = link_dock_routes("local", &inputs_cross_unlinked, &targets).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D012"
                 && issue.message.contains("input port sources")
@@ -2029,31 +2259,25 @@ mod tests {
             stage_identifier: "local.stage".to_string(),
             stage_source: "local-src".to_string(),
             config: ZhixuExecutorConfig {
-                target_name: Some("target_def".to_string()),
+                target_uid: Some(TARGET_UID.to_string()),
                 interface_name: "svc".to_string(),
                 order_mode: ORDER_MODE_NEW.to_string(),
                 input_map: BTreeMap::from([("ENTER".to_string(), "execute".to_string())]),
                 signal_map: BTreeMap::from([("done_sig".to_string(), "done".to_string())]),
             },
         }];
-        let sides_cross = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "target_def",
-                "interfaces": [{
-                    "name": "svc",
-                    "orderModes": ["new"],
-                    "inputs": {
-                        "execute": { "source": "alpha", "hook": "main.work#DOCK_ENTER" }
-                    },
-                    "outputs": {
-                        "done": { "signal": "beta::main.work.cmp" }
-                    },
-                }],
-            }]
-        });
-        let manifest = parse_resolution_manifest(&sides_cross).unwrap();
-        let issues = link_dock_routes("local", &sides_cross_unlinked, &manifest).unwrap_err();
+        let sides_cross = json!([target_entry(zhixu_document(
+            json!([plain_stage("work", "alpha")]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "done": { "signal": "beta::main.work.cmp" } }),
+                )
+            }),
+        ))]);
+        let targets = parse_dock_targets(&sides_cross).unwrap();
+        let issues = link_dock_routes("local", &sides_cross_unlinked, &targets).unwrap_err();
         assert!(
             issues
                 .iter()
@@ -2088,7 +2312,7 @@ mod tests {
     }
 
     #[test]
-    fn route_depth_ignores_disconnected_manifest_edges() {
+    fn route_depth_ignores_disconnected_dock_edges() {
         let mut edges = BTreeMap::new();
         edges.insert(
             "unrelated".to_string(),
@@ -2110,7 +2334,7 @@ mod tests {
                 "supplierType": "organization",
                 "supplierID": "payment-gateway",
                 "zhixuExecutorConfig": {
-                    "target": { "zhixu": "payment_execution" },
+                    "target": { "zhixu": TARGET_UID },
                     "interface": "payment_service",
                     "order": { "mode": "new" },
                     "inputMap": { "EXECUTE": "execute" },
@@ -2145,74 +2369,6 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_non_object_inputs_and_outputs() {
-        // inputs/outputs 类型非法（字符串/数组）是发布方数据错误：响亮拒绝，
-        // 不得静默吞成空 map 按"无端口"继续 link。
-        let base = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "payment_execution",
-                "interfaces": [minimal_interface("svc")],
-            }]
-        });
-        for (label, key, bad) in [
-            ("inputs string", "inputs", json!("OOPS-NOT-AN-OBJECT")),
-            ("inputs array", "inputs", json!([])),
-            ("outputs string", "outputs", json!("OOPS-NOT-AN-OBJECT")),
-            ("outputs number", "outputs", json!(7)),
-        ] {
-            let mut poisoned = base.clone();
-            poisoned["definitions"][0]["interfaces"][0][key] = bad;
-            let issues = parse_resolution_manifest(&poisoned)
-                .err()
-                .unwrap_or_else(|| panic!("{label}: must be rejected"));
-            assert!(
-                issues.iter().any(|issue| issue.code == "D008"
-                    && issue.path.ends_with(&format!(".{key}"))
-                    && issue.message.contains("must be an object")),
-                "{label}: {issues:?}"
-            );
-        }
-        // 基线：键缺席（可选）与对象形态照常解析。
-        parse_resolution_manifest(&base).expect("object-shaped inputs/outputs parse");
-    }
-
-    #[test]
-    fn manifest_rejects_non_string_order_mode_entries() {
-        // orderModes 非字符串项不得被 filter_map 静默丢弃：["new", 123] 是
-        // 确定性非法输入而不是 ["new"]。
-        let manifest = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "payment_execution",
-                "interfaces": [{
-                    "name": "svc",
-                    "orderModes": ["new", 123],
-                    "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
-                    "outputs": {},
-                }],
-            }]
-        });
-        let issues = parse_resolution_manifest(&manifest).unwrap_err();
-        assert!(
-            issues.iter().any(|issue| issue.code == "D008"
-                && issue.path.ends_with(".orderModes")
-                && issue.message.contains("entries must be strings")),
-            "{issues:?}"
-        );
-        // 非数组形态同样是确定性的 D008。
-        let mut not_array = manifest.clone();
-        not_array["definitions"][0]["interfaces"][0]["orderModes"] = json!("new");
-        let issues = parse_resolution_manifest(&not_array).unwrap_err();
-        assert!(
-            issues.iter().any(|issue| issue.code == "D008"
-                && issue.path.ends_with(".orderModes")
-                && issue.message.contains("must be an array of strings")),
-            "{issues:?}"
-        );
-    }
-
-    #[test]
     fn canonical_signal_shapes_reject_empty_segments() {
         // 空段不是合法 canonical 形态：拼出的空 stage/空 signal 是永不匹配
         // 的寻址键（与 Go 镜像 isCanonicalSignalShape 的非空段校验同口径）。
@@ -2236,20 +2392,18 @@ mod tests {
             ))
         );
 
-        // manifest 路径侧同口径：D014/D008 响亮拒绝而不是吞成空段。
-        let manifest = json!({
-            "schemaVersion": DOCK_RESOLUTION_SCHEMA_VERSION,
-            "definitions": [{
-                "name": "payment_execution",
-                "interfaces": [{
-                    "name": "svc",
-                    "orderModes": ["new"],
-                    "inputs": { "execute": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
-                    "outputs": { "done": { "signal": "buyer::main..cmp" } },
-                }],
-            }]
-        });
-        let issues = parse_resolution_manifest(&manifest).unwrap_err();
+        // dockTargets 目标侧同口径：output signal 空段是确定性 D008。
+        let targets = json!([target_entry(zhixu_document(
+            json!([plain_stage("work", "buyer")]),
+            json!({
+                "svc": interface_spec(
+                    json!(["new"]),
+                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "done": { "signal": "buyer::main..cmp" } }),
+                )
+            }),
+        ))]);
+        let issues = parse_dock_targets(&targets).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
                 && issue

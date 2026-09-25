@@ -1,5 +1,12 @@
 use serde_json::{Map, Number, Value};
+use sha3::{Digest, Keccak256};
 use thiserror::Error;
+
+/// 定义身份 uid 的派生域。内容派生：定义文档的 canonical JSON 是
+/// preimage；展示性字段（metadata.name、metadata.annotations）先剔除，
+/// 改展示名不换身份。同一内容跨环境、跨轨得到同一 uid——发布由此获得
+/// 免费幂等，内容变即新身份，不存在「重发布」。
+pub const DEFINITION_UID_DOMAIN: &str = "uvp:definition-uid:v2";
 
 #[derive(Debug, Error)]
 pub enum CanonicalError {
@@ -37,6 +44,38 @@ pub fn canonical_stringify(value: &Value) -> Result<String> {
     Ok(serde_json::to_string(&canonicalize(value)?).expect("canonical JSON should serialize"))
 }
 
+/// 定义文档（canonical 形态）剔除展示性字段：metadata.name 与
+/// metadata.annotations。metadata 缺省时原样返回。
+fn strip_definition_display_fields(mut definition: Value) -> Value {
+    let Some(metadata) = definition
+        .as_object_mut()
+        .and_then(|root| root.get_mut("metadata"))
+        .and_then(|metadata| metadata.as_object_mut())
+    else {
+        return definition;
+    };
+    metadata.remove("name");
+    metadata.remove("annotations");
+    definition
+}
+
+/// 定义身份 uid：`zx-<32hex>`。preimage = domain 串 + 剔除展示字段后的
+/// canonical JSON；keccak256 与链轨派生同一公式族（链侧 TS 实现以共享
+/// 金向量语料互钉）。
+pub fn derive_definition_uid(definition: &Value) -> Result<String> {
+    let stripped = strip_definition_display_fields(canonicalize(definition)?);
+    let canonical = canonical_stringify(&stripped)?;
+    let preimage = format!("{DEFINITION_UID_DOMAIN}:{canonical}");
+    let digest = Keccak256::digest(preimage.as_bytes());
+    let mut uid = String::with_capacity(3 + 64);
+    uid.push_str("zx-");
+    // 与链轨公式族一致：取摘要前 32 个 hex 字符（16 字节），uid 总长 35。
+    for byte in digest.iter().take(16) {
+        uid.push_str(&format!("{byte:02x}"));
+    }
+    Ok(uid)
+}
+
 // 数字的 canonical 规则（Rust 是跨语言权威，TS canonical.ts 必须同口径；
 // 钉死向量见 fixtures/canonical/canonical.v1.json）：
 // - 哈希输入词表封闭：浮点形态的数字字面量（serde_json
@@ -62,6 +101,61 @@ fn canonicalize_number(number: &Number) -> Result<Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn definition_uid_is_content_derived_and_display_agnostic() {
+        let base = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {
+                "name": "weaving_order",
+                "annotations": {"origin": "console"},
+                "labels": {"domain": "demo"}
+            },
+            "spec": {"platform": {"type": "cloud"}}
+        });
+        let uid = derive_definition_uid(&base).unwrap();
+        assert!(uid.starts_with("zx-"));
+        assert_eq!(uid.len(), 35);
+        assert!(uid[3..].chars().all(|c| c.is_ascii_hexdigit()), "{uid}");
+
+        // 改展示名/注解不换身份。
+        let renamed = json!({
+            "apiVersion": "uvp/v0", "kind": "Zhixu",
+            "metadata": {"name": "renamed_order", "labels": {"domain": "demo"}},
+            "spec": {"platform": {"type": "cloud"}}
+        });
+        assert_eq!(uid, derive_definition_uid(&renamed).unwrap());
+        // 改实质内容换身份。
+        let changed = json!({
+            "apiVersion": "uvp/v0", "kind": "Zhixu",
+            "metadata": {"name": "weaving_order", "labels": {"domain": "demo"}},
+            "spec": {"platform": {"type": "cloud"}, "nucleation": {"id": "n1"}}
+        });
+        assert_ne!(uid, derive_definition_uid(&changed).unwrap());
+        // 键序不影响身份。
+        let reordered = serde_json::from_str::<Value>(
+            r#"{"spec":{"platform":{"type":"cloud"}},"metadata":{"labels":{"domain":"demo"},"annotations":{"origin":"console"},"name":"weaving_order"},"kind":"Zhixu","apiVersion":"uvp/v0"}"#,
+        )
+        .unwrap();
+        assert_eq!(uid, derive_definition_uid(&reordered).unwrap());
+    }
+
+    #[test]
+    fn definition_uid_golden_vectors() {
+        // 金向量：链轨 TS 实现与 Go FFI 消费方按同一向量对拍；向量变更=
+        // 派生公式变更=所有定义换 uid。
+        let cases: &[(Value, &str)] = &[
+            (
+                json!({"apiVersion":"uvp/v0","kind":"Zhixu","metadata":{"name":"weaving_order"},"spec":{"platform":{"type":"cloud"}}}),
+                "zx-e906ad47866918682d1e2ed2528682f5",
+            ),
+        ];
+        for (definition, want) in cases {
+            let got = derive_definition_uid(definition).unwrap();
+            assert_eq!(&got, want, "definition: {definition}");
+        }
+    }
 
     #[test]
     fn canonical_json_sorts_object_keys() {

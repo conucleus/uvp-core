@@ -15,6 +15,10 @@ char* uvp_replay_json(const char* request_json);
  * uvp_parse_hook_json 相同；lint_zhixu 请求为 {"definition": <Zhixu>}。 */
 char* uvp_lint_hook_json(const char* request_json);
 char* uvp_lint_zhixu_json(const char* request_json);
+
+/* 定义身份 uid 派生：请求为定义文档 JSON（object），响应信封与其余
+ * uvp_*_json 相同；value 为 "zx-<32hex>"（uvp:definition-uid:v2 内容派生）。 */
+char* uvp_derive_definition_uid_json(const char* definition_json);
 void uvp_free(char* ptr);
 const char* uvp_core_version(void);
 /* 语义版本（uvp.semantic.v1 线）：版本协商失败时宿主侧必须读取真实值，
