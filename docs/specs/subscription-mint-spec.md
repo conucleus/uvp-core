@@ -226,7 +226,7 @@ Stage 字段总表（目标态）：
 | 锚定依据 | mint 声明是编译期唯一锚定依据 | 自发 str 编译期不可见；订阅方按溯源分拣是执行器责任 |
 | 孤儿 | 概念删除 | 订单天然存在，无 dock = 尚无关系，非异常态 |
 | 有锚订阅阶段绑定 zhixu 委托执行者 | 合法形态（现行例外口径）：编译放行，属订阅-铸单模型的许可形态 | 文法 §7 第 6 条——有锚订阅阶段（本 source 类存在 mint 声明，订阅 route=order 按单投递、委托信封可携带订单锚定）是 zhixu 委托执行者的唯一许可宿主；无锚扇入订阅 + zhixu 委托仍拒绝（uvp-core validate_subscription_delegation，UVP-01） |
-| 版本 slate 与 dock v2 冻结 | 语义/AST/语料保持 v1；HookPlan、CloudArtifact 为 v2，OnchainHookPlan 为 v3，dock 制品为 `uvp.dockInterfaceArtifact.v2`/`uvp.dockRoute.v2`/`uvp.dock.resolution.v2`；合约 ABI/EIP-712 以 `uvp-stack.v1.json` 和 fixtures 的 0.11/4.4 等值为准 | 结构化 dock identity、六域 PlanCommit 和复合订单键已进入 wire；任何一侧继续消费旧 v1/v0.8 fixture 都会造成跨轨漂移 |
+| 版本 slate 与 dock v2 冻结 | 语义/AST/语料保持 v1；HookPlan、CloudArtifact 为 v2，OnchainHookPlan 为 v3（该 slate 此后被取代：三者为 `hookPlan.v3`/`cloudArtifact.v3`/`onchainHookPlan.v3`，现行口径见 §7），dock 制品为 `uvp.dockInterfaceArtifact.v2`/`uvp.dockRoute.v2`/`uvp.dock.resolution.v2`；合约 ABI/EIP-712 以 `uvp-stack.v1.json` 和 fixtures 的 0.11/4.4 等值为准 | 结构化 dock identity、六域 PlanCommit 和复合订单键已进入 wire；任何一侧继续消费旧 v1/v0.8 fixture 都会造成跨轨漂移 |
 | 出生通道键并集的 mint∪mint 臂（分叉登记，非决策） | 三轨未收敛，按各侧行为如实登记：uvp-core（Rust）编译期拒绝——一事实扇出多条 mint 出生线时各铸一单，"该事实对应哪个订单"三线发散，"一事一单"在编译期收口（uvp-core `validate_birth_channel_key_uniqueness`，三臂全拒）；合约注册门与 TS 编译器放行——一事实扇出多条 mint 出生线是产品现行形态（customs 基准 plan：`order::registered` 同时出生执行者选择与资源发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段（合约 `UVPPlanRegistration._registerPlanHook` 按 dock 标志分界，TS 按 orderTriggerKind=dock 分界）。mint∪dock / dock∪dock 两臂三轨一致拒绝（合约 `DuplicateBirthChannelKey`、TS 镜像、本仓编译期） | 与注册表 uvp-constraints.v1.json 规则 `birth-channel-key-union-uniqueness` 的 ruling 同口径；mint∪mint 的收敛方向是裁决项，本规格不替产品预设 |
 
 ### 补充决策（2026-08-31，安全架构审查后）

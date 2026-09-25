@@ -132,18 +132,21 @@ pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
 
 /// 过滤档（发射适格面）校验：与钩子档并立、互不污染（不触碰
 /// validate_anchors）。过滤只在信号到达的一拍对已提交事实集求值、不参与
-/// 任何调度，因此任何位置的瞬时值都良定义——无正锚要求、衰减否决位
-/// `~(A+duration)` 位置全放开（根/Or/Not/延时操作数内均合法）。保留的
-/// 闸只剩结构性词表：NOT 操作数仅裸 Signal 或 Delay 结果，duration 恒正
-/// （字面量语法与 30d 上限由解析器/解码层共用闸把守）。
+/// 任何调度，因此无正锚要求、衰减否决位 `~(A+duration)` 在全部布尔位置
+/// （根/Or 子项/合取子项）合法；延时操作数内不放行——否决位自身是
+/// 延时节点，落入其中即被两档共用的嵌套延时禁令（reject_nested_delay）
+/// 先行拒绝。保留的闸只剩结构性词表：NOT 操作数仅裸 Signal 或 Delay
+/// 结果，duration 恒正（字面量语法与 30d 上限由解析器/解码层共用闸
+/// 把守）。
 pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
     reject_nested_delay(expr, false)?;
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
         Expr::Not(inner) => match inner.as_ref() {
             Expr::Signal(_) => Ok(()),
-            // 衰减否决位：位置在此不设闸（一拍求值下任何位置良定义），
-            // 时长正性仍按 Delay 分支复核。
+            // 衰减否决位：位置在此不设闸（布尔位置一拍求值均良定义；
+            // 延时操作数内的形态已被嵌套延时禁令先行拒绝），时长正性
+            // 仍按 Delay 分支复核。
             Expr::Delay { .. } => validate_filter_hook(inner),
             _ => Err(HookError::Message(
                 "negation only supports direct signal references".to_string(),

@@ -1447,8 +1447,9 @@
       "messageContains": "no nested delays"
     },
     {
-      "name": "filter gate admits a decaying veto inside a delay operand (now rejected: nested delay)",
+      "name": "filter gate rejects a decaying veto inside a delay operand (nested delay)",
       "profile": "evm_strict",
+      "gate": "filter",
       "hookName": "ADMIT",
       "hook": "buyer::(task.ship.cmp & ~(task.cancel.cmp +14d)) +5s",
       "messageContains": "no nested delays"
