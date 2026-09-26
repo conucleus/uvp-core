@@ -2,19 +2,17 @@
 //! 输入（对接接口/路由链接的权威实现在 `crate::dock` 模块）。
 
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uvp_model::{ZhixuDefinition, ZhixuStage};
 
 use crate::{dock, CompilerError, Result};
 
 fn issues_from_dock(issues: &[dock::DockIssue]) -> CompilerError {
-    CompilerError::Issues(
-        issues
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; "),
-    )
+    let messages = issues
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>();
+    CompilerError::Issues(crate::join_issues_bounded(&messages))
 }
 
 /// 一次编译中的 dock 状态：接口声明、未链接/已链接 route、hook 标记输入。
@@ -31,16 +29,39 @@ pub(crate) struct DockState {
     /// 可作为 new 模式出生锚的 input 端口（orderModes 含 new 的接口）
     /// 引用的本地 hook：编译为 orderTriggerKind=dock。
     pub(crate) entrance_hook_ids: BTreeSet<String>,
+    /// entrance 端口 atom 的事实键 (source, task.stage.signal) → 发布端口
+    /// 路径：出生通道键并集查重（mint 出生键 ∪ dock entrance 键）的
+    /// dock 侧输入。
+    pub(crate) entrance_fact_keys: BTreeMap<(String, String), Vec<String>>,
+    /// signalMap 绑定的本地信号全名（`<task>.<stage>.<signal>`，静态与
+    /// target:null 动态 route 一并收集）：dock 输出回传的父侧落点。回传
+    /// 事实由引擎内部事务入口写入，不经发射适格面——对这些信号声明
+    /// validWhen 是永不求值的死代码，build_signal_admissions 按 D029 拒绝。
+    pub(crate) output_relay_signals: BTreeSet<String>,
 }
 
 pub(crate) fn compile_dock_state(
     definition: &ZhixuDefinition,
     stage_pairs: &[(String, ZhixuStage)],
-    resolution_manifest: Option<&Value>,
+    dock_targets: Option<&Value>,
     allow_unresolved: bool,
 ) -> Result<DockState> {
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
+
+    // 回传落点从声明面全量收集（解析后、分流静态/动态之前）：动态选择
+    // route 的 signalMap 一旦被选择记录补齐目标即参与回传，与静态 route
+    // 同一面。
+    let output_relay_signals = unlinked
+        .iter()
+        .flat_map(|route| {
+            route
+                .config
+                .signal_map
+                .keys()
+                .map(|key| format!("{}.{}", route.stage_identifier, key))
+        })
+        .collect();
 
     // 声明面收集：target:null 的动态选择 route 不进
     // link（目标空缺，无 D008 可言），改入未解析清单随产物携带（云轨
@@ -50,7 +71,7 @@ pub(crate) fn compile_dock_state(
     let mut static_routes = Vec::new();
     let mut unresolved_json = Vec::new();
     for route in unlinked {
-        match route.config.target_name.as_ref() {
+        match route.config.target_uid.as_ref() {
             Some(_) => {
                 if allow_unresolved {
                     unresolved_json.push(route.unresolved_json());
@@ -70,28 +91,28 @@ pub(crate) fn compile_dock_state(
         )
     };
     let input_port_hook_ids = interfaces
-        .as_deref()
-        .map(dock::input_port_hook_ids)
+        .as_ref()
+        .map(|compiled| dock::input_port_hook_ids(&compiled.declarations))
         .unwrap_or_default();
     let entrance_hook_ids = interfaces
-        .as_deref()
-        .map(dock::entrance_hook_ids)
+        .as_ref()
+        .map(|compiled| dock::entrance_hook_ids(&compiled.declarations))
         .unwrap_or_default();
 
     let routes = if static_routes.is_empty() {
         Vec::new()
     } else {
-        match resolution_manifest {
-            Some(manifest_value) => {
-                let manifest = dock::parse_resolution_manifest(manifest_value)
+        match dock_targets {
+            Some(targets_value) => {
+                let targets = dock::parse_dock_targets(targets_value)
                     .map_err(|issues| issues_from_dock(&issues))?;
-                dock::link_dock_routes(&definition.metadata.name, &static_routes, &manifest)
+                dock::link_dock_routes(&definition.metadata.name, &static_routes, &targets)
                     .map_err(|issues| issues_from_dock(&issues))?
             }
             None if allow_unresolved => Vec::new(),
             None => {
                 return Err(CompilerError::Message(
-                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes with static targets but no resolutionManifest was provided; runnable compilation requires linking against published target interfaces".to_string(),
+                    "UNRESOLVED_DOCK_TARGET: definition contains zhixu executor routes with static targets but no registered targets were provided; runnable compilation requires linking against published target interfaces".to_string(),
                 ));
             }
         }
@@ -100,12 +121,20 @@ pub(crate) fn compile_dock_state(
         .iter()
         .map(|route| route.to_json())
         .collect::<Vec<_>>();
+    let interface_json = interfaces
+        .as_ref()
+        .map(|compiled| dock::interface_declarations_json(&compiled.declarations));
+    let entrance_fact_keys = interfaces
+        .map(|compiled| compiled.entrance_fact_keys)
+        .unwrap_or_default();
     Ok(DockState {
-        interface_json: interfaces.as_deref().map(dock::interface_declarations_json),
+        interface_json,
         routes_json,
         unresolved_json,
         input_port_hook_ids,
         entrance_hook_ids,
+        entrance_fact_keys,
+        output_relay_signals,
     })
 }
 

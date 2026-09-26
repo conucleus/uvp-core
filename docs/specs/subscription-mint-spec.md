@@ -1,21 +1,21 @@
 # 订阅与铸单模型规格（Subscription & Mint Model）
 
 > 状态：对齐基线（v1）
-> 语义版本：`uvp.semantic.v1`（上线前版本线整体重置为 v1，一次到位，不并存两套语义）
+> 语义版本：`uvp.semantic.v1`（单一语义版本线，不并存两套语义）
 > 适用：uvp-core（Rust，DSL 语义唯一权威）、uvp（Go 云侧运行时）、uvp-protocol（TS 壳层）
-> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.10、`UVPDockingModule` 4.2 及其余 module fixtures；PlanCommitV2、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出已退役指令/入口。
+> 合约边界：EVM 合约当前冻结为 `UVPStateMachine` 0.12、`UVPDockingModule` 4.4 及其余 module fixtures；六域 PlanCommit（publisher、hooksHash、capabilitiesRoot、dockRoutesRoot、dockInterfaceRoot、deadline）、复合 `(planId, orderId)` 身份、dock roots 和 EIP-712 typed-data 必须与 `uvp-stack.v1.json` 等值。工具链不产出指令集外的指令/入口。
 
 ---
 
 ## 0. 本文解决什么
 
-旧模型的"跨秩序四典型"（分馏 `::OUTSIDE@`、撮合扇入标头、收购 `::ANCHOR@`、委托 signalMap）是同一根管道的四个命名捆绑包，每个捆绑包背着大量场景定语（回流方向、三段判定切分、k≥2 表达式下限等）。本规格把四典型收敛为三个正交层——**事实、路由、铸单**——并给出对应的语法表面。收敛后：
+"跨秩序四典型"（分馏 `::OUTSIDE@`、撮合扇入标头、收购 `::ANCHOR@`、委托 signalMap）若各自作为命名捆绑包，每个捆绑包都要背大量场景定语（回流方向、三段判定切分、k≥2 表达式下限等），无法正交组合。本规格以三个正交层——**事实、路由、铸单**——表达跨秩序协作，并给出对应的语法表面：
 
 - 事实怎么进来：订阅（一种语法，两条路由规则）。
 - 订单怎么出生：str 自报（免声明）或 `mint: per-fact` 代铸（唯一声明点）。
 - 阶段种类：编译期定死、终生不可变。
 
-旧关键字全部退役；externalSignals 删除；trigger 从每阶段必填入口表删除。指令集收敛为 SIGNAL / NOT / AND / OR / DELAY：扇入类旧指令不在枚举与编码门内，携带集外指令的 plan 在 `commitPlan` 注册边界响亮拒绝。
+指令集为 SIGNAL / NOT / AND / OR / DELAY：扇入类指令不在枚举与编码门内，携带集外指令的 plan 在 `commitPlan` 注册边界响亮拒绝。语法面不含 OUTSIDE/ANCHOR 标头、OUTSOURCE、externalSignals 与 trigger 入口表。
 
 ---
 
@@ -54,7 +54,7 @@
 ### 2.1 source 命名空间
 
 - `source` 是 **zhixu 局部**的因果链身份命名空间；多个 stage 可共享同一 source（整条业务线共用一个因果身份类）。
-- 订阅寻址 `@source::stage.signal` 只在本域解析：目标的 source 类必须由本 zhixu 定义内的 stage 声明（引用存在性校验，uvp-core `validate_hook_dependency_references` 与 Go 轨编译器校验 §7.5 同款）。**订阅语法没有直接跨秩序形态**——跨秩序协作的合法形态是订阅阶段经 executor 绑定承接投递：同域类订阅配静态 executor（订阅阶段必须静态绑定，禁止运行时 patch）；跨秩序事实级联走 `supplierType: zhixu` 委托 dock + signalMap（见 2.4），resolved route 的 source seam 即接缝处的 source 声明。
+- 订阅寻址 `@source::task.stage.signal` 只在本域解析：目标的 source 类必须由本 zhixu 定义内的 stage 声明（引用存在性校验，uvp-core `validate_hook_dependency_references` 与 Go 轨编译器校验 §7.5 同款）。**订阅语法没有直接跨秩序形态**——跨秩序协作的合法形态是订阅阶段经 executor 绑定承接投递：同域类订阅配静态 executor（订阅阶段必须静态绑定，禁止运行时 patch）；跨秩序事实级联走 `supplierType: zhixu` 委托 dock + signalMap（见 2.4），resolved route 的 source seam 即接缝处的 source 声明。
 - 乐高原则：秩序之间无父子。被委托方天然存在，不因被委托需要父；可反向委托。无 dock 实例 = 无关系 = 不投递，这是"尚无关系"的正常态，不是孤儿。
 
 ### 2.2 订阅语法（receiveSignals 值）
@@ -62,9 +62,9 @@
 | 表达式 | 语义 | 求值 |
 |---|---|---|
 | `{source}::{condition}` | 同单 hook（布尔/延时），现有语义不变 | 在订阅方自己的订单上下文内求值，判决一次（init/wait/ready/cxl） |
-| `::ANCHOR(@{source}::{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
+| `::ANCHOR(@{source}::{task}.{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
 
-旧 `::OUTSIDE@` / `::ANCHOR@` 标头、OUTSOURCE、k≥2 表达式下限、旧空标头白名单规则退役（新订阅必须空标头；旧扇入标头已随指令集收敛整体移除，按通用语法错误拒绝）。
+`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 不在语法面内：解析器词法识别这三类关键字并**精确拒绝**，报错统一指引入口 `::ANCHOR(@source::task.stage.signal)` 订阅。扇入类标头、k≥2 表达式下限、空标头白名单规则均不在词表内，按通用语法错误拒绝（订阅必须空标头）。
 
 ### 2.3 三种接收方（编译期定死，选项 A）
 
@@ -84,12 +84,30 @@
 ### 2.4 跨域：委托 dock + 接口映射
 
 - 委托是一个秩序 dock 另一个秩序：目标定义在 `spec.dockInterface` 发布**具名接口 map**（接口名 → {orderModes, inputs, outputs}），调用方 stage 在 `executor.zhixuExecutorConfig` 按接口名引用，`inputMap`/`signalMap` 是接缝上的对译表；A 的委托 stage 与 B 被绑定的端口在接缝处视为**同一个 source** 的两半（单源 seam，被绑定端口范围）。
-- `target.zhixu` 填目标定义的 `metadata.name`（slug）或显式 `null`（云轨运行时按选择记录补齐）。DSL 壳不携带任何派生身份（`metadata.uid` 不是作者可写字段）；身份权威分治——链轨由 uvp-protocol TS 从内容派生 `zx-<32hex>`（内幕），云轨由 DB 唯一 name + 主键承载，共享 core 产物为中性形状（`zhixuName` 键，无 uid/hash/root 字段）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚，云轨幂等=建立自然唯一键、链轨幂等=链上确定性承诺），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）。链上轨道只承接 `new`，`existing` 与未解析 target 在 on-chain 编译期显式拒绝。
+- `target.zhixu` 填目标定义的内容派生身份 uid（`zx-<32hex>`）或显式 `null`（动态选择）。DSL 壳不携带任何身份（`metadata.uid` 不是作者可写字段）；uid 由定义内容派生（preimage 剔除 `metadata.name`/`metadata.annotations` 等展示字段），同内容跨轨同 uid、重复发布幂等，内容一变即新身份——派生公式跨轨同族（链轨 uvp-protocol TS 与云轨 FFI 以共享金向量互钉），云轨以该 uid 为 `global_zhixu` 主键、运行时零哈希；共享 core 产物为中性形状（`zhixuName` 仅展示投影，无 hash/root 字段）。`order.mode` 闭集 {new, existing}：`new` 建独立子订单（恰好一条 input 绑定 = 出生锚，云轨幂等=建立自然唯一键、链轨幂等=链上确定性承诺），`existing` 连接既有目标订单、不建单（建立时回填已成立的接口输出事实）——`existing` 与 `target: null` 的组合语义单点收敛于下「对等挂接五点」（语法与结构层）及「对等挂接 · 运行时语义」五点（运行时层）。
 - 委托声明至少一项输入或输出映射（无需虚构 str/cmp 映射满足格式）；接口输出不自动置任何一方为终态，终态只由本地阶段/订单结束驱动。
 - 委托共享订单上下文（现有 zhixu 执行器 `NewSource=false` 通道不变）；事实经 signalMap 逐条映射回父阶段。
 - 委托关系一次性绑定、禁 patch（现有门禁不变）。
-- `rel_order_order` 语义从"父子血缘"改为**对接记录**（谁 dock 谁、映射实例、接缝两侧锚点）；表结构不变，写读两处语义与命名更新。按单路由以对接记录为落点。
+- `rel_order_order` 语义为**对接记录**（谁 dock 谁、映射实例、接缝两侧锚点），不是"父子血缘"；表结构不变。按单路由以对接记录为落点。
 - dock 链深度上限两种计数口径（常量同为 `MAX_DOCK_DEPTH = 8`，静态更严）：静态 linker（uvp-core `dock.rs`）按**定义节点数**计——本定义 root 记 1、启动图深 >8 拒绝，即最多 7 条静态 dock 边；链上 `UVPDockingModule` 按 **dock 边数**计——parent 深度 ≥8 才拒绝，即最多 8 条 dock 边。两者观测面不同：静态 linker 只看编译期启动图，链上闸计数运行时累计的 dock 边。
+
+**对等挂接五点（`order.mode=existing` + `target: null`）。本规格是该语义的唯一权威出处，两册文法手册（两轨各一册）与实现手册只留一句话摘要与指针：**
+
+1. **一等对等挂接语法**：`existing` 与 `target: null` 是对等挂接的一等作者语法——与 `new` + 静态目标共用同一 `zhixuExecutorConfig` 键闭集、同一校验族（D 码）与同一具名接口发布面（`orderModes` 含 `existing` 的接口），不是附属变体或运行时私约；挂接双方仍是对等关系（§2.1 乐高原则），不产生层级包含。
+2. **拼批 / N:1**：同一目标运行可被多个调用方挂接——一个订单可由一次 `new` 对接创建，此后被任意多次 `existing` 对接引用；每个调用方按（本地订单, 本地阶段）各成一条对接实例（`dock_instance` UNIQUE(本地秩序, 本地订单, 本地阶段)），共享同一目标订单，任何一方都不重复建单。
+3. **运行时选择与生命周期**：`target: null` 的 route 编译为未解析声明面（`uvp.dockRoute.unresolved.v1`，本地校验全量保留、不进 link），运行时由选择记录（`/dock-selection`，目标按定义 uid 寻址；`existing` 的目标订单由记录的 orderRef 指定）**按父订单逐单**补齐：选择记录按（父秩序, 父订单, 父阶段）分键——执行秩序按模板版本编译、同模板的全部订单共享（秩序, 阶段），共享一条记录会让后续订单错绑到别人的目标；补齐结果钉在该父订单的对接实例行（resolved 快照 + 目标身份），**不回写定义行**——定义行的未解析声明永驻，首单建立不得把后续订单钉死在自己的选择上。
+4. **DDL 已支持**：云轨 DDL 已承载全部所需结构——`dock_route_selection`（UNIQUE(父定义, 父订单, 本地阶段)，目标定义 uid + 接口名 + 可选 orderRef）、`dock_instance`（order_mode 闭集含 `existing`）、按（实例, 端口）的投递唯一键（`dock_input_delivery`/`dock_output_delivery`）；该形态是纯运行时能力，无 schema 缺口。
+5. **链轨承接已落地**：链轨（uvp-eth 侧编译器）对该形态的承接定性为**能力缺口而非语义分叉**，缺口已补齐（`UVPDockingModule` 4.4）：`existing` 路由进 on-chain 产物、经 `attachDockedOrder` 挂接既有目标单（同意门三腿之一）；未解析 target 以 `unresolvedDockRoutes` 声明面进同一产物（候选集从 resolution manifest 派生、routeHash 目标槽为候选集 root），运行时由携 membership proof 的 attach 动态选定、终身钉住。on-chain 编译边界唯一保留的动态拒绝是 `order.mode=new` 的动态路由（`UNRESOLVED_DOCK_MODE`——合约无 new 模式动态路由的消费方）；`UNRESOLVED_DOCK_TARGET` 的现行唯一含义是静态目标路由缺 resolution manifest。两处拒绝均发生在编译期且响亮，不静默降级。补齐状态以兼容矩阵（`uvp-deploy/deploy/compatibility/uvp-stack.v1.json`，§7）为准，不在此登记；两轨逐语法点的接受/拒绝对照见 uvp-eth `zhixu-dsl-grammar.md`（链轨册）§10 第 5 条。
+
+**对等挂接 · 运行时语义（两轨生效）。上五点钉住语法与结构层（一等语法、拼批、选择记录、DDL、链轨承接）；以下五点是挂接自建立时刻起生效的运行时语义——同意、回填、交付、解析、同构，同属本规格唯一权威出处：**
+
+1. **挂接同意模型**：建立挂接（`existing` 连接既有目标订单）的动作方必须命中目标侧同意集合；语义两轨统一，同意集合的形态各取其信任域。链轨是无许可世界（任何人可发交易、接口承诺 word 公开可复算），同意必须证明到链上：目标订单创建者（creator）、目标订单在任执行者、或目标侧显式授权（EIP-712 attach permit）三者之一，三者皆缺即响亮拒绝（`UVPDockingModule._requireAttachConsent`）。云轨经产品裁决钉死为永久单运营方信任域（2026-09-23）：三条腿在单信任域内坍缩为同一主体——`/dock-selection` 选择记录持有凭据的提交方即同意集合，鉴权边界外无挂接建立入口，`pkg/docking` 建立路径不另设进程内同意门；这是该语义在单信任域下的完整形态，不是待补齐的缺口。该前提若变更（云轨承载多方互挂），须先为同意模型定义身份原语（云轨无地址，身份是 API 凭据主体），属协议演进而非补实现。
+2. **回填口径（两轨唯一语义）**：挂接建立时，目标接口输出中在该时点已成立的事实按 signalMap 回填父侧。回填是引用不是搬运：事实保持自己的家（§1.3），历史不改写、事实不重发。云轨现行回填行为即唯一语义，链轨不另立口径。
+3. **input 恰一次交付**：对接实例的每个 input 端口恰交付一次；此后对该端口的提交一律是幂等重放面——吸收、不交付新事实，幂等由（实例, 端口）投递唯一键承载（上五点第 4 条）。跨单的持续信息流只有 output 方向（signalMap 回传）。
+4. **`null` 解析时点（建立期解析、终身钉住）**：`target: null` 只在挂接建立期由选择权威经选择记录（`/dock-selection`）解析为具体目标——目标定义与 `existing` 的 orderRef——解析结果对该挂接终身钉住，不随运行推进重开；目标升级（引用方显式改绑新 uid 重新发布，旧 route 恒指旧 uid）只影响后续建立（上五点第 3 条）。选择权威即选择记录的写入方：云轨为 `/dock-selection` 选择记录的提交方（记录按（父秩序, 父订单, 父阶段）逐单登记——见上五点第 3 条，一个父订单缺自己的记录即等待，别单的记录不满足它）；链轨为携候选集 membership proof 发起 `attachDockedOrder` 的一方（链轨无独立选择记录面，选定即随建立交易写入实例身份、终身钉住）。缺选择记录属等待性错误：退避重试、计入投递预算、预算耗尽落死信（§6 投递层同款纪律）；不猜单（A07 existing 明确端点：缺 orderRef 时待解析，不猜「最新一单」——出处 `PRD_100_Dock_Final.md` §16 验收清单，`uvp-eth/docs/product/`）。
+5. **挂接后与 `new` 完全同构**：两模式的全部差异都在建立动作上（`new` 建新单、`existing` 挂接既有单）；建立之后走同一套运行时语义——input 每端口恰交付一次（第 3 条）、output 经 signalMap 回传父侧、终态只由本地阶段/订单结束驱动（接口输出不自动置任何一方为终态）。建立之后不存在第二条语义路径。
+
+本运行时五点在两轨均生效：第 2-5 点两轨逐字统一；第 1 点语义统一、同意集合形态各取信任域（见该点）。链轨挂接建立入口已落地（`UVPDockingModule` 4.4 `attachDockedOrder`，定性见上五点第 5 条）。补齐状态仍以兼容矩阵（`uvp-deploy/deploy/compatibility/uvp-stack.v1.json`，§7）为准，不在 spec 登记状态——第 1 点的两个形态是语义本身，无补齐可言、不进矩阵。
 
 ### 2.5 外部世界
 
@@ -127,7 +145,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   executor: { supplierType: organization, supplierID: journey-executor }
   receiveSignals:
     JOURNEY_START: "::ANCHOR(@fruit_merchant::stall_retail.retail.sold)"
-  sendSignals: [str, cmp, err]
+  sendSignals: [{name: str}, {name: cmp}, {name: err}]
 
 # 无锚监听：通道扇入（原撮合）
 - name: exchange
@@ -136,7 +154,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   receiveSignals:
     SURPLUS_EVENT: "::ANCHOR(@fruit_merchant::stall_retail.retail.surplus)"
     DEMAND_EVENT: "::ANCHOR(@buyer::juice_demand.entry.requested)"
-  sendSignals: [str, frozen, cmp, deal, err]
+  sendSignals: [{name: str}, {name: frozen}, {name: cmp}, {name: deal}, {name: err}]
 
 # 有锚阶段：按单路由（原收购回流；同 source 类存在 mint 声明即有锚）
 - name: packing intake
@@ -144,7 +162,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   executor: { supplierType: organization, supplierID: fruit-merchant-executor }
   receiveSignals:
     FARMER_FRUIT_SETTLED: "::ANCHOR(@farmer::farmer_orchard.packing.settled)"
-  sendSignals: [str, frozen, cmp, err]
+  sendSignals: [{name: str}, {name: frozen}, {name: cmp}, {name: err}]
 
 # 同单推进：普通 hook（原语义）
 - name: washing
@@ -152,7 +170,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   executor: { supplierType: organization, supplierID: farmer-executor }
   receiveSignals:
     WASH_READY: "seller::farmer_orchard.picking.cmp"
-  sendSignals: [str, cmp, err]
+  sendSignals: [{name: str}, {name: cmp}, {name: err}]
 ```
 
 Stage 字段总表（目标态）：
@@ -162,8 +180,8 @@ Stage 字段总表（目标态）：
 | `source` | 保留，升格为因果身份类（域内命名空间，多阶段共享） |
 | `mint` | 新增，可选，仅 `per-fact`；由出生阶段声明，是该类铸单的唯一声明点 |
 | `receiveSignals` | 保留 map 形态；值为普通 hook 或 ANCHOR 订阅 |
-| `sendSignals` | 保留 |
-| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(目标定义name|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
+| `sendSignals` | 保留，条目对象化 `{name, validWhen?}`：`name` 必填非空、归一后不可重复；`validWhen` 是发射适格声明（过滤档钩子方言），语义权威见两轨文法手册 §5.7，本规格不重述 |
+| `executor` | 委托为 supplierType=zhixu + zhixuExecutorConfig{target(目标定义uid|null), interface, order.mode∈{new,existing}, inputMap, signalMap→目标接口端口名；至少一映射，new 恰一条 input 绑定} |
 | `trigger` | **删除**（原必填入口表） |
 | `externalSignals` | **删除** |
 | `fileResources`、`selectedStages` | 保留 |
@@ -190,12 +208,12 @@ Stage 字段总表（目标态）：
 - hook 判决（普通表达式）：维持现有 hook_state 语义层（init/wait/ready/cxl，终态不可变）；订阅通道不经判决层，事实→路由→投递直通。
 - 投递层（重试/退避/dead/复活）机制原样，适用于订阅通道投递。
 
-## 7. 兼容与退役
+## 7. 版本与兼容
 
-- 版本 slate 重置（2026-08-31 裁决）：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格且语义/AST/语料/部署清单置 v1；云执行产物因已冻结为结构化复合身份信封，使用 `uvp.cloudArtifact.v2`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件同步更名 semantics.v1.json）、`uvp.cloudArtifact.v2`；部署清单 `uvp-eth.addresses.v5` → `uvp-eth.addresses.v1`。开发期累积的 0.7/v2/v5 编号无兼容义务，作废。
-- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v2`、`onchainHookPlan.v2`、`cloudArtifact.v2`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v2`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
-- `UVPStateMachine` 0.10 的 PlanCommitV2、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.2 的 open/input/output boundary（output 端口叶为 V3：叶直接钉绑定侧的 targetSourceId/targetSignalId 事实键分量）必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
-- 旧关键字（OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals）在两侧代码、语料、文档中清零（退役说明除外）。
+- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v4`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v4`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v5 编号制品，无兼容义务。
+- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v4`、`onchainHookPlan.v3`、`cloudArtifact.v4`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v3`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
+- `UVPStateMachine` 0.12 的六域 PlanCommit（含 capabilitiesRoot）、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.4 的 open/attach/input/output boundary（output 端口叶为 V3：叶直接钉绑定侧的 targetSourceId/targetSignalId 事实键分量）必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
+- OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals 不在语法面、两侧语料与两侧文档表述内。其中 trigger 入口表与 externalSignals 零存在；`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 由解析器词法识别并精确拒绝，报错统一指引 `::ANCHOR(@source::task.stage.signal)` 订阅入口，扇入类标头按通用语法错误拒绝（语法面排除的完整口径见 2.2）。
 
 ## 8. 决策记录
 
@@ -208,7 +226,8 @@ Stage 字段总表（目标态）：
 | 锚定依据 | mint 声明是编译期唯一锚定依据 | 自发 str 编译期不可见；订阅方按溯源分拣是执行器责任 |
 | 孤儿 | 概念删除 | 订单天然存在，无 dock = 尚无关系，非异常态 |
 | 有锚订阅阶段绑定 zhixu 委托执行者 | 合法形态（现行例外口径）：编译放行，属订阅-铸单模型的许可形态 | 文法 §7 第 6 条——有锚订阅阶段（本 source 类存在 mint 声明，订阅 route=order 按单投递、委托信封可携带订单锚定）是 zhixu 委托执行者的唯一许可宿主；无锚扇入订阅 + zhixu 委托仍拒绝（uvp-core validate_subscription_delegation，UVP-01） |
-| 版本 slate 与 dock v2 冻结 | 语义/AST/语料保持 v1；HookPlan、OnchainHookPlan、CloudArtifact 分别为 v2，dock 制品为 `uvp.dockInterfaceArtifact.v2`/`uvp.dockRoute.v2`/`uvp.dock.resolution.v2`；合约 ABI/EIP-712 以 `uvp-stack.v1.json` 和 fixtures 的 0.10/4.2 等值为准 | 结构化 dock identity、PlanCommitV2 和复合订单键已进入 wire；任何一侧继续消费旧 v1/v0.8 fixture 都会造成跨轨漂移 |
+| 版本 slate 与 dock v2 冻结 | 语义/AST/语料保持 v1；HookPlan、CloudArtifact 为 v2，OnchainHookPlan 为 v3（该 slate 此后被取代：三者为 `hookPlan.v3`/`cloudArtifact.v3`/`onchainHookPlan.v3`，现行口径见 §7），dock 制品为 `uvp.dockInterfaceArtifact.v2`/`uvp.dockRoute.v2`/`uvp.dock.resolution.v2`；合约 ABI/EIP-712 以 `uvp-stack.v1.json` 和 fixtures 的 0.11/4.4 等值为准 | 结构化 dock identity、六域 PlanCommit 和复合订单键已进入 wire；任何一侧继续消费旧 v1/v0.8 fixture 都会造成跨轨漂移 |
+| 出生通道键并集的 mint∪mint 臂（分叉登记，非决策） | 三轨未收敛，按各侧行为如实登记：uvp-core（Rust）编译期拒绝——一事实扇出多条 mint 出生线时各铸一单，"该事实对应哪个订单"三线发散，"一事一单"在编译期收口（uvp-core `validate_birth_channel_key_uniqueness`，三臂全拒）；合约注册门与 TS 编译器放行——一事实扇出多条 mint 出生线是产品现行形态（customs 基准 plan：`order::registered` 同时出生执行者选择与资源发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段（合约 `UVPPlanRegistration._registerPlanHook` 按 dock 标志分界，TS 按 orderTriggerKind=dock 分界）。mint∪dock / dock∪dock 两臂三轨一致拒绝（合约 `DuplicateBirthChannelKey`、TS 镜像、本仓编译期） | 与注册表 uvp-constraints.v1.json 规则 `birth-channel-key-union-uniqueness` 的 ruling 同口径；mint∪mint 的收敛方向是裁决项，本规格不替产品预设 |
 
 ### 补充决策（2026-08-31，安全架构审查后）
 
@@ -234,17 +253,17 @@ Stage 字段总表（目标态）：
 | 裁决 | 结论 | 落地 |
 |---|---|---|
 | 模-1 静态执行者 | 出生/订阅阶段必须编译期静态绑定执行者（出生阶段必须非委托 executor；有锚订阅阶段允许绑定 zhixu 委托的唯一例外见上表"有锚订阅阶段绑定 zhixu 委托执行者"）；运行时 patch 一律拒绝（既有门禁不变） | Go validator 去豁免（uvp f724212 之后批次）；uvp-core validate_mint_anchors 增查；bootstrap child.main 前置注册静态执行者、register_select 撤销对该阶段的 patch |
-| 模-2 出生入口组成 | 出生入口只能是 ANCHOR 订阅；"订阅之外附加单正普通 hook"形态废除 | Go validateMintStages + zhixu_schema、uvp-core validate_mint_anchors 三处拒绝；TS 测试对齐 |
+| 模-2 出生入口组成 | 出生入口只能是 ANCHOR 订阅；"订阅之外附加单正普通 hook"形态废除 | uvp-core validate_mint_anchors 拒绝；TS 测试对齐 |
 | 模-3 域边界 | 域 = zhixu 实例。订阅按类匹配只在本实例内解析；跨秩序扇入要求 rel_zhixu_dock 显式对接（双向记录，compiler 新增 POST /zhixu-dock 登记，dbops.RegisterZhixuDock）。依赖按秩序 id 显式绑定（委托接缝/同单锚定）不受 dock 门限制 | uvp core-ddl + loadAffectedHooks + 契约测试 |
 | 事实标签 tie-break | hook_state.id 与 hook_delivery.id 改从共享序列 fact_label_seq 取值，标签对全部输出事实严格全序 | core-ddl |
 | nonce 防重放 | HMAC 入口的 nonce 查重已落地（`(senderID, nonce)` 原子 check-and-record，TTL 缓存、进程内单实例——多副本需共享存储）；升级 JWT 随商店身份落地一并做。未开 HMAC 的入口退化为 first-win 幂等吸收 | 决策记录 |
 | DLQ 通知可靠性 | 告警语义走指标（stmDLQTotal 告警规则），持久化重投等运维真消费 DLQ 时再建 | 决策记录 |
 | chain-services 暴露面 | 模-5 修正"暂不整改"的前提：CORS 默认关闭（UVP_API_CORS_ALLOWED_ORIGINS 白名单回显）；notification-profile 挂 store.supplier.notification_profile.update；管理员白名单（GOVERNANCE_ADMIN_REVIEWER_IDS）真接入鉴权。身份归商店的裁决不变 | chain-services 本批次 |
-| 合约解冻批次（窗口已开） | #1 派生信号 capability 对称：跨订单派生要求目标（origin）订单 plan 声明同一 capability；#31 同 hook 输入内 dependencyKeys 去重；#30 README 口径改为"patch 即时接管、不可回滚恢复执行者"。#10 (planId, orderId) 复合键涉及全部模块/periphery 的订单寻址迁移，作为解冻窗口的下一个独立批次 | contracts 本批次 + forge 86/86 |
+| 合约解冻批次（窗口已开） | #1 派生信号 capability 对称：跨订单派生要求目标（origin）订单 plan 声明同一 capability；#31 同 hook 输入内 dependencyKeys 去重；#30 README 口径："patch 即时接管、不可回滚恢复执行者"。#10 (planId, orderId) 复合键涉及全部模块/periphery 的订单寻址迁移，作为解冻窗口的下一个独立批次 | contracts 本批次 + forge 86/86 |
 
 #10 残余风险说明：capability 对称后，攻击者理论上仍可镜像目标 plan 的 capability 声明（plan 公开可读）；该残余与 #10 的订单寻址迁移一并在解冻窗口下一批次处置（选项：origin 侧 link 授权）。
 
-模-3 域边界张力说明（待裁决，如实披露）：`rel_zhixu_dock` 门目前只在云侧投递路径落地（core-ddl + `loadAffectedHooks` + 契约测试，登记入口 `POST /zhixu-dock`）；该门在链轨/uvp-core 编译边界是否同步强制（或明确不强制）、以及 `rel_zhixu_dock` 登记与委托 dock（2.4）两条通道的职责分界，均尚无统一口径——裁决落定前，本规格不替任何一侧预设强制语义。
+模-3 域边界口径：`rel_zhixu_dock` 门落在云侧投递路径（core-ddl + `loadAffectedHooks` + 契约测试，登记入口 `POST /zhixu-dock`）。对接与授权的登记必须先于目标事实投递，违反即静默丢——该次投递不可达、无排队、无回扫补投，事后补建对接不会把错过的事实重新送进来；`rel_zhixu_dock` 登记与委托 dock（2.4）两条通道受同一条时序纪律约束（链轨同口径，见链轨《跨秩序协作与对接》业务叙述）。
 
 ### 裁决落地（2026-09-01，商店=框架不=内容）
 
@@ -254,3 +273,9 @@ Stage 字段总表（目标态）：
 | 报关特例只作演示配置 | 共享 demo 任务里的"报关单 PDF、报关单号、出口港口、完成时间"等特例内容只存在于一份显式的演示配置数据（形态上等同"某凝结核自带配置"），只经通用渲染路径生效；商店核心代码 grep 不到这些业务字符串（演示配置文件与其测试除外）。MVP 不内置报关示例 | store `src/product/demo/customs-demo-config.ts`；protocol fixture `demoCustomsEvidenceSpec` 同形示例 |
 | 证据文件格式校验归属 | accept 约束来自凝结核配置（`spec.accept`）；前端按 accept 校验并在 accept=pdf 时读取文件首字节做 %PDF- 快速拦截（防伪造 MIME/扩展名），服务端魔数校验仍是权威 | store workbenchSupport `validateEvidenceFileForSlot` |
 | DTO 兼容口径 | `evidenceSpec` 为加性可选字段：消费方在字段缺失时必须走降级路径而不是报错。任务 DTO 单轨携带证据契约：不设 `requiredEvidence`，缺失 spec 即无凭证槽位（不臆造通用槽位、不报错） | protocol freeze 校验（product signal map gate + verify-stack-compatibility）exit 0 |
+
+### 裁决落地（2026-09-22，对等挂接运行时语义两轨统一）
+
+| 裁决 | 结论 | 落地 |
+|---|---|---|
+| 对等挂接运行时语义 | 链轨向文法收敛、不砍文法：`existing` + `target: null` 是对等挂接的一等本体语法（文法 §8.1），链轨挂接建立入口已落地（`UVPDockingModule` 4.4 `attachDockedOrder`），定性为能力缺口补齐而非语义分叉。运行时五点在两轨均生效：挂接同意模型语义统一、同意集合形态各取信任域（链轨：创建者 / 在任执行者 / 显式授权三腿上链；云轨：永久单运营方裁决下鉴权边界即同意集合——见 §2.4 第 1 点）；建立时已成立的目标输出回填父侧，该口径为唯一语义；input 每端口恰交付一次、此后为幂等重放面，跨单持续信息流只有 output 方向；`target: null` 建立期由选择权威解析、之后终身钉住，缺选择记录（A07，出处 `PRD_100_Dock_Final.md` §16）退避重试、不猜单、预算耗尽落死信；挂接建立后与 `new` 完全同构 | 本规格 §2.4「对等挂接 · 运行时语义」即唯一权威出处（两册文法手册与实现手册只留摘要与指针）；链轨承接的补齐状态仍以兼容矩阵（`uvp-deploy/deploy/compatibility/uvp-stack.v1.json`，§7）为准，不在此登记 |

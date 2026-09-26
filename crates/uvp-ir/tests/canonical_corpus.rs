@@ -12,6 +12,7 @@ const CORPUS: &str = include_str!("../../../fixtures/canonical/canonical.v1.json
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Corpus {
+    schema_version: String,
     cases: Vec<Case>,
 }
 
@@ -31,6 +32,13 @@ struct Case {
 #[test]
 fn canonical_stringify_matches_the_pinned_vectors() {
     let corpus: Corpus = serde_json::from_str(CORPUS).expect("canonical corpus should decode");
+    // 语料格式版本钉住：文件升版（改用例结构/判别键）时这里必须先响亮
+    // 失败，消费面不得静默按旧口径解读新文件（semantics/closed-sets 消费
+    // 面同款纪律）。
+    assert_eq!(
+        corpus.schema_version, "uvp.canonicalJsonCorpus.v1",
+        "canonical corpus schemaVersion drifted; migrate this consumer before trusting the file"
+    );
     let mut pass_count = 0usize;
     let mut reject_count = 0usize;
     for case in corpus.cases {

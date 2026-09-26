@@ -93,6 +93,27 @@ pub extern "C" fn uvp_lint_zhixu_json(request_json: *const c_char) -> *mut c_cha
 }
 
 #[no_mangle]
+pub extern "C" fn uvp_derive_definition_uid_json(definition_json: *const c_char) -> *mut c_char {
+    into_c_string(guard_ffi_panic("uvp_derive_definition_uid_json", || {
+        match serde_json::from_str::<serde_json::Value>(&to_rust_string(definition_json)) {
+            Ok(definition) => match uvp_ir::derive_definition_uid(&definition) {
+                Ok(uid) => serde_json::json!({ "ok": true, "value": uid }).to_string(),
+                Err(err) => serde_json::json!({
+                    "ok": false,
+                    "diagnostics": [{ "message": err.to_string() }]
+                })
+                .to_string(),
+            },
+            Err(err) => serde_json::json!({
+                "ok": false,
+                "diagnostics": [{ "message": format!("definition is not valid JSON: {err}") }]
+            })
+            .to_string(),
+        }
+    }))
+}
+
+#[no_mangle]
 /// # Safety
 ///
 /// `ptr` must be a non-null pointer returned by one of this library's JSON

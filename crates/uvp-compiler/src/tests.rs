@@ -1,8 +1,17 @@
 use super::*;
 use serde_json::json;
 
-/// 任意 name 形态的未发布目标占位（link 不可达目标，仅形态合法）。
-const UNKNOWN_TARGET: &str = "unpublished-zhixu";
+/// uid 形态的未发布目标占位（形态合法、link 不可达：不在注册表中）。
+const UNKNOWN_TARGET: &str = "zx-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+/// 注册表中冒充"本地定义自身"的目标 uid（linker 不知道本地定义的 uid，
+/// 按内容查找只看相等性）。
+const SELF_TARGET_UID: &str = "zx-ffffffffffffffffffffffffffffffff";
+
+/// mid 链节点的 uid 形态占位（D015 深度/环链用，与上面三个常量不相交）。
+fn mid_uid(index: usize) -> String {
+    format!("zx-{index:032x}")
+}
 
 // ------------------------------------------------------------------
 // 目标示例（payment_execution）：两个具名接口
@@ -10,186 +19,258 @@ const UNKNOWN_TARGET: &str = "unpublished-zhixu";
 // ------------------------------------------------------------------
 fn target_payment_definition() -> Value {
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "payment_execution" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "payment-core" },
-            "dockInterface": {
-                "payment_service": {
-                    "orderModes": ["new"],
-                    "inputs": {
-                        "execute": { "hook": "payment_flow.init#DOCK_EXECUTE" },
-                        "cancel": { "hook": "payment_flow.control#DOCK_CANCEL" }
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "payment_execution" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "payment-core" },
+                "dockInterface": {
+                    "payment_service": {
+                        "orderModes": ["new"],
+                        "inputs": {
+                            "execute": { "hook": "payment_flow.init#DOCK_EXECUTE" },
+                            "cancel": { "hook": "payment_flow.control#DOCK_CANCEL" }
+                        },
+                        "outputs": {
+                            "started": { "signal": "payment::payment_flow.init.str" },
+                            "completed": { "signal": "payment::payment_flow.settle.cmp" },
+                            "failed": { "signal": "payment::payment_flow.settle.err" }
+                        }
                     },
-                    "outputs": {
-                        "started": { "signal": "payment::payment_flow.init.str" },
-                        "completed": { "signal": "payment::payment_flow.settle.cmp" },
-                        "failed": { "signal": "payment::payment_flow.settle.err" }
+                    "payment_evidence": {
+                        "orderModes": ["existing"],
+                        "outputs": {
+                            "cancelled": { "signal": "payment::payment_flow.control.cxl" }
+                        }
                     }
                 },
-                "payment_evidence": {
-                    "orderModes": ["existing"],
-                    "outputs": {
-                        "cancelled": { "signal": "payment::payment_flow.control.cxl" }
-                    }
-                }
-            },
-            "taskPatterns": [
-                { "name": "payment_flow", "stages": [
-                    {
-                        "name": "init",
-                        "source": "payment",
-                        "receiveSignals": {
-                            "DOCK_EXECUTE": "payment::payment_flow.init.execute"
+                "taskPatterns": [
+                    { "name": "payment_flow", "stages": [
+                        {
+                            "name": "init",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "DOCK_EXECUTE": "payment::payment_flow.init.execute"
+                            },
+                            "sendSignals": [{ "name": "str" }],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
                         },
-                        "sendSignals": ["str"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
-                    },
-                    {
-                        "name": "control",
-                        "source": "payment",
-                        "receiveSignals": {
-                            "DOCK_CANCEL": "payment::payment_flow.control.cancel"
+                        {
+                            "name": "control",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "DOCK_CANCEL": "payment::payment_flow.control.cancel"
+                            },
+                            "sendSignals": [{ "name": "cxl" }],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
                         },
-                        "sendSignals": ["cxl"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
-                    },
-                    {
-                        "name": "settle",
-                        "source": "payment",
-                        "receiveSignals": {
-                            "SETTLE": "payment::payment_flow.init.str"
-                        },
-                        "sendSignals": ["cmp", "err"],
-                        "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
-                    }
-                ]}
-            ]
-        }
-    })
+                        {
+                            "name": "settle",
+                            "source": "payment",
+                            "receiveSignals": {
+                                "SETTLE": "payment::payment_flow.init.str"
+                            },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "err" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
+                        }
+                    ]}
+                ]
+            }
+        })
 }
 
-const TARGET_NAME: &str = "payment_execution";
+const TARGET_UID: &str = "zx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 // ------------------------------------------------------------------
 // 调用方示例（settlement）：new 模式静态指定生产委托。
 // ------------------------------------------------------------------
-fn parent_settlement_definition(target_name: &str) -> Value {
+fn parent_settlement_definition(target_uid: &str) -> Value {
     json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "settlement" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "settlement-core" },
-            "taskPatterns": [
-                { "name": "checkout", "stages": [
-                    {
-                        "name": "confirm",
-                        "source": "buyer",
-                        // 物化门：零 hook 阶段在链上永不可物化、信号
-                        // 没有钩子可挂；seed 是执行者自发入口信号。
-                        "receiveSignals": { "PLACE": "buyer::checkout.confirm.seed" },
-                        "sendSignals": ["cmp", "seed"],
-                        "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
-                    },
-                    {
-                        "name": "cancel",
-                        "source": "buyer",
-                        "receiveSignals": { "ABORT": "buyer::checkout.cancel.seed" },
-                        "sendSignals": ["cmp", "seed"],
-                        "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
-                    }
-                ]},
-                { "name": "settlement", "stages": [
-                    {
-                        "name": "execute_payment",
-                        "source": "buyer",
-                        "receiveSignals": {
-                            "EXECUTE": "buyer::checkout.confirm.cmp",
-                            "CANCEL": "buyer::checkout.cancel.cmp"
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "settlement" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "settlement-core" },
+                "taskPatterns": [
+                    { "name": "checkout", "stages": [
+                        {
+                            "name": "confirm",
+                            "source": "buyer",
+                            // 物化门：零 hook 阶段在链上永不可物化、信号
+                            // 没有钩子可挂；seed 是执行者自发入口信号。
+                            "receiveSignals": { "PLACE": "buyer::checkout.confirm.seed" },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "seed" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                         },
-                        "sendSignals": ["str", "cmp", "err", "cxl"],
-                        "executor": {
-                            "supplierType": "zhixu",
-                            "zhixuExecutorConfig": {
-                                "target": { "zhixu": target_name },
-                                "interface": "payment_service",
-                                "order": { "mode": "new" },
-                                "inputMap": { "EXECUTE": "execute" },
-                                "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
+                        {
+                            "name": "cancel",
+                            "source": "buyer",
+                            "receiveSignals": { "ABORT": "buyer::checkout.cancel.seed" },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "seed" }
+    ],
+                            "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
+                        }
+                    ]},
+                    { "name": "settlement", "stages": [
+                        {
+                            "name": "execute_payment",
+                            "source": "buyer",
+                            "receiveSignals": {
+                                "EXECUTE": "buyer::checkout.confirm.cmp",
+                                "CANCEL": "buyer::checkout.cancel.cmp"
+                            },
+                            "sendSignals": [
+    { "name": "str" },
+    { "name": "cmp" },
+    { "name": "err" },
+    { "name": "cxl" }
+    ],
+                            "executor": {
+                                "supplierType": "zhixu",
+                                "zhixuExecutorConfig": {
+                                    "target": { "zhixu": target_uid },
+                                    "interface": "payment_service",
+                                    "order": { "mode": "new" },
+                                    "inputMap": { "EXECUTE": "execute" },
+                                    "signalMap": { "str": "started", "cmp": "completed", "err": "failed" }
+                                }
                             }
                         }
-                    }
-                ]}
-            ]
-        }
-    })
+                    ]}
+                ]
+            }
+        })
 }
 
 // ------------------------------------------------------------------
 // 调用方示例（recycling）：existing 模式动态引用已有事实。
 // ------------------------------------------------------------------
-fn parent_recycling_definition(target_name: &str) -> Value {
+fn parent_recycling_definition(target_uid: &str) -> Value {
+    json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "recycling" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "recycling-core" },
+                "taskPatterns": [
+                    { "name": "recycling", "stages": [
+                        {
+                            "name": "source_evidence",
+                            "source": "recycler",
+                            "receiveSignals": { "READ": "recycler::recycling.source_evidence.seed" },
+                            "sendSignals": [
+    { "name": "cmp" },
+    { "name": "seed" }
+    ],
+                            "executor": {
+                                "supplierType": "zhixu",
+                                "zhixuExecutorConfig": {
+                                    "target": { "zhixu": target_uid },
+                                    "interface": "payment_evidence",
+                                    "order": { "mode": "existing" },
+                                    "signalMap": { "cmp": "cancelled" }
+                                }
+                            }
+                        }
+                    ]}
+                ]
+            }
+        })
+}
+
+/// 构造 dockTargets 注册表：条目 {uid, definition}——目标定义原文入场，
+/// 接口声明与静态出边由 core 从原文单源提取；uid 用形态合法的固定占位
+/// （派生过程是各轨内务）。
+fn dock_target_entry(uid: &str, target: &Value) -> Value {
+    json!({ "uid": uid, "definition": target })
+}
+
+fn dock_targets_for(target: &Value) -> Value {
+    json!([dock_target_entry(TARGET_UID, target)])
+}
+
+/// 给定义的第一个 stage 换上带静态 target 的 zhixu executor：注册表条目
+/// 的静态出边（D015 启动图）由 core 从该 executor config 提取。
+fn with_static_dock_edge(mut definition: Value, edge_target: Option<&str>) -> Value {
+    definition["spec"]["taskPatterns"][0]["stages"][0]["executor"] = json!({
+        "supplierType": "zhixu",
+        "zhixuExecutorConfig": {
+            "target": edge_target
+                .map(|uid| json!({ "zhixu": uid }))
+                .unwrap_or(Value::Null),
+            "interface": "payment_service",
+            "order": { "mode": "existing" },
+            "signalMap": { "cmp": "completed" }
+        }
+    });
+    definition
+}
+
+/// 链/环节点的最小目标定义：单 stage，带静态 target 的 zhixu executor
+/// 指向 `edge_target`（None = 无静态出边）；接口 svc 供承诺面完整性。
+fn chain_link_definition(edge_target: Option<&str>) -> Value {
+    let executor = match edge_target {
+        Some(uid) => json!({
+            "supplierType": "zhixu",
+            "zhixuExecutorConfig": {
+                "target": { "zhixu": uid },
+                "interface": "svc",
+                "order": { "mode": "existing" },
+                "signalMap": { "cmp": "done" }
+            }
+        }),
+        None => json!({ "supplierType": "organization", "supplierID": "org" }),
+    };
     json!({
         "apiVersion": "uvp/v0",
         "kind": "Zhixu",
-        "metadata": { "name": "recycling" },
+        "metadata": { "name": "chain_link" },
         "spec": {
             "platform": { "type": "cloud" },
-            "nucleation": { "id": "recycling-core" },
-            "taskPatterns": [
-                { "name": "recycling", "stages": [
-                    {
-                        "name": "source_evidence",
-                        "source": "recycler",
-                        "receiveSignals": { "READ": "recycler::recycling.source_evidence.seed" },
-                        "sendSignals": ["cmp", "seed"],
-                        "executor": {
-                            "supplierType": "zhixu",
-                            "zhixuExecutorConfig": {
-                                "target": { "zhixu": target_name },
-                                "interface": "payment_evidence",
-                                "order": { "mode": "existing" },
-                                "signalMap": { "cmp": "cancelled" }
-                            }
-                        }
-                    }
-                ]}
-            ]
+            "nucleation": { "id": "chain-core" },
+            "taskPatterns": [{ "name": "main", "stages": [
+                { "name": "work", "source": "buyer", "executor": executor }
+            ]}],
+            "dockInterface": {
+                "svc": {
+                    "orderModes": ["existing"],
+                    "outputs": { "done": { "signal": "buyer::main.work.cmp" } }
+                }
+            }
         }
     })
 }
 
-/// 构造 resolution manifest：真实流程由 Store/发布系统在目标发布后
-/// 生成；测试中直接编译目标定义取其中性接口声明。
-fn manifest_entry(target: &Value) -> Value {
-    let plan = compile_zhixu_hook_plan(target, None, true).expect("target compiles");
-    json!({
-        "name": plan["zhixuName"].clone(),
-        "interfaces": plan["dockInterface"].clone(),
-    })
-}
-
-fn manifest_for(target: &Value) -> Value {
-    json!({
-        "schemaVersion": dock::DOCK_RESOLUTION_SCHEMA_VERSION,
-        "definitions": [manifest_entry(target)]
-    })
+/// 注册表条目：uid + 链节点定义。
+fn chain_link_entry(uid: String, edge_target: Option<&str>) -> Value {
+    json!({ "uid": uid, "definition": chain_link_definition(edge_target) })
 }
 
 #[test]
-fn send_signals_total_is_capped_at_256() {
-    // 能力表规模闸：hook_plan 与 cloud 共用 build_signal_capabilities，
-    // 与 TS 编译+反序列化边界同值同文案；256 条放行、257 条拒绝。
+fn send_signals_total_is_uncapped() {
+    // 能力表 Merkle 化：链上以 capabilitiesRoot 一次承诺，无逐条注册，
+    // 无 256 规模上限。257 条照常编译、产物逐条保留，钉住规模不受限；
+    // hook_plan 与 cloud 共用 build_signal_capabilities，两个 target
+    // 同口径放行。
     let definition_with = |count: usize| {
-        let signals: Vec<String> = (0..count).map(|index| format!("sig{index:03}")).collect();
+        let signals: Vec<Value> = (0..count)
+            .map(|index| json!({ "name": format!("sig{index:03}") }))
+            .collect();
         json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
-            "metadata": { "name": "capability_cap" },
+            "metadata": { "name": "capability_scale" },
             "spec": {
                 "platform": { "type": "cloud" },
                 "nucleation": { "id": "cap-core" },
@@ -209,43 +290,35 @@ fn send_signals_total_is_capped_at_256() {
             }
         })
     };
-    let at_limit = compile_zhixu_hook_plan(&definition_with(MAX_SIGNAL_CAPABILITIES), None, true)
-        .expect("256 capabilities compile");
+    let plan = compile_zhixu_hook_plan(&definition_with(257), None, true)
+        .expect("capability count is uncapped");
     assert_eq!(
-        at_limit["signalCapabilities"].as_array().map(Vec::len),
-        Some(MAX_SIGNAL_CAPABILITIES)
+        plan["signalCapabilities"].as_array().map(Vec::len),
+        Some(257)
     );
-    let over_limit =
-        compile_zhixu_hook_plan(&definition_with(MAX_SIGNAL_CAPABILITIES + 1), None, true)
-            .unwrap_err();
-    let CompilerError::Issues(message) = &over_limit else {
-        panic!("expected issues error, got {over_limit:?}");
-    };
-    assert!(
-        message.contains("signal capabilities 257 exceed the documented limit 256"),
-        "message: {message}"
-    );
+    compile_cloud_artifact(&definition_with(257), None, true)
+        .expect("cloud target accepts the same capability table");
 }
 
 #[test]
-fn resolved_routes_carry_the_neutral_name_keyed_shape() {
-    // 壳上无身份：route 只携带本地声明与目标 name/接口名/端口绑定，
-    // 不携带任何派生字段（哈希承诺由各轨在此形状上自行计算）。
+fn resolved_routes_carry_the_neutral_uid_keyed_shape() {
+    // 壳上无派生身份：route 只携带本地声明与目标 uid/接口名/端口绑定，
+    // 不携带任何哈希/root 字段（哈希承诺由各轨在此形状上自行计算）。
     let target = target_payment_definition();
-    let manifest = manifest_for(&target);
+    let dock_targets = dock_targets_for(&target);
     let plan = compile_zhixu_hook_plan(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&dock_targets),
         false,
     )
     .expect("new-mode route links");
     let route = &plan["dockRoutes"][0];
-    assert_eq!(route["schemaVersion"], "uvp.dockRoute.v2");
+    assert_eq!(route["schemaVersion"], "uvp.dockRoute.v3");
     assert_eq!(
         route["local"]["stageIdentifier"],
         "settlement.execute_payment"
     );
-    assert_eq!(route["target"]["name"], json!(TARGET_NAME));
+    assert_eq!(route["target"]["uid"], json!(TARGET_UID));
     assert_eq!(route["target"]["interfaceName"], json!("payment_service"));
     assert_eq!(route["orderMode"], "new");
     assert_eq!(
@@ -284,8 +357,8 @@ fn resolved_routes_carry_the_neutral_name_keyed_shape() {
 
     // existing/output-only route 同一中性形状。
     let recycling = compile_cloud_artifact(
-        &parent_recycling_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_recycling_definition(TARGET_UID),
+        Some(&dock_targets),
         false,
     )
     .expect("existing-mode output-only route links");
@@ -310,30 +383,34 @@ fn link_reports_every_routes_issues_in_one_pass() {
     // issues 按 route 独立收集：任意 route 的失败不得吞掉其他 route 的
     // 报错——错误一次报全，调用方不需要逐个修复再重编来发现下一个。
     let target = target_payment_definition();
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     let second_dock = json!({
-        "name": "second_dock",
-        "source": "buyer",
-        "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
-        "sendSignals": ["str", "cmp", "err"],
-        "executor": {
-            "supplierType": "zhixu",
-            "zhixuExecutorConfig": {
-                "target": { "zhixu": UNKNOWN_TARGET },
-                "interface": "payment_service",
-                "order": { "mode": "new" },
-                "inputMap": { "START": "execute" },
-                "signalMap": { "str": "started", "cmp": "completed" }
+            "name": "second_dock",
+            "source": "buyer",
+            "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
+            "sendSignals": [
+    { "name": "str" },
+    { "name": "cmp" },
+    { "name": "err" }
+    ],
+            "executor": {
+                "supplierType": "zhixu",
+                "zhixuExecutorConfig": {
+                    "target": { "zhixu": UNKNOWN_TARGET },
+                    "interface": "payment_service",
+                    "order": { "mode": "new" },
+                    "inputMap": { "START": "execute" },
+                    "signalMap": { "str": "started", "cmp": "completed" }
+                }
             }
-        }
-    });
+        });
     parent["spec"]["taskPatterns"][1]["stages"]
         .as_array_mut()
         .unwrap()
         .push(second_dock);
-    // 同一 manifest：settlement 的目标存在，second_dock 的目标缺失。
-    let manifest = manifest_for(&target);
-    let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+    // 同一 dockTargets：settlement 的目标存在，second_dock 的目标缺失。
+    let dock_targets = dock_targets_for(&target);
+    let error = compile_zhixu_hook_plan(&parent, Some(&dock_targets), false)
         .expect_err("unresolvable second route must fail");
     let message = error.to_string();
     assert!(
@@ -347,11 +424,11 @@ fn link_reports_every_routes_issues_in_one_pass() {
 #[test]
 fn compiles_linked_parent_with_dock_route() {
     let target = target_payment_definition();
-    let parent = parent_settlement_definition(TARGET_NAME);
-    let manifest = manifest_for(&target);
-    let plan =
-        compile_zhixu_hook_plan(&parent, Some(&manifest), false).expect("linked parent compiles");
-    assert_eq!(plan["schemaVersion"], "uvp.hookPlan.v2");
+    let parent = parent_settlement_definition(TARGET_UID);
+    let dock_targets = dock_targets_for(&target);
+    let plan = compile_zhixu_hook_plan(&parent, Some(&dock_targets), false)
+        .expect("linked parent compiles");
+    assert_eq!(plan["schemaVersion"], "uvp.hookPlan.v4");
     assert_eq!(plan["zhixuName"], json!("settlement"));
 
     // hooks：无 signalMap 伪 hook；flags 拆分。
@@ -372,13 +449,13 @@ fn compiles_linked_parent_with_dock_route() {
     let routes = plan["dockRoutes"].as_array().unwrap();
     assert_eq!(routes.len(), 1);
     let route = &routes[0];
-    assert_eq!(route["schemaVersion"], "uvp.dockRoute.v2");
+    assert_eq!(route["schemaVersion"], "uvp.dockRoute.v3");
     assert_eq!(
         route["local"]["stageIdentifier"],
         "settlement.execute_payment"
     );
     assert_eq!(route["orderMode"], "new");
-    assert_eq!(route["target"]["name"], json!(TARGET_NAME));
+    assert_eq!(route["target"]["uid"], json!(TARGET_UID));
     assert_eq!(route["target"]["interfaceName"], json!("payment_service"));
     assert!(route.get("orderIdPolicy").is_none());
     assert_eq!(route["inputBindings"].as_array().unwrap().len(), 1);
@@ -449,8 +526,8 @@ fn target_compiles_named_interfaces_and_dock_trigger_flags() {
 }
 
 #[test]
-fn rejects_parent_without_manifest() {
-    let error = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, false)
+fn rejects_parent_without_dock_targets() {
+    let error = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_UID), None, false)
         .expect_err("unresolved dock target must fail");
     assert!(
         error.to_string().contains("UNRESOLVED_DOCK_TARGET"),
@@ -459,11 +536,10 @@ fn rejects_parent_without_manifest() {
 }
 
 #[test]
-fn dock_link_compile_target_is_retired() {
-    // dock link 编译 target（uvp.dock-link v1 产物面）
-    // 无消费方，直接删除、无兼容形态——出现即按未知 target 响亮拒绝
-    // （link 校验由 hook_plan/cloud/parse 在 manifest 在场时同一链路
-    // 承担）。
+fn dock_link_compile_target_is_unknown() {
+    // 不存在 dock link 编译 target（uvp.dock-link v1 产物面）
+    // ——出现即按未知 target 响亮拒绝（link 校验由 hook_plan/cloud/parse
+    // 在 dockTargets 在场时同一链路承担）。
     let request = json!({
         "target": "dock_link",
         "definition": target_payment_definition(),
@@ -480,12 +556,12 @@ fn dock_link_compile_target_is_retired() {
 
 #[test]
 fn parse_target_allows_unresolved() {
-    let value = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_NAME), None, true)
+    let value = compile_zhixu_hook_plan(&parent_settlement_definition(TARGET_UID), None, true)
         .expect("parse target allows unresolved routes");
     assert_eq!(value["dockRoutes"].as_array().unwrap().len(), 0);
-    // 静态目标 route 不因无 manifest 而从声明面消失——
+    // 静态目标 route 不因无 dockTargets 而从声明面消失——
     // parse 产物如实携带全部委托形态，静态条目携带作者声明的
-    // target.zhixu（name 引用，非派生身份）。
+    // target.zhixu（目标定义 uid 引用）。
     let unresolved = value["unresolvedDockRoutes"].as_array().unwrap();
     assert_eq!(unresolved.len(), 1);
     let route = &unresolved[0];
@@ -494,7 +570,7 @@ fn parse_target_allows_unresolved() {
         dock::DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION
     );
     assert_eq!(route["stageIdentifier"], "settlement.execute_payment");
-    assert_eq!(route["target"], json!({ "zhixu": TARGET_NAME }));
+    assert_eq!(route["target"], json!({ "zhixu": TARGET_UID }));
     assert_eq!(route["interfaceName"], "payment_service");
     assert_eq!(route["orderMode"], "new");
     assert_eq!(
@@ -504,23 +580,23 @@ fn parse_target_allows_unresolved() {
 }
 
 #[test]
-fn parse_product_declaration_face_is_complete_with_manifest() {
-    // parse-only 产物带 manifest：静态 route 照常解析进 dockRoutes，
-    // 同时保留声明面条目（与动态目标对称——manifest 在场时 null-target
-    // route 也不退出声明面，见 manifest_present_null_target_route_stays_
+fn parse_product_declaration_face_is_complete_with_dock_targets() {
+    // parse-only 产物带 dockTargets：静态 route 照常解析进 dockRoutes，
+    // 同时保留声明面条目（与动态目标对称——dockTargets 在场时 null-target
+    // route 也不退出声明面，见 dock_targets_present_null_target_route_stays_
     // unresolved）。
     let target = target_payment_definition();
-    let manifest = manifest_for(&target);
+    let dock_targets = dock_targets_for(&target);
     let artifact = compile_cloud_artifact(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&dock_targets),
         true,
     )
-    .expect("parse-only compilation with a manifest links and declares");
+    .expect("parse-only compilation with dock targets links and declares");
     assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 1);
     assert_eq!(
-        artifact["dockRoutes"][0]["target"]["name"],
-        json!(TARGET_NAME)
+        artifact["dockRoutes"][0]["target"]["uid"],
+        json!(TARGET_UID)
     );
     let unresolved = artifact["unresolvedDockRoutes"].as_array().unwrap();
     assert_eq!(unresolved.len(), 1);
@@ -528,13 +604,13 @@ fn parse_product_declaration_face_is_complete_with_manifest() {
         unresolved[0]["stageIdentifier"],
         "settlement.execute_payment"
     );
-    assert_eq!(unresolved[0]["target"], json!({ "zhixu": TARGET_NAME }));
+    assert_eq!(unresolved[0]["target"], json!({ "zhixu": TARGET_UID }));
 
     // 可运行产物（allow_unresolved=false）不做声明面冗余：静态 route
     // 全量解析后 unresolvedDockRoutes 不落字段（既有口径不变）。
     let runnable = compile_cloud_artifact(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&dock_targets),
         false,
     )
     .expect("runnable compilation keeps the lean declaration face");
@@ -544,7 +620,7 @@ fn parse_product_declaration_face_is_complete_with_manifest() {
 #[test]
 fn rejects_unsupported_executor_config_shapes() {
     // triggerEntrance：不受支持的调用方字段，D002 未知字段硬错误。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()
@@ -559,7 +635,7 @@ fn rejects_unsupported_executor_config_shapes() {
     assert!(message.contains("unknown field"), "{message}");
 
     // schemaVersion 残留键：作者面没有 schemaVersion，按未知字段硬拒绝。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()
@@ -573,7 +649,7 @@ fn rejects_unsupported_executor_config_shapes() {
     );
 
     // signalMap value 是 Hook DSL：只接受端口名。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["signalMap"]["str"] = json!("payment::payment_flow.init.str");
@@ -582,7 +658,7 @@ fn rejects_unsupported_executor_config_shapes() {
     assert!(error.to_string().contains("D006"), "{}", error.to_string());
 
     // supplierID + zhixu：D001。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["supplierID"] =
         json!("payment-zhixu");
     let error = compile_zhixu_hook_plan(&parent, None, false)
@@ -593,7 +669,7 @@ fn rejects_unsupported_executor_config_shapes() {
 #[test]
 fn rejects_signal_map_keys_outside_hook_name_budget() {
     // D006：key 超 26 字节（hook_name = "signalMap." + key 落 VARCHAR(36)）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["signalMap"]["x".repeat(27)] = json!("started");
@@ -606,7 +682,7 @@ fn rejects_signal_map_keys_outside_hook_name_budget() {
     );
 
     // D006：key 携带信号名分隔符 '.'。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["signalMap"]
@@ -622,7 +698,7 @@ fn rejects_signal_map_keys_outside_hook_name_budget() {
     );
 
     // 组合维度：stage 标识符 + key 超 signal_name 列宽（100）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     let long_stage = "s".repeat(90);
     parent["spec"]["taskPatterns"][1]["stages"][0]["name"] = json!(long_stage);
     let error =
@@ -642,14 +718,13 @@ fn signal_map_keys_match_expanded_full_signal_names() {
     // key 引用命中；裸名精确匹配会把 canonical 声明判成"声明即不可
     // 投递"。
     let target = target_payment_definition();
-    let manifest = manifest_for(&target);
+    let dock_targets = dock_targets_for(&target);
 
     // ① signalMap 裸名 key 引用 canonical 自指声明：key "str" 展开后与
     // settlement.execute_payment.str 同一全名，链接照常。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
-    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] =
-        json!(["cmp", "err", "cxl", "settlement.execute_payment.str"]);
-    let plan = compile_zhixu_hook_plan(&parent, Some(&manifest), false).expect(
+    let mut parent = parent_settlement_definition(TARGET_UID);
+    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] = json!([{ "name": "cmp" }, { "name": "err" }, { "name": "cxl" }, { "name": "settlement.execute_payment.str" }]);
+    let plan = compile_zhixu_hook_plan(&parent, Some(&dock_targets), false).expect(
         "canonical self-reference declaration must be deliverable via a bare signalMap key",
     );
     assert_eq!(
@@ -663,9 +738,10 @@ fn signal_map_keys_match_expanded_full_signal_names() {
 
     // ② 展开后仍无主的 key：sendSignals 里的裸名 cmp 不展开成
     // settlement.execute_payment.str，D006 悬空引用照拒。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
-    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] = json!(["cmp", "err", "cxl"]);
-    let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+    let mut parent = parent_settlement_definition(TARGET_UID);
+    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"] =
+        json!([{ "name": "cmp" }, { "name": "err" }, { "name": "cxl" }]);
+    let error = compile_zhixu_hook_plan(&parent, Some(&dock_targets), false)
         .expect_err("dangling signalMap key must fail");
     let message = error.to_string();
     assert!(
@@ -680,7 +756,7 @@ fn signal_map_keys_match_expanded_full_signal_names() {
 fn rejects_leftover_target_version_field() {
     // target 只携带 zhixu（name 即完整目标引用）。残留 version 键按
     // D002 未知字段硬拒绝——静默忽略会让调用方误以为版本钉扎仍生效。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["target"]["version"] = json!("1.2.0");
@@ -698,43 +774,40 @@ fn rejects_leftover_target_version_field() {
 }
 
 #[test]
-fn manifest_name_is_the_resolution_key() {
-    // name 是 linker 的唯一解析键：manifest 缺该 name 即 D008；
-    // manifest 内重名是发布方数据错误，响亮拒绝。
+fn dock_targets_uid_is_the_resolution_key() {
+    // uid 是 linker 的唯一解析键：注册表缺被引用的 uid 即 D008；
+    // 注册表内重复 uid 是注入数据错误，响亮拒绝。
     let target = target_payment_definition();
-    let manifest = manifest_for(&target);
+    let dock_targets = dock_targets_for(&target);
     let plan = compile_zhixu_hook_plan(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&dock_targets),
         false,
     )
-    .expect("honest manifest links");
-    assert_eq!(plan["dockRoutes"][0]["target"]["name"], json!(TARGET_NAME));
+    .expect("honest dock targets link");
+    assert_eq!(plan["dockRoutes"][0]["target"]["uid"], json!(TARGET_UID));
 
-    let mut renamed = manifest_for(&target);
-    renamed["definitions"][0]["name"] = json!(UNKNOWN_TARGET);
+    let mut renamed = dock_targets_for(&target);
+    renamed[0]["uid"] = json!(UNKNOWN_TARGET);
     let error = compile_zhixu_hook_plan(
-        &parent_settlement_definition(TARGET_NAME),
+        &parent_settlement_definition(TARGET_UID),
         Some(&renamed),
         false,
     )
-    .expect_err("manifest without the referenced name must fail");
+    .expect_err("dock targets without the referenced uid must fail");
     let message = error.to_string();
     assert!(
         message.contains("D008")
-            && message.contains("no definition named")
-            && message.contains(TARGET_NAME),
+            && message.contains("no published definition with uid")
+            && message.contains(TARGET_UID),
         "{message}"
     );
 
-    let mut duplicated = manifest_for(&target);
-    let entry = duplicated["definitions"][0].clone();
-    duplicated["definitions"]
-        .as_array_mut()
-        .unwrap()
-        .push(entry);
-    let error = dock::parse_resolution_manifest(&duplicated)
-        .expect_err("duplicate manifest names must fail");
+    let mut duplicated = dock_targets_for(&target);
+    let entry = duplicated[0].clone();
+    duplicated.as_array_mut().unwrap().push(entry);
+    let error =
+        dock::parse_dock_targets(&duplicated).expect_err("duplicate dock target uids must fail");
     assert!(
         error
             .iter()
@@ -748,30 +821,36 @@ fn manifest_name_is_the_resolution_key() {
 fn delegation_subscription_definition(with_anchor: bool) -> Value {
     let mut stages = vec![
         json!({
-            "name": "fanin",
-            "source": "anchoredcls",
-            "receiveSignals": { "SUB": "::ANCHOR(@other::anchor_task.emit.cmp)" },
-            "sendSignals": ["str", "cmp"],
-            "executor": {
-                "supplierType": "zhixu",
-                "zhixuExecutorConfig": {
-                    "target": { "zhixu": UNKNOWN_TARGET },
-                    "interface": "payment_service",
-                    "order": { "mode": "new" },
-                    "inputMap": { "SUB": "execute" },
-                    "signalMap": { "str": "started", "cmp": "completed" }
-                }
-            }
-        }),
+                    "name": "fanin",
+                    "source": "anchoredcls",
+                    "receiveSignals": { "SUB": "::ANCHOR(@other::anchor_task.emit.cmp)" },
+                    "sendSignals": [
+        { "name": "str" },
+        { "name": "cmp" }
+        ],
+                    "executor": {
+                        "supplierType": "zhixu",
+                        "zhixuExecutorConfig": {
+                            "target": { "zhixu": UNKNOWN_TARGET },
+                            "interface": "payment_service",
+                            "order": { "mode": "new" },
+                            "inputMap": { "SUB": "execute" },
+                            "signalMap": { "str": "started", "cmp": "completed" }
+                        }
+                    }
+                }),
         // 订阅目标 source 类必须在本域声明（引用存在性校验）。
         json!({
-            "name": "emit",
-            "source": "other",
-            // 自发种子入口钩子，避免零 hook 阶段被物化门拒绝。
-            "receiveSignals": { "PUBLISH": "other::anchor_task.emit.seed" },
-            "sendSignals": ["cmp", "seed"],
-            "executor": { "supplierType": "organization", "supplierID": "other-org" }
-        }),
+                    "name": "emit",
+                    "source": "other",
+                    // 自发种子入口钩子，避免零 hook 阶段被物化门拒绝。
+                    "receiveSignals": { "PUBLISH": "other::anchor_task.emit.seed" },
+                    "sendSignals": [
+        { "name": "cmp" },
+        { "name": "seed" }
+        ],
+                    "executor": { "supplierType": "organization", "supplierID": "other-org" }
+                }),
     ];
     if with_anchor {
         stages.push(json!({
@@ -779,7 +858,7 @@ fn delegation_subscription_definition(with_anchor: bool) -> Value {
             "source": "anchoredcls",
             "mint": "per-fact",
             "receiveSignals": { "SPAWN": "::ANCHOR(@other::anchor_task.emit.cmp)" },
-            "sendSignals": ["str"],
+            "sendSignals": [{ "name": "str" }],
             "executor": { "supplierType": "organization", "supplierID": "anchor-org" }
         }));
     }
@@ -837,7 +916,7 @@ fn rejects_invalid_stage_sources() {
         // 收敛到 36（37-100 字节的 source 是"声明即死"命名空间）。
         ("oversized", "s".repeat(37)),
     ] {
-        let mut parent = parent_settlement_definition(TARGET_NAME);
+        let mut parent = parent_settlement_definition(TARGET_UID);
         parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!(source);
         let error = compile_zhixu_hook_plan(&parent, None, false)
             .expect_err("invalid stage source must be rejected");
@@ -847,7 +926,7 @@ fn rejects_invalid_stage_sources() {
         );
     }
     // 36 字节边界恰好放行（超出在形状层拒绝，边界值走到后续 link 才失败）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(36));
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("boundary source must pass shape checks and fail later on linking");
@@ -856,7 +935,7 @@ fn rejects_invalid_stage_sources() {
         "36-byte source is legal: {error}"
     );
     // 37 字节：形状层响亮拒绝并指向 36 上限。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["source"] = json!("s".repeat(37));
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("37-byte source must be rejected at the shape layer");
@@ -870,7 +949,7 @@ fn rejects_invalid_stage_sources() {
 fn rejects_unknown_spec_and_executor_fields() {
     // spec 顶层未知字段（含不受支持的 trigger/externalSignals）不被静默
     // 忽略/透传（对齐 Go 入口 decodeObjectStrict）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["trigger"] = json!([]);
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("unsupported spec-level trigger key must fail");
@@ -879,7 +958,7 @@ fn rejects_unknown_spec_and_executor_fields() {
         "{error}"
     );
 
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["externalSignals"] = json!({});
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("unsupported spec-level externalSignals key must fail");
@@ -891,7 +970,7 @@ fn rejects_unknown_spec_and_executor_fields() {
     );
 
     // executor 内未知字段。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["handlerType"] = json!("http");
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("unknown executor field must fail");
@@ -901,7 +980,7 @@ fn rejects_unknown_spec_and_executor_fields() {
     );
 
     // metadata 层未知字段（如 description）同样拒绝。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["metadata"]["description"] = json!("demo");
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("metadata-level unknown field must fail");
@@ -911,7 +990,7 @@ fn rejects_unknown_spec_and_executor_fields() {
     );
 
     // metadata.uid 不是作者可写字段，出现即未知字段响亮拒绝。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["metadata"]["uid"] = json!("zx-hand-written");
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("metadata.uid must be rejected as an unknown field");
@@ -1018,7 +1097,7 @@ fn rejects_interface_shape_violations() {
 #[test]
 fn rejects_config_mapping_violations() {
     // D004：order.mode 闭集。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["order"]["mode"] = json!("reused");
@@ -1035,7 +1114,7 @@ fn rejects_config_mapping_violations() {
 
     // D001：supplierID 键出现即违规——空串是"看似生效"的零值占位，
     // 不因空值豁免（目标身份必须住在 zhixuExecutorConfig.target）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["supplierID"] = json!("  ");
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("empty supplierID on a zhixu executor must fail");
@@ -1046,7 +1125,7 @@ fn rejects_config_mapping_violations() {
     );
 
     // D019：无任何映射。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     let config = parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap();
@@ -1064,7 +1143,7 @@ fn rejects_config_mapping_violations() {
     );
 
     // D010：new 模式多条 input 绑定。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["inputMap"]["CANCEL"] = json!("cancel");
@@ -1078,7 +1157,7 @@ fn rejects_config_mapping_violations() {
     );
 
     // D010：new 模式零条 input 绑定（只有 signalMap）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()
@@ -1087,15 +1166,18 @@ fn rejects_config_mapping_violations() {
         .expect_err("new mode without an input binding must fail");
     assert!(error.to_string().contains("D010"), "{}", error.to_string());
 
-    // D003：target.zhixu 非 name slug 形态。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    // D003：target.zhixu 非 uid 形态。
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["target"]["zhixu"] = json!("Payment_Execution");
     let error =
-        compile_zhixu_hook_plan(&parent, None, false).expect_err("non-slug target name must fail");
+        compile_zhixu_hook_plan(&parent, None, false).expect_err("non-uid target must fail");
     assert!(
-        error.to_string().contains("D003") && error.to_string().contains("metadata.name"),
+        error.to_string().contains("D003")
+            && error
+                .to_string()
+                .contains("content-derived uid, matching ^zx-[0-9a-f]{32}$"),
         "{}",
         error.to_string()
     );
@@ -1104,9 +1186,9 @@ fn rejects_config_mapping_violations() {
 #[test]
 fn accepts_dynamic_target_null_for_parse_only_compilation() {
     // target:null 表示运行时选择补齐：本地校验通过，
-    // 无 manifest 的 parse 编译可过；静态目标缺失 manifest 才是
-    // UNRESOLVED_DOCK_TARGET（见 rejects_parent_without_manifest）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    // 无 dockTargets 的 parse 编译可过；静态目标缺失注册目标才是
+    // UNRESOLVED_DOCK_TARGET（见 rejects_parent_without_dock_targets）。
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["target"] = json!(null);
@@ -1115,11 +1197,12 @@ fn accepts_dynamic_target_null_for_parse_only_compilation() {
     assert_eq!(parsed["dockRoutes"].as_array().unwrap().len(), 0);
 }
 
-/// target:null 的父定义（无 manifest）：本地声明面完整进产物，两个
-/// 可运行 target 都放行——链轨拒绝在 TS onchain 边界（UNRESOLVED_DOCK_
-/// TARGET 口径），云轨运行时由选择记录补齐。
+/// target:null 的父定义（无 dockTargets）：本地声明面完整进产物，两个
+/// 可运行 target 都放行——链轨以同一 unresolvedDockRoutes 声明面承接
+/// （唯一保留的动态拒绝是 orderMode=new，TS onchain 边界按
+/// UNRESOLVED_DOCK_MODE 口径），云轨运行时由选择记录补齐。
 fn null_target_parent() -> Value {
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["target"] = json!(null);
@@ -1183,10 +1266,10 @@ fn dynamic_target_null_lands_in_unresolved_dock_routes() {
 fn unresolved_routes_absent_when_all_targets_static() {
     // 无未解析 route 的产物不落字段。
     let target = target_payment_definition();
-    let manifest = manifest_for(&target);
+    let dock_targets = dock_targets_for(&target);
     let artifact = compile_cloud_artifact(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&dock_targets),
         false,
     )
     .expect("static-only parent compiles");
@@ -1194,11 +1277,11 @@ fn unresolved_routes_absent_when_all_targets_static() {
 }
 
 #[test]
-fn manifest_present_null_target_route_stays_unresolved() {
-    // manifest 在场时 null-target route 不进 link（不报 D008），静态
+fn dock_targets_present_null_target_route_stays_unresolved() {
+    // dockTargets 在场时 null-target route 不进 link（不报 D008），静态
     // route 照常解析：两类 route 各归其位。
     let target = target_payment_definition();
-    let manifest = manifest_for(&target);
+    let dock_targets = dock_targets_for(&target);
     let mut parent = null_target_parent();
     parent["spec"]["taskPatterns"][1]["stages"]
         .as_array_mut()
@@ -1207,11 +1290,11 @@ fn manifest_present_null_target_route_stays_unresolved() {
             "name": "static_dock",
             "source": "buyer",
             "receiveSignals": { "START": "buyer::checkout.confirm.cmp" },
-            "sendSignals": ["str"],
+            "sendSignals": [{ "name": "str" }],
             "executor": {
                 "supplierType": "zhixu",
                 "zhixuExecutorConfig": {
-                    "target": { "zhixu": TARGET_NAME },
+                    "target": { "zhixu": TARGET_UID },
                     "interface": "payment_service",
                     "order": { "mode": "new" },
                     "inputMap": { "START": "execute" },
@@ -1219,7 +1302,7 @@ fn manifest_present_null_target_route_stays_unresolved() {
                 }
             }
         }));
-    let artifact = compile_cloud_artifact(&parent, Some(&manifest), false)
+    let artifact = compile_cloud_artifact(&parent, Some(&dock_targets), false)
         .expect("mixed static/dynamic parent compiles");
     assert_eq!(artifact["dockRoutes"].as_array().unwrap().len(), 1);
     assert_eq!(
@@ -1294,12 +1377,12 @@ fn unresolved_routes_enforce_d016_binding_caps() {
                         "name": "work",
                         "source": "buyer",
                         "receiveSignals": { "START": "buyer::main.work.seed" },
-                        "sendSignals": ["seed"],
+                        "sendSignals": [{ "name": "seed" }],
                         "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
                     },
                     { "name": "dock", "source": "buyer",
                       "receiveSignals": receive_signals,
-                      "sendSignals": ["out"],
+                      "sendSignals": [{ "name": "out" }],
                       "executor": {
                         "supplierType": "zhixu",
                         "zhixuExecutorConfig": {
@@ -1347,7 +1430,7 @@ fn unresolved_routes_enforce_d016_binding_caps() {
 fn rejects_unknown_executor_supplier_types() {
     // supplierType 闭集 {individual, organization, zhixu}：拼错的类型
     // 会经 executorRoutes 进链上承诺，编译期拒绝。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] = json!("org");
     let error = compile_zhixu_hook_plan(&parent, None, false)
         .expect_err("unknown supplierType must fail before entering executorRoutes");
@@ -1360,7 +1443,7 @@ fn rejects_unknown_executor_supplier_types() {
     // 闭集精确匹配（Go 侧严格枚举闸同口径）：带首尾空白的变体按闭集
     // 外拒绝——trim 放行会让产物携带原文、比对侧按精确值分叉。
     for supplier_type in [" organization ", "zhixu ", " individual"] {
-        let mut parent = parent_settlement_definition(TARGET_NAME);
+        let mut parent = parent_settlement_definition(TARGET_UID);
         parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] =
             json!(supplier_type);
         let error = compile_zhixu_hook_plan(&parent, None, true)
@@ -1375,7 +1458,7 @@ fn rejects_unknown_executor_supplier_types() {
 
     // 闭集内取值（zhixu 形态由 dock 系列测试覆盖）照常编译。
     for supplier_type in ["individual", "organization"] {
-        let mut parent = parent_settlement_definition(TARGET_NAME);
+        let mut parent = parent_settlement_definition(TARGET_UID);
         parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierType"] =
             json!(supplier_type);
         compile_zhixu_hook_plan(&parent, None, true)
@@ -1384,13 +1467,80 @@ fn rejects_unknown_executor_supplier_types() {
 }
 
 #[test]
+fn rejects_file_resources_outside_the_closed_file_type_set() {
+    // fileResources 条目随 route 进链上承诺（resourcesHash）：fileType
+    // 闭集 {local, http, txcloud, plain_text} 之外（含带空白变体与缺失）
+    // 都在编译期拒绝，不静默烧进承诺。
+    for (label, file_type) in [
+        ("misspelled", json!("locale")),
+        ("padded", json!(" local ")),
+        ("missing", Value::Null),
+    ] {
+        let mut parent = parent_settlement_definition(TARGET_UID);
+        parent["spec"]["taskPatterns"][0]["stages"][0]["fileResources"] =
+            json!({ "contract_template": { "fileType": file_type } });
+        let error = compile_zhixu_hook_plan(&parent, None, true)
+            .err()
+            .unwrap_or_else(|| panic!("{label} fileType must be rejected"));
+        assert!(
+            error.to_string().contains("fileResources")
+                && error.to_string().contains("fileType must be one of")
+                && error.to_string().contains("whitespace variants rejected"),
+            "{label}: {error}"
+        );
+    }
+
+    // 闭集内取值照常编译。
+    let mut parent = parent_settlement_definition(TARGET_UID);
+    parent["spec"]["taskPatterns"][0]["stages"][0]["fileResources"] = json!({
+        "contract_template": { "fileType": "local", "localFile": { "path": "./t.md" } }
+    });
+    compile_zhixu_hook_plan(&parent, None, true)
+        .unwrap_or_else(|err| panic!("closed-set fileType must compile: {err}"));
+}
+
+#[test]
+fn rejects_selectable_resource_outside_the_closed_file_type_set() {
+    // executor.selectableResource 与 fileResources 同为 FileResource 面，
+    // 且整体经 executorHash 进链上承诺：词表外 fileType（含带空白变体）
+    // 与非 map 形态都在编译期拒绝。
+    for (label, value) in [
+        (
+            "misspelled",
+            json!({ "dataset": { "fileType": "tx_cloud" } }),
+        ),
+        ("padded", json!({ "dataset": { "fileType": " http" } })),
+        ("not-a-map", json!(["dataset"])),
+    ] {
+        let mut parent = parent_settlement_definition(TARGET_UID);
+        parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["selectableResource"] = value;
+        let error = compile_zhixu_hook_plan(&parent, None, true)
+            .err()
+            .unwrap_or_else(|| panic!("{label} selectableResource must be rejected"));
+        assert!(
+            error.to_string().contains("selectableResource")
+                && (label == "not-a-map" || error.to_string().contains("fileType must be one of")),
+            "{label}: {error}"
+        );
+    }
+
+    // 闭集内取值照常编译。
+    let mut parent = parent_settlement_definition(TARGET_UID);
+    parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["selectableResource"] = json!({
+        "dataset": { "fileType": "plain_text", "plainText": { "content": "x" } }
+    });
+    compile_zhixu_hook_plan(&parent, None, true)
+        .unwrap_or_else(|err| panic!("closed-set selectableResource must compile: {err}"));
+}
+
+#[test]
 fn rejects_non_zhixu_executor_with_delegation_config() {
     // organization executor 携带完整 zhixuExecutorConfig：编译期响亮拒绝
     // （D001"拼错字段同罪"口径）——静默放行会把委托配置原文烧进
     // executorRoutes（链上承诺面），"既静态执行者又委托对接"是矛盾声明。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][0]["stages"][0]["executor"]["zhixuExecutorConfig"] = json!({
-        "target": { "zhixu": TARGET_NAME },
+        "target": { "zhixu": TARGET_UID },
         "interface": "payment_service",
         "order": { "mode": "new" },
         "inputMap": { "PLACE": "execute" },
@@ -1419,24 +1569,24 @@ fn rejects_non_zhixu_executor_with_delegation_config() {
 fn rejects_link_violations() {
     let target = target_payment_definition();
 
-    // D008：目标不在 manifest（name 缺失）。
-    let mut manifest = manifest_for(&target);
-    manifest["definitions"][0]["name"] = json!(UNKNOWN_TARGET);
+    // D008：目标不在注册表（被引用 uid 无对应条目）。
+    let mut unregistered = dock_targets_for(&target);
+    unregistered[0]["uid"] = json!(UNKNOWN_TARGET);
     let error = compile_zhixu_hook_plan(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&unregistered),
         false,
     )
     .expect_err("missing target must fail");
     assert!(error.to_string().contains("D008"), "{}", error.to_string());
 
     // D009：引用不在所选接口上的输出端口（cancelled 只在 evidence 上）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["signalMap"]["cxl"] = json!("cancelled");
-    let manifest = manifest_for(&target);
-    let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+    let dock_targets = dock_targets_for(&target);
+    let error = compile_zhixu_hook_plan(&parent, Some(&dock_targets), false)
         .expect_err("unknown output port must fail");
     assert!(
         error.to_string().contains("D009") && error.to_string().contains("payment_service"),
@@ -1445,11 +1595,11 @@ fn rejects_link_violations() {
     );
 
     // D009：接口不存在。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["interface"] = json!("payment_archive");
-    let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+    let error = compile_zhixu_hook_plan(&parent, Some(&dock_targets), false)
         .expect_err("unknown interface must fail");
     assert!(
         error.to_string().contains("D009") && error.to_string().contains("payment_archive"),
@@ -1458,11 +1608,11 @@ fn rejects_link_violations() {
     );
 
     // D020：mode 不在接口 orderModes 内（payment_service 只允许 new）。
-    let mut parent = parent_settlement_definition(TARGET_NAME);
+    let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
         .as_object_mut()
         .unwrap()["order"]["mode"] = json!("existing");
-    let error = compile_zhixu_hook_plan(&parent, Some(&manifest), false)
+    let error = compile_zhixu_hook_plan(&parent, Some(&dock_targets), false)
         .expect_err("mode not allowed by interface must fail");
     assert!(
         error.to_string().contains("D020") && error.to_string().contains("allows orderModes"),
@@ -1470,67 +1620,56 @@ fn rejects_link_violations() {
         error.to_string()
     );
 
-    // D015：目标经 manifest dockEdges 回指父定义（跨定义启动环）。
-    let mut cycled = manifest_for(&target);
-    cycled["definitions"][0]["dockEdges"] = json!([{ "target": "settlement" }]);
+    // D015：route 目标定义的 executor 静态出边自指（启动图自环，route 边
+    // 使环从本地可达）。
+    let self_edge = dock_targets_for(&with_static_dock_edge(target.clone(), Some(TARGET_UID)));
     let error = compile_zhixu_hook_plan(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&cycled),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&self_edge),
         false,
     )
-    .expect_err("route cycle through manifest dockEdges must fail");
+    .expect_err("self-referencing dock edge must fail");
     assert!(
         error.to_string().contains("D015") && error.to_string().contains("cycle"),
         "{}",
         error.to_string()
     );
 
-    // D015：route 目标 name 回指父定义（单边自环）。
-    let interfaces = manifest["definitions"][0]["interfaces"].clone();
-    let self_manifest = json!({
-        "schemaVersion": dock::DOCK_RESOLUTION_SCHEMA_VERSION,
-        "definitions": [{ "name": "settlement", "interfaces": interfaces }]
-    });
-    let mut parent = parent_settlement_definition(TARGET_NAME);
-    parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
-        .as_object_mut()
-        .unwrap()["target"]["zhixu"] = json!("settlement");
-    let error = compile_zhixu_hook_plan(&parent, Some(&self_manifest), false)
-        .expect_err("self-referencing route must fail");
+    // D015：route 目标为注册表条目、该条目的静态出边回指 route 目标
+    // ——环经 route 边与声明边闭合（本地的参与节点是 route 边的起点）。
+    let mutual = json!([
+        { "uid": TARGET_UID,
+          "definition": with_static_dock_edge(target.clone(), Some(SELF_TARGET_UID)) },
+        chain_link_entry(SELF_TARGET_UID.to_string(), Some(TARGET_UID)),
+    ]);
+    let error = compile_zhixu_hook_plan(
+        &parent_settlement_definition(TARGET_UID),
+        Some(&mutual),
+        false,
+    )
+    .expect_err("route plus dock-targets edge cycle must fail");
     assert!(error.to_string().contains("D015"), "{}", error.to_string());
 }
 
-/// manifest 定义的最小合法接口（D015 深度链垫底用）。
-fn minimal_interface_value(name: &str) -> Value {
-    json!({
-        "name": name,
-        "orderModes": ["new"],
-        "inputs": { "enter": { "source": "buyer", "hook": "main.work#DOCK_ENTER" } },
-        "outputs": {},
-    })
-}
-
 #[test]
-fn rejects_startup_depth_beyond_limit_via_manifest_edges() {
-    // 链长 = settlement(1) + payment_execution(1) + mid-1..mid-7(7) = 9
-    // > MAX_DOCK_DEPTH(8)；深度按 manifest 声明的静态 name 边累计。
-    let target = target_payment_definition();
-    let mut deep = manifest_for(&target);
-    deep["definitions"][0]["dockEdges"] = json!([{ "target": "mid-1" }]);
+fn rejects_startup_depth_beyond_limit_via_dock_edges() {
+    // 链长 = settlement(1) + TARGET_UID(1) + mid-1..mid-7(7) = 9
+    // > MAX_DOCK_DEPTH(8)；深度按定义 executor 声明的静态 uid 边累计。
+    let mut deep = dock_targets_for(&with_static_dock_edge(
+        target_payment_definition(),
+        Some(&mid_uid(1)),
+    ));
     for index in 1..7 {
-        deep["definitions"].as_array_mut().unwrap().push(json!({
-            "name": format!("mid-{index}"),
-            "interfaces": [minimal_interface_value(&format!("svc{index}"))],
-            "dockEdges": [{ "target": format!("mid-{}", index + 1) }],
-        }));
+        deep.as_array_mut()
+            .unwrap()
+            .push(chain_link_entry(mid_uid(index), Some(&mid_uid(index + 1))));
     }
-    // 尾节点不声明 dockEdges：缺省=无出边。
-    deep["definitions"].as_array_mut().unwrap().push(json!({
-        "name": "mid-7",
-        "interfaces": [minimal_interface_value("svc7")],
-    }));
+    // 尾节点无静态出边：executor 不携带 target。
+    deep.as_array_mut()
+        .unwrap()
+        .push(chain_link_entry(mid_uid(7), None));
     let error = compile_zhixu_hook_plan(
-        &parent_settlement_definition(TARGET_NAME),
+        &parent_settlement_definition(TARGET_UID),
         Some(&deep),
         false,
     )
@@ -1541,23 +1680,24 @@ fn rejects_startup_depth_beyond_limit_via_manifest_edges() {
         error.to_string()
     );
 
-    // 截短到限内（settlement + payment_execution + mid-1..mid-4 = 6）同
+    // 截短到限内（settlement + TARGET_UID + mid-1..mid-4 = 6）同
     // 一父定义照常编译。
-    let mut shallow = manifest_for(&target);
-    shallow["definitions"][0]["dockEdges"] = json!([{ "target": "mid-1" }]);
+    let mut shallow = dock_targets_for(&with_static_dock_edge(
+        target_payment_definition(),
+        Some(&mid_uid(1)),
+    ));
     for index in 1..4 {
-        shallow["definitions"].as_array_mut().unwrap().push(json!({
-            "name": format!("mid-{index}"),
-            "interfaces": [minimal_interface_value(&format!("svc{index}"))],
-            "dockEdges": [{ "target": format!("mid-{}", index + 1) }],
-        }));
+        shallow
+            .as_array_mut()
+            .unwrap()
+            .push(chain_link_entry(mid_uid(index), Some(&mid_uid(index + 1))));
     }
-    shallow["definitions"].as_array_mut().unwrap().push(json!({
-        "name": "mid-4",
-        "interfaces": [minimal_interface_value("svc4")],
-    }));
+    shallow
+        .as_array_mut()
+        .unwrap()
+        .push(chain_link_entry(mid_uid(4), None));
     compile_zhixu_hook_plan(
-        &parent_settlement_definition(TARGET_NAME),
+        &parent_settlement_definition(TARGET_UID),
         Some(&shallow),
         false,
     )
@@ -1565,28 +1705,26 @@ fn rejects_startup_depth_beyond_limit_via_manifest_edges() {
 }
 
 #[test]
-fn rejects_dock_startup_graph_cycles_at_manifest_level() {
-    // D015 同源防线前移：manifest 声明面可成的环在
+fn rejects_dock_startup_graph_cycles_at_dock_targets_level() {
+    // D015 同源防线前移：dockTargets 声明面可成的环在
     // link 期环检测一律拒绝——互为目标两节点环、经中间定义三节点环、
-    // 自指标自环，不要求本地定义参与成环。
+    // 自指 dockEdges 自环，不要求本地定义参与成环。
     let target = target_payment_definition();
-    let parent = parent_settlement_definition(TARGET_NAME);
-    let parent_with_route_to = |name: &str| {
-        let mut parent = parent_settlement_definition(TARGET_NAME);
+    let parent = parent_settlement_definition(TARGET_UID);
+    let parent_with_route_to = |target_uid: &str| {
+        let mut parent = parent_settlement_definition(TARGET_UID);
         parent["spec"]["taskPatterns"][1]["stages"][0]["executor"]["zhixuExecutorConfig"]
             .as_object_mut()
-            .unwrap()["target"]["zhixu"] = json!(name);
+            .unwrap()["target"]["zhixu"] = json!(target_uid);
         parent
     };
 
-    // A→B→A：manifest 内两定义互为目标（本地未参与成环也要拒绝）。
-    let mut mutual = manifest_for(&target);
-    mutual["definitions"][0]["dockEdges"] = json!([{ "target": "wheel_a" }]);
-    mutual["definitions"].as_array_mut().unwrap().push(json!({
-        "name": "wheel_a",
-        "interfaces": [minimal_interface_value("svc_a")],
-        "dockEdges": [{ "target": "payment_execution" }],
-    }));
+    // A→B→A：注册表内两定义互为目标（本地未参与成环也要拒绝）。
+    let mutual = json!([
+        { "uid": TARGET_UID,
+          "definition": with_static_dock_edge(target.clone(), Some(&mid_uid(1))) },
+        chain_link_entry(mid_uid(1), Some(TARGET_UID)),
+    ]);
     let error = compile_zhixu_hook_plan(&parent, Some(&mutual), false)
         .expect_err("mutual two-definition cycle must fail");
     assert!(
@@ -1594,41 +1732,41 @@ fn rejects_dock_startup_graph_cycles_at_manifest_level() {
         "{error}"
     );
 
-    // A→B→C→A：本地 route A→payment_execution，manifest 边
-    // payment_execution→mid、mid→settlement（回指本地）。
-    let mut three_node = manifest_for(&target);
-    three_node["definitions"][0]["dockEdges"] = json!([{ "target": "mid_cycle" }]);
-    three_node["definitions"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "name": "mid_cycle",
-            "interfaces": [minimal_interface_value("svc_mid")],
-            "dockEdges": [{ "target": "settlement" }],
-        }));
+    // A→B→C→A：注册表内三定义的静态出边成环（本地 route 边同时指向
+    // 环成员 A，环成员与回指形态照常报全）。
+    let three_node = json!([
+        { "uid": TARGET_UID,
+          "definition": with_static_dock_edge(target.clone(), Some(&mid_uid(2))) },
+        chain_link_entry(mid_uid(2), Some(&mid_uid(3))),
+        chain_link_entry(mid_uid(3), Some(TARGET_UID)),
+    ]);
     let error = compile_zhixu_hook_plan(&parent, Some(&three_node), false)
         .expect_err("three-definition cycle must fail");
     let message = error.to_string();
-    // 环路径的起点按 BTreeMap 节点序确定（mid_cycle 最小），断言按
-    // 环成员 + 完整三段回指形态，不钉旋转起点。
+    // 环路径的起点按 BTreeMap 节点序确定（mid-2 的 uid 最小），断言钉
+    // 完整三段回指形态（环成员 + 起点回指，walk 顺序确定）。
     assert!(
         message.contains("D015")
-            && message.contains("mid_cycle -> settlement -> payment_execution -> mid_cycle"),
+            && message.contains(&format!(
+                "{} -> {} -> {} -> {}",
+                mid_uid(2),
+                mid_uid(3),
+                TARGET_UID,
+                mid_uid(2)
+            )),
         "{message}"
     );
 
-    // A→A：manifest 定义经 dockEdges 自指标（自环）。route 自环
-    // （target 回指父定义名）由 rejects_link_violations 覆盖。
-    let mut self_edge = manifest_for(&target);
-    self_edge["definitions"][0]["dockEdges"] = json!([{ "target": "payment_execution" }]);
-    let error =
-        compile_zhixu_hook_plan(&parent_with_route_to(TARGET_NAME), Some(&self_edge), false)
-            .expect_err("manifest self-edge cycle must fail");
+    // A→A：注册表定义的静态出边自指（自环）。route 目标定义出边自指的
+    // 形态由 rejects_link_violations 覆盖。
+    let self_edge = dock_targets_for(&with_static_dock_edge(target.clone(), Some(TARGET_UID)));
+    let error = compile_zhixu_hook_plan(&parent_with_route_to(TARGET_UID), Some(&self_edge), false)
+        .expect_err("dock-targets self-edge cycle must fail");
     assert!(
         error.to_string().contains("D015")
             && error
                 .to_string()
-                .contains("payment_execution -> payment_execution"),
+                .contains(&format!("{TARGET_UID} -> {TARGET_UID}")),
         "{error}"
     );
 }
@@ -1636,14 +1774,14 @@ fn rejects_dock_startup_graph_cycles_at_manifest_level() {
 #[test]
 fn cloud_artifact_uses_resolved_routes() {
     let target = target_payment_definition();
-    let manifest = manifest_for(&target);
+    let dock_targets = dock_targets_for(&target);
     let artifact = compile_cloud_artifact(
-        &parent_settlement_definition(TARGET_NAME),
-        Some(&manifest),
+        &parent_settlement_definition(TARGET_UID),
+        Some(&dock_targets),
         false,
     )
-    .expect("cloud artifact compiles with manifest");
-    assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v2");
+    .expect("cloud artifact compiles with dock targets");
+    assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v4");
     let hooks = artifact["hooks"].as_array().unwrap();
     assert!(hooks
         .iter()
@@ -1715,7 +1853,7 @@ fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
     empty["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!(""));
+        .push(json!({ "name": "" }));
     for target in ["hook_plan", "cloud"] {
         let error = (if target == "hook_plan" {
             compile_zhixu_hook_plan(&empty, None, true)
@@ -1723,17 +1861,14 @@ fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
             compile_cloud_artifact(&empty, None, true)
         })
         .expect_err("empty sendSignal must fail");
-        assert!(
-            error.to_string().contains("cannot contain an empty signal"),
-            "{target}: {error}"
-        );
+        assert!(error.to_string().contains("D026"), "{target}: {error}");
     }
 
     let mut duplicate = target_payment_definition();
     duplicate["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!("str"));
+        .push(json!({ "name": "str" }));
     for target in ["hook_plan", "cloud"] {
         let error = (if target == "hook_plan" {
             compile_zhixu_hook_plan(&duplicate, None, true)
@@ -1751,11 +1886,12 @@ fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
 #[test]
 fn send_signal_declarations_use_a_single_exact_surface() {
     // 声明面单一精确口径：declared 与 capability 同一原文（不 trim），
-    // `<target>::<signal>` 与裸名都按信号名同款标识符文法闸——空白、
-    // `::` 再现、非标识符字符、数字开头在此响亮拒绝（capability 侧
-    // trim 归一会产出死能力并与其它声明撞 duplicate）。
+    // 裸名与 canonical 名都按信号名同款标识符文法闸——空白、非标识符
+    // 字符、数字开头、错误的段数在此响亮拒绝（capability 侧 trim 归一
+    // 会产出死能力并与其它声明撞 duplicate）。
     for (label, signal) in [
         ("leading whitespace bare", " str"),
+        ("target separator form", "Seller::NOTED"),
         ("trailing whitespace target", "buyer::cmp "),
         ("whitespace inside target", "buy er::cmp"),
         ("double separator", "a::b::c"),
@@ -1770,7 +1906,7 @@ fn send_signal_declarations_use_a_single_exact_surface() {
         definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
             .as_array_mut()
             .unwrap()
-            .push(json!(signal));
+            .push(json!({ "name": signal }));
         let error = compile_zhixu_hook_plan(&definition, None, true)
             .expect_err(&format!("{label} ({signal:?}) must be rejected"));
         assert!(
@@ -1779,32 +1915,12 @@ fn send_signal_declarations_use_a_single_exact_surface() {
         );
     }
 
-    // 合法形态钉住：`<target>::<signal>` 携带合法标识符文法（大写与
-    // task/stage 名同文法合法——身份大小写敏感、无折叠）照常编译，
-    // capability 携带与声明逐字节相同的精确值。
-    let mut definition = target_payment_definition();
-    definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("Seller::NOTED"));
-    let plan = compile_zhixu_hook_plan(&definition, None, true)
-        .expect("identifier-grammar target signal compiles");
-    let capability = plan["signalCapabilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|capability| capability["declaredSignal"] == json!("Seller::NOTED"))
-        .expect("capability carries the exact declared value");
-    assert_eq!(capability["targetSource"], json!("Seller"));
-    assert_eq!(capability["targetSignalName"], json!("NOTED"));
-    assert_eq!(capability["targetOrderRelation"], json!("triggerOrigin"));
-
     // "str" 与 " str" 不再撞 duplicate 误判：" str" 在形态闸被拒绝。
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!(" str"));
+        .push(json!({ "name": " str" }));
     let error = compile_zhixu_hook_plan(&definition, None, true)
         .expect_err("whitespace-padded signal must be rejected by the shape gate");
     assert!(
@@ -1824,7 +1940,7 @@ fn canonical_send_signals_are_explicit_self_references() {
     // 校验只比第三段裸名，canonical 声明被判悬空引用。
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
-        json!(["payment_flow.init.str"]);
+        json!([{ "name": "payment_flow.init.str" }]);
     let plan = compile_zhixu_hook_plan(&definition, None, true)
         .expect("canonical self-reference declaration compiles");
     let capability = plan["signalCapabilities"]
@@ -1853,7 +1969,7 @@ fn canonical_send_signals_are_explicit_self_references() {
                 "name": "echo",
                 "source": "payment",
                 "receiveSignals": { "GO": "payment::payment_flow.init.str" },
-                "sendSignals": ["payment_flow.init.str"],
+                "sendSignals": [{ "name": "payment_flow.init.str" }],
                 "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
             }]
         }));
@@ -1878,7 +1994,7 @@ fn canonical_send_signals_are_explicit_self_references() {
     // duplicate（展开后的全名统一比较）。
     let mut both = target_payment_definition();
     both["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
-        json!(["str", "payment_flow.init.str"]);
+        json!([{ "name": "str" }, { "name": "payment_flow.init.str" }]);
     let error = compile_zhixu_hook_plan(&both, None, true)
         .expect_err("bare + canonical self-reference must collide");
     assert!(
@@ -1891,7 +2007,7 @@ fn canonical_send_signals_are_explicit_self_references() {
     // payment::payment_flow.init.str）。
     let mut target = target_payment_definition();
     target["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
-        json!(["payment_flow.init.str"]);
+        json!([{ "name": "payment_flow.init.str" }]);
     compile_zhixu_hook_plan(&target, None, true)
         .expect("D014 resolves canonical declarations by expanded full name");
 }
@@ -1951,7 +2067,7 @@ fn rejects_executor_without_supplier_id_even_when_selected_stages_anchored() {
                         "name": "assign",
                         "source": "buyer",
                         "selectedStages": ["execution.main"],
-                        "sendSignals": ["executor_selected"],
+                        "sendSignals": [{ "name": "executor_selected" }],
                         "executor": { "supplierType": "organization", "supplierID": "selector-org" }
                     }
                 ]},
@@ -2000,7 +2116,7 @@ fn rejects_empty_or_whitespace_metadata_name() {
 
 #[test]
 fn rejects_metadata_name_outside_slug_shape() {
-    // N7：name 是作者技术标签，slug 形态（小写开头，小写字母/数字/
+    // name 是作者技术标签，slug 形态（小写开头，小写字母/数字/
     // 下划线/中划线，≤100 字节）；校验仅限形态。
     for name in ["Payment", "pay ment", "1payment", "支付"] {
         let mut definition = target_payment_definition();
@@ -2037,7 +2153,7 @@ fn rejects_subscription_stage_bound_only_through_selected_stages() {
                         "name": "assign",
                         "source": "buyer",
                         "selectedStages": ["execution.main"],
-                        "sendSignals": ["executor_selected"],
+                        "sendSignals": [{ "name": "executor_selected" }],
                         "executor": { "supplierType": "organization", "supplierID": "selector-org" }
                     }
                 ]},
@@ -2091,7 +2207,7 @@ fn rejects_receive_hooks_on_stage_without_static_executor() {
                         "name": "assign",
                         "source": "buyer",
                         "selectedStages": ["execution.main"],
-                        "sendSignals": ["executor_selected"],
+                        "sendSignals": [{ "name": "executor_selected" }],
                         "executor": { "supplierType": "organization", "supplierID": "selector-org" }
                     }
                 ]},
@@ -2161,6 +2277,87 @@ fn rejects_receive_signal_keys_with_separators() {
             .to_string()
             .contains("must not contain '.', '#' or whitespace"),
         "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn send_signal_combined_length_counts_canonical_full_name_exactly() {
+    // 对拍 Go validateDDLDimensions（dimensions.go）：canonical 三段式声明
+    // 本身即全名（task.stage.signal），按原文精确计长；裸名才拼 stage
+    // 前缀。三段式若再拼一次 stage 前缀，会把 task.stage 段重复计入、
+    // 误伤恰 100 字节列宽边界内的合法 canonical 名，两侧结论必须一致。
+    let stage_name = "s".repeat(48);
+    let canonical_at_limit = format!("t.{}.{}", stage_name, "x".repeat(49));
+    assert_eq!(canonical_at_limit.len(), 100);
+    let canonical_over_limit = format!("t.{}.{}", stage_name, "x".repeat(50));
+    assert_eq!(canonical_over_limit.len(), 101);
+    // stage 标识符 "t.<48 字节>" = 50 字节：裸名组合边界 50+1+49=100。
+    let bare_at_limit = "y".repeat(49);
+    let bare_over_limit = "y".repeat(50);
+
+    let definition_with = |signals: Vec<String>| {
+        json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "dimension-parity" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "core" },
+                "taskPatterns": [{
+                    "name": "t",
+                    "stages": [{
+                        "name": stage_name,
+                        "source": "parity",
+                        "receiveSignals": {
+                            "PUBLISH": format!("parity::t.{stage_name}.seed")
+                        },
+                        "sendSignals": signals
+                            .iter()
+                            .map(|name| json!({ "name": name }))
+                            .collect::<Vec<_>>(),
+                        "executor": {
+                            "supplierType": "organization",
+                            "supplierID": "parity-executor"
+                        }
+                    }]
+                }]
+            }
+        })
+    };
+
+    // 恰 100 字节的 canonical 三段式：列宽边界内，两个 target 都放行
+    // （Go 侧 full = len(signal) = 100，同结论）。
+    let signals = vec!["seed".to_string(), canonical_at_limit];
+    compile_zhixu_hook_plan(&definition_with(signals.clone()), None, true)
+        .expect("100-byte canonical sendSignal sits exactly at the column width");
+    compile_cloud_artifact(&definition_with(signals), None, true)
+        .expect("100-byte canonical sendSignal sits exactly at the column width (cloud)");
+
+    // 101 字节的 canonical 三段式：两侧都拒。
+    let signals = vec!["seed".to_string(), canonical_over_limit];
+    for target in ["hook_plan", "cloud"] {
+        let result = if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition_with(signals.clone()), None, true)
+        } else {
+            compile_cloud_artifact(&definition_with(signals.clone()), None, true)
+        };
+        let error = result.expect_err("101-byte canonical sendSignal exceeds the column width");
+        assert!(
+            error.to_string().contains("exceeds 100 bytes combined"),
+            "{target}: {error}"
+        );
+    }
+
+    // 裸名（无 '.'）：Go 同款拼 stage 前缀——组合恰 100 放行、101 拒。
+    let signals = vec!["seed".to_string(), bare_at_limit];
+    compile_zhixu_hook_plan(&definition_with(signals), None, true)
+        .expect("bare name combining to exactly 100 bytes is at the column width");
+    let signals = vec!["seed".to_string(), bare_over_limit];
+    let error = compile_zhixu_hook_plan(&definition_with(signals), None, true)
+        .expect_err("bare name combining past 100 bytes must fail");
+    assert!(
+        error.to_string().contains("exceeds 100 bytes combined"),
+        "{error}"
     );
 }
 
@@ -2390,7 +2587,10 @@ fn mint_stage_value(
         "name": name,
         "source": source,
         "receiveSignals": receive_signals,
-        "sendSignals": send_signals,
+        "sendSignals": send_signals
+            .iter()
+            .map(|name| json!({ "name": name }))
+            .collect::<Vec<_>>(),
         "mint": "per-fact",
         "executor": {
             "supplierType": "organization",
@@ -2407,7 +2607,10 @@ fn emitter_stage_value(task: &str, name: &str, source: &str, send_signals: &[&st
         "name": name,
         "source": source,
         "receiveSignals": { "PUBLISH": format!("{source}::{task}.{name}.seed") },
-        "sendSignals": signals,
+        "sendSignals": signals
+            .iter()
+            .map(|signal| json!({ "name": signal }))
+            .collect::<Vec<_>>(),
         "executor": {
             "supplierType": "organization",
             "supplierID": format!("{task}-{name}-executor")
@@ -2429,4 +2632,644 @@ fn mint_definitions(stages: &[(&str, Value)]) -> Value {
                 .collect::<Vec<_>>()
         }
     })
+}
+
+#[test]
+fn rejects_mint_birth_key_colliding_with_dock_entrance_key() {
+    // 出生通道键并集查重：mint 阶段的 ANCHOR 出生事实键与本地
+    // dockInterface entrance 端口（orderModes 含 new）的 atom 事实键相同
+    // ——同一事实同时是 mint 出生入口与 dock 出生锚，outside 开放提交与
+    // dock 建单竞争同一事实的出生通道，编译期与协议侧同义拒绝（两个
+    // target 同口径）。
+    let mut definition = target_payment_definition();
+    // payment_service[new].inputs.execute 的 atom 是
+    // payment::payment_flow.init.execute——mint 阶段订阅同一事实。
+    definition["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "buyer",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.init.execute)" }),
+                &["ack"],
+            )]
+        }));
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("mint birth key colliding with a dock entrance key must fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("payment::payment_flow.init.execute")
+            && message.contains("dock entrance port(s) (payment_service.execute)")
+            && message.contains("mint stage(s) (orchard.retail)")
+            && message.contains("出生通道键并集查重"),
+        "unexpected error: {message}"
+    );
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("cloud target must reject the colliding birth channel key too");
+    assert!(
+        error
+            .to_string()
+            .contains("出生通道键并集查重：mint 出生键 ∪ dock entrance 键内不得重复"),
+        "unexpected error: {error}"
+    );
+
+    // 正例对照：mint 出生键指向本 plan 内另一事实（settle.cmp），与
+    // entrance 键不相交——并集无重复，照常编译。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "buyer",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.settle.cmp)" }),
+                &["ack"],
+            )]
+        }));
+    compile_zhixu_hook_plan(&definition, None, true)
+        .expect("a mint birth key disjoint from dock entrance keys must compile");
+    compile_cloud_artifact(&definition, None, true)
+        .expect("a mint birth key disjoint from dock entrance keys must compile (cloud)");
+}
+
+#[test]
+fn rejects_dock_entrance_key_published_twice_across_new_interfaces() {
+    // 并集查重的 dock∪dock 面：两个 new 型接口的 input 端口引用同一
+    // stage 上 atom 相同的两个 mailbox hook——hooks_claimed 只封同一 hook
+    // 引用重复发布，不同 hook 名承载同一 atom 的事实键仍构成出生通道键
+    // 重复，按并集规则拒绝。
+    let mut definition = target_payment_definition();
+    // 第二个接收通道与 DOCK_EXECUTE 同 atom。
+    definition["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_EXECUTE_2"] =
+        json!("payment::payment_flow.init.execute");
+    definition["spec"]["dockInterface"]["payment_retry"] = json!({
+        "orderModes": ["new"],
+        "inputs": {
+            "execute": { "hook": "payment_flow.init#DOCK_EXECUTE_2" }
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("the same entrance fact key published by two new-mode ports must fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("payment::payment_flow.init.execute")
+            && message
+                .contains("dock entrance port(s) (payment_retry.execute, payment_service.execute)")
+            && message.contains("出生通道键并集查重"),
+        "unexpected error: {message}"
+    );
+
+    // 对照：第二接口是 existing 型——其 input 端口不是出生锚，不进并集。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_EXECUTE_2"] =
+        json!("payment::payment_flow.init.execute");
+    definition["spec"]["dockInterface"]["payment_retry"] = json!({
+        "orderModes": ["existing"],
+        "inputs": {
+            "execute": { "hook": "payment_flow.init#DOCK_EXECUTE_2" }
+        }
+    });
+    compile_zhixu_hook_plan(&definition, None, true)
+        .expect("existing-mode input ports are not birth anchors and stay outside the union");
+}
+
+// ------------------------------------------------------------------
+// 定义/接口/dockTargets 计数上限与错误串截断。
+// ------------------------------------------------------------------
+
+/// 计数闸探针基底：shape 层合法的最小 stage（后续校验不跑——计数错误在
+/// validate_zhixu_shape 即返回）。
+fn counted_stage_value(name: &str, receive_keys: &[&str]) -> Value {
+    let receive_signals: serde_json::Map<String, Value> = receive_keys
+        .iter()
+        .map(|key| (key.to_string(), json!("src::count.task.seed")))
+        .collect();
+    json!({
+        "name": name,
+        "source": "src",
+        "receiveSignals": receive_signals,
+        "sendSignals": [{ "name": "seed" }],
+        "executor": { "supplierType": "organization", "supplierID": "counter" }
+    })
+}
+
+fn counted_definition(tasks: Vec<(String, Vec<Value>)>) -> Value {
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "counted" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": tasks
+                .into_iter()
+                .map(|(name, stages)| json!({ "name": name, "stages": stages }))
+                .collect::<Vec<_>>()
+        }
+    })
+}
+
+#[test]
+fn rejects_definition_counts_beyond_limits() {
+    // taskPatterns > 64。
+    let tasks = (0..65)
+        .map(|index| (format!("t{index}"), vec![counted_stage_value("s0", &[])]))
+        .collect();
+    let error = compile_zhixu_hook_plan(&counted_definition(tasks), None, true)
+        .expect_err("65 task patterns exceed the cap");
+    assert!(
+        error.to_string().contains("65 task patterns, limit is 64"),
+        "{error}"
+    );
+
+    // 摊平阶段总数 > 256（60 task × 5 stage = 300，task 数在限内）。
+    let tasks = (0..60)
+        .map(|index| {
+            (
+                format!("t{index}"),
+                (0..5)
+                    .map(|stage| counted_stage_value(&format!("s{stage}"), &[]))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let error = compile_zhixu_hook_plan(&counted_definition(tasks), None, true)
+        .expect_err("300 flattened stages exceed the cap");
+    assert!(
+        error
+            .to_string()
+            .contains("flattens to 300 stages across taskPatterns, limit is 256"),
+        "{error}"
+    );
+
+    // receiveSignals 通道总数 > 512（256 stage × 3 通道 = 768，其余在限内）。
+    let stages = (0..256)
+        .map(|stage| counted_stage_value(&format!("s{stage:03}"), &["a1", "a2", "a3"]))
+        .collect::<Vec<_>>();
+    let error = compile_zhixu_hook_plan(
+        &counted_definition(vec![("t".to_string(), stages)]),
+        None,
+        true,
+    )
+    .expect_err("768 receiveSignals channels exceed the cap");
+    assert!(
+        error
+            .to_string()
+            .contains("declares 768 receiveSignals channels (compiled hooks) across taskPatterns, limit is 512"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rejects_interface_with_too_many_ports() {
+    // D016（声明面计数闸）：单接口 inputs+outputs > 64。
+    let mut definition = target_payment_definition();
+    let mut inputs = serde_json::Map::new();
+    for index in 0..65 {
+        inputs.insert(
+            format!("p{index:02}"),
+            json!({ "hook": "payment_flow.init#DOCK_EXECUTE" }),
+        );
+    }
+    definition["spec"]["dockInterface"]["wide"] = json!({
+        "orderModes": ["existing"],
+        "inputs": inputs,
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("a 65-port interface exceeds the cap");
+    let message = error.to_string();
+    assert!(
+        message.contains("D016")
+            && message.contains("exposes 65 ports (65 inputs + 0 outputs), limit is 64"),
+        "{message}"
+    );
+}
+
+#[test]
+fn dock_targets_reject_too_many_definitions() {
+    // D008（dockTargets 计数闸）：条目 > 256——注入数据错误的
+    // 规模面在解析期收口。
+    let targets = (0..257)
+        .map(|index| json!({ "uid": mid_uid(index) }))
+        .collect::<Vec<_>>();
+    let issues = crate::dock::parse_dock_targets(&Value::Array(targets)).unwrap_err();
+    assert!(
+        issues.iter().any(|issue| issue.code == "D008"
+            && issue
+                .message
+                .contains("carries 257 definitions, limit is 256")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn error_string_is_truncated_at_the_boundary() {
+    // 毒定义（每个 stage 一条 source 字符集错误 × 256 个 stage）产出远超
+    // 16KB 的 issues——错误串在拼装边界截断并标注省略条数，FFI/NAPI 信封
+    // 不随 plan 输入无界膨胀。
+    let stages = (0..256)
+        .map(|index| {
+            json!({
+                "name": format!("s{index:03}"),
+                "source": "bad source",
+                "receiveSignals": { "PUBLISH": "src::count.task.seed" },
+                "sendSignals": [{ "name": "seed" }],
+                "executor": { "supplierType": "organization", "supplierID": "counter" }
+            })
+        })
+        .collect::<Vec<_>>();
+    let definition = counted_definition(vec![("count".to_string(), stages)]);
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("256 invalid-source stages must fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("issues truncated: error string capped at 16384 bytes"),
+        "{message}"
+    );
+    assert!(
+        message.len() <= crate::MAX_ISSUES_STRING_BYTES + 200,
+        "truncated error string must stay bounded: {}",
+        message.len()
+    );
+}
+
+// ------------------------------------------------------------------
+// 发射适格面（admissions）：过滤档编译与编译期拒绝面（D026-D031）。
+// ------------------------------------------------------------------
+
+/// settle.cmp 的适格表达式（14d 窗口否决 control.cxl）：三段式寻址、
+/// 衰减否决位在合取直接子项——两档都合法的保守形态。
+const SETTLE_ADMISSION: &str = "payment::payment_flow.init.str & ~(payment_flow.control.cxl +14d)";
+
+#[test]
+fn admissions_compile_into_both_targets() {
+    // 条目镜像 hook 条目形态：hook_plan 携带 normalizedExpression/ast/全量
+    // 依赖（含 timer）；cloud 携带 cloudAst 与 (signalName, dependencyKind)
+    // 两维依赖（timer 不进云侧消费面）。无条件条目不产 admission。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!(SETTLE_ADMISSION);
+    let plan = compile_zhixu_hook_plan(&definition, None, true)
+        .expect("gated sendSignal compiles for hook_plan");
+    let admissions = plan["admissions"].as_array().unwrap();
+    assert_eq!(
+        admissions.len(),
+        1,
+        "only the validWhen-bearing entry admits: {admissions:?}"
+    );
+    let admission = &admissions[0];
+    assert_eq!(admission["stageIdentifier"], json!("payment_flow.settle"));
+    assert_eq!(admission["signalName"], json!("payment_flow.settle.cmp"));
+    assert_eq!(admission["rawExpression"], json!(SETTLE_ADMISSION));
+    assert_eq!(
+        admission["normalizedExpression"],
+        json!("payment::payment_flow.init.str&~(payment_flow.control.cxl+14d)")
+    );
+    assert!(
+        admission["ast"].is_object(),
+        "hook_plan carries the parsed AST"
+    );
+    // 否决位内层是否定延时：负向依赖照出、timer 不出（衰减不为变假调度）。
+    assert_eq!(
+        admissions[0]["dependencies"],
+        json!([
+            { "kind": "negative", "source": "payment", "signalName": "payment_flow.control.cxl" },
+            { "kind": "positive", "source": "payment", "signalName": "payment_flow.init.str" },
+        ]),
+        "hook_plan carries the full dependency form: {admission:?}"
+    );
+
+    let cloud = compile_cloud_artifact(&definition, None, true)
+        .expect("cloud target compiles the same admission");
+    let cloud_admissions = cloud["admissions"].as_array().unwrap();
+    assert_eq!(cloud_admissions.len(), 1);
+    let cloud_admission = &cloud_admissions[0];
+    assert_eq!(
+        cloud_admission["signalName"],
+        json!("payment_flow.settle.cmp")
+    );
+    assert_eq!(
+        cloud_admission["cloudAst"]["schemaVersion"],
+        json!("uvp.cloudAst.v1")
+    );
+    assert_eq!(
+        cloud_admission["dependencies"],
+        json!([
+            { "signalName": "payment_flow.control.cxl", "dependencyKind": "negative" },
+            { "signalName": "payment_flow.init.str", "dependencyKind": "positive" },
+        ]),
+        "cloud dependencies drop the timer dimension: {cloud_admission:?}"
+    );
+}
+
+#[test]
+fn admission_self_reference_is_rejected_in_both_targets() {
+    // pre-state 不含本发：表达式引用本信号自身是自证无效（D028）——按
+    // 展开后的全名比对，与标头 source 无关（换一个 source 类标头引用
+    // 本信号的全名同样是自引用）。
+    for target in ["hook_plan", "cloud"] {
+        for header in ["payment", "seller"] {
+            let mut definition = target_payment_definition();
+            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+                json!(format!("{header}::payment_flow.settle.cmp & payment_flow.init.str"));
+            let result = if target == "hook_plan" {
+                compile_zhixu_hook_plan(&definition, None, true)
+            } else {
+                compile_cloud_artifact(&definition, None, true)
+            };
+            let error = result.expect_err("self-referencing validWhen must fail");
+            assert!(
+                error.to_string().contains(
+                    "D028 payment_flow.settle.sendSignals[cmp].validWhen: expression addresses the declaring signal itself (payment_flow.settle.cmp)"
+                ),
+                "{target}/{header}: {error}"
+            );
+        }
+    }
+
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!("seller::payment_flow.settle.cmp & payment_flow.init.str");
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("a same-named fact under another source class still addresses the declaring signal's fact key");
+    assert!(
+        error.to_string().contains("D028 payment_flow.settle.sendSignals[cmp].validWhen"),
+        "{error}"
+    );
+}
+
+#[test]
+fn admission_dangling_references_are_rejected() {
+    // validWhen 引用存在性与 receiveSignals 同口径：悬空 stage / 目标
+    // stage 存在但信号未声明 / 标头 source 未在本域声明，三个形态在两个
+    // target 的编译期都响亮拒绝——放行会把死依赖推迟为运行期静默 init
+    // （正锚永不 Ready）或静默失活的负门。
+    for (label, expression, needle) in [
+        (
+            "unknown stage",
+            "payment::task.nothere.nosignal",
+            "references unknown stage task.nothere",
+        ),
+        (
+            "undeclared signal",
+            "payment::payment_flow.init.never_declared",
+            "references unknown signal payment_flow.init.never_declared",
+        ),
+        (
+            "undeclared source",
+            "ghost::payment_flow.init.str",
+            "is not a declared source in this zhixu",
+        ),
+    ] {
+        for target in ["hook_plan", "cloud"] {
+            let mut definition = target_payment_definition();
+            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+                json!(expression);
+            let result = if target == "hook_plan" {
+                compile_zhixu_hook_plan(&definition, None, true)
+            } else {
+                compile_cloud_artifact(&definition, None, true)
+            };
+            let error = result.expect_err(&format!("{label} ({target}) must be rejected"));
+            assert!(
+                error.to_string().contains(".sendSignals[cmp].validWhen"),
+                "{label} ({target}): {error}"
+            );
+            assert!(
+                error.to_string().contains(needle),
+                "{label} ({target}): {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn admission_on_birth_anchors_is_rejected() {
+    // 出生写入不经适格面，声明即死代码（D029）。三个编译可见面：
+    // mint SPAWN 出生目标 / dock new 模式出生锚输入端口 / 无锚通道阶段。
+    //
+    // mint SPAWN 出生目标：orchard.retail 订阅 payment_flow.init.str，
+    // 该事实同时由 init 声明为 sendSignal——其 validWhen 即死代码。
+    let mut minted = target_payment_definition();
+    minted["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] =
+        json!(SETTLE_ADMISSION);
+    minted["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "buyer",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.init.str)" }),
+                &["ack"],
+            )]
+        }));
+    let error = compile_zhixu_hook_plan(&minted, None, true)
+        .expect_err("validWhen on a mint SPAWN birth target must fail");
+    assert!(
+        error.to_string().contains(
+            "D029 payment_flow.init.sendSignals[str].validWhen: payment_flow.init.str is a birth-anchor signal"
+        ),
+        "{error}"
+    );
+
+    // dock 出生锚输入端口：payment_service[new].inputs.execute 的 atom 是
+    // payment::payment_flow.init.execute（本单信号名），声明该名字的
+    // sendSignals 条目不得携带 validWhen。
+    let mut dock_anchored = target_payment_definition();
+    dock_anchored["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "execute", "validWhen": SETTLE_ADMISSION }));
+    let error = compile_cloud_artifact(&dock_anchored, None, true)
+        .expect_err("validWhen on a dock birth-anchor input must fail");
+    assert!(
+        error.to_string().contains(
+            "D029 payment_flow.init.sendSignals[execute].validWhen: payment_flow.init.execute is a birth-anchor signal"
+        ),
+        "{error}"
+    );
+
+    // 无锚通道阶段：订阅阶段所在 source 类无 mint 声明 → 扇入投递无单
+    // 可判，其信号全部不得声明适格面。
+    let mut channel = target_payment_definition();
+    channel["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "audit",
+            "stages": [{
+                "name": "watch",
+                "source": "auditor",
+                "receiveSignals": { "SPAWN": "::ANCHOR(@payment::payment_flow.init.str)" },
+                "sendSignals": [{ "name": "seen", "validWhen": SETTLE_ADMISSION }],
+                "executor": { "supplierType": "organization", "supplierID": "audit-watcher" }
+            }]
+        }));
+    let error = compile_zhixu_hook_plan(&channel, None, true)
+        .expect_err("validWhen on an anchorless channel stage must fail");
+    assert!(
+        error.to_string().contains(
+            "D029 audit.watch.sendSignals[seen].validWhen: audit.watch is an anchorless channel stage"
+        ),
+        "{error}"
+    );
+
+    // 正例对照：本域 source 类有 mint 声明的订阅阶段按单投递（route=
+    // order），其信号过适格面照常编译。
+    let mut anchored_channel = channel;
+    anchored_channel["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "orchard",
+            "stages": [mint_stage_value(
+                "orchard",
+                "retail",
+                "auditor",
+                json!({ "SPAWN": "::ANCHOR(@payment::payment_flow.init.str)" }),
+                &["ack"],
+            )]
+        }));
+    compile_zhixu_hook_plan(&anchored_channel, None, true)
+        .expect("an order-anchored subscription stage may declare admissions");
+}
+
+#[test]
+fn admission_on_signal_map_relay_targets_is_rejected() {
+    // 回传经引擎内部事务入口（ownsTx=false）进场，整段绕过适格筛：
+    // signalMap 绑定的本地信号声明 validWhen 是"想设闸没设成"的死代码，
+    // 与出生锚同族（D029），两个 target 一致拒绝。settlement.execute_payment
+    // 的 signalMap 绑定 str/cmp/err，cxl 未绑定。
+    let mut parent = parent_settlement_definition(TARGET_UID);
+    parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"][0]["validWhen"] =
+        json!("buyer::checkout.confirm.cmp");
+    for target in ["hook_plan", "cloud"] {
+        let result = if target == "hook_plan" {
+            compile_zhixu_hook_plan(&parent, None, true)
+        } else {
+            compile_cloud_artifact(&parent, None, true)
+        };
+        let error = result.expect_err("validWhen on a signalMap relay target must fail");
+        assert!(
+            error.to_string().contains(
+                "D029 settlement.execute_payment.sendSignals[str].validWhen: settlement.execute_payment.str is a signalMap relay target"
+            ),
+            "{target}: {error}"
+        );
+    }
+
+    // 正例对照：同一阶段未被 signalMap 绑定的外部信号带 validWhen 合法，
+    // 适格面照常产出条目。
+    let mut plain = parent_settlement_definition(TARGET_UID);
+    plain["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"][3]["validWhen"] =
+        json!("buyer::checkout.confirm.cmp");
+    let plan = compile_zhixu_hook_plan(&plain, None, true)
+        .expect("validWhen on a signal outside signalMap stays legal");
+    assert_eq!(plan["admissions"].as_array().map(Vec::len), Some(1));
+}
+
+#[test]
+fn admission_subscription_atom_is_rejected() {
+    // 适格是本单状态判定，订阅原子（ANCHOR）是逐事件投递通道——
+    // 语义面互斥，编译期拒绝（D030）。过滤档解析放行订阅形态，拒绝
+    // 只能落在此处（解析器无定义上下文）。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!("::ANCHOR(@payment::payment_flow.init.str)");
+    for target in ["hook_plan", "cloud"] {
+        let result = if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition, None, true)
+        } else {
+            compile_cloud_artifact(&definition, None, true)
+        };
+        let error = result.expect_err("subscription atoms must not ride the admission face");
+        assert!(
+            error.to_string().contains(
+                "D030 payment_flow.settle.sendSignals[cmp].validWhen: admission is a per-order state judgment and must not contain subscription atoms"
+            ),
+            "{target}: {error}"
+        );
+    }
+}
+
+#[test]
+fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
+    // D026 空 name；D027 空白 validWhen（声明即必填，空白是笔误面）；
+    // D031 重复 capability（裸名与 canonical 自指同键）；未知键由
+    // typed model 的 deny_unknown_fields 在定义解码期响亮拒绝。
+    let mut empty_name = target_payment_definition();
+    empty_name["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "" }));
+    let error = compile_zhixu_hook_plan(&empty_name, None, true)
+        .expect_err("an entry without a name must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("D026 payment_flow.init.sendSignals: name is required"),
+        "{error}"
+    );
+
+    let mut blank = target_payment_definition();
+    blank["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] = json!("   ");
+    let error =
+        compile_cloud_artifact(&blank, None, true).expect_err("a blank validWhen must fail loudly");
+    assert!(
+        error.to_string().contains(
+            "D027 payment_flow.init.sendSignals[str].validWhen: must be a non-blank expression"
+        ),
+        "{error}"
+    );
+
+    let mut duplicate = target_payment_definition();
+    duplicate["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "payment_flow.init.str" }));
+    let error = compile_zhixu_hook_plan(&duplicate, None, true)
+        .expect_err("bare + canonical self-reference must collide on the expanded capability");
+    assert!(
+        error.to_string().contains("D031") && error.to_string().contains("duplicate capability"),
+        "{error}"
+    );
+
+    let mut unknown_key = target_payment_definition();
+    unknown_key["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "str", "validwhen": SETTLE_ADMISSION }));
+    let error = compile_zhixu_hook_plan(&unknown_key, None, true)
+        .expect_err("a misspelled key must fail at decode, not fold to the zero value");
+    assert!(
+        error.to_string().contains("unknown field") && error.to_string().contains("validwhen"),
+        "{error}"
+    );
+}
+
+#[test]
+fn admission_invalid_expression_reports_the_declaring_signal() {
+    // 表达式方言 = 钩子方言本身：解析失败按声明信号上下文上报
+    // （目标信号名作为上下文传入），不是裸 serde 报错。
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!("payment::settle.cmp");
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("a two-part signal name inside validWhen must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("payment_flow.settle.sendSignals[cmp].validWhen is invalid")
+            && error.to_string().contains("task.stage.signal"),
+        "{error}"
+    );
 }

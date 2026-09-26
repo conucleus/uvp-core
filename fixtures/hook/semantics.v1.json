@@ -320,46 +320,15 @@
       }
     },
     {
-      "name": "nested delay parses as chained postfix over a grouped operand",
+      "name": "n-ary and of three operands stays one flat join",
       "profile": "evm_strict",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "hookName": "HOOK",
+      "hook": "buyer::task.a.cmp & task.b.cmp & task.c.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "(task.a.cmp+5s)+10s",
-        "normalizedExpression": "buyer::(task.a.cmp+5s)+10s",
-        "dependencies": [
-          {
-            "kind": "positive",
-            "source": "buyer",
-            "signalName": "task.a.cmp"
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 5
-          },
-          {
-            "kind": "timer",
-            "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 15
-          }
-        ]
-      }
-    },
-    {
-      "name": "outer delay over an and operand accumulates per-fact offsets",
-      "profile": "evm_strict",
-      "hookName": "STACK",
-      "hook": "buyer::((task.a.cmp +5s) & task.b.cmp) +10s",
-      "expect": {
-        "source": "buyer",
-        "mode": "normal",
-        "runtimeCondition": "(task.a.cmp+5s&task.b.cmp)+10s",
-        "normalizedExpression": "buyer::(task.a.cmp+5s&task.b.cmp)+10s",
+        "runtimeCondition": "task.a.cmp&task.b.cmp&task.c.cmp",
+        "normalizedExpression": "buyer::task.a.cmp&task.b.cmp&task.c.cmp",
         "dependencies": [
           {
             "kind": "positive",
@@ -372,22 +341,131 @@
             "signalName": "task.b.cmp"
           },
           {
-            "kind": "timer",
+            "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 5
+            "signalName": "task.c.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "n-ary or of three operands stays one flat join",
+      "profile": "evm_strict",
+      "hookName": "HOOK",
+      "hook": "buyer::task.a.cmp | task.b.cmp | task.c.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.a.cmp|task.b.cmp|task.c.cmp",
+        "normalizedExpression": "buyer::task.a.cmp|task.b.cmp|task.c.cmp",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.a.cmp"
           },
           {
-            "kind": "timer",
+            "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp",
-            "delaySeconds": 15
+            "signalName": "task.b.cmp"
           },
           {
-            "kind": "timer",
+            "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp",
-            "delaySeconds": 10
+            "signalName": "task.c.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "decaying veto as a direct conjunction operand",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.ship.cmp&~(task.cancel.cmp+14d)",
+        "normalizedExpression": "buyer::task.ship.cmp&~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cloud rendering of the decaying veto keeps grouped delay parentheses",
+      "profile": "cloud_compat",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.ship.cmp & ~(task.cancel.cmp + 14d)",
+        "normalizedExpression": "buyer::task.ship.cmp&~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "filter gate admits a bare decaying veto at the root",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "~(task.cancel.cmp+14d)",
+        "normalizedExpression": "buyer::~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "filter gate admits a decaying veto under an OR branch",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.ship.cmp | ~(task.cancel.cmp +14d)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "task.ship.cmp|~(task.cancel.cmp+14d)",
+        "normalizedExpression": "buyer::task.ship.cmp|~(task.cancel.cmp+14d)",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "task.cancel.cmp"
+          },
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "task.ship.cmp"
           }
         ]
       }
@@ -650,78 +728,6 @@
       }
     },
     {
-      "name": "nested delay passes inner wait through before inner due",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:02.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "wait",
-        "readyAt": "2026-04-27T00:00:05.000Z"
-      }
-    },
-    {
-      "name": "nested delay waits on the chained outer due after inner due poke",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:06.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "wait",
-        "readyAt": "2026-04-27T00:00:15.000Z"
-      }
-    },
-    {
-      "name": "nested delay readies at the chained outer due",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:15.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "ready",
-        "readyAt": "2026-04-27T00:00:15.000Z"
-      }
-    },
-    {
-      "name": "nested delay still chained when outer window not reached",
-      "profile": "cloud_compat",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:10.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "wait",
-        "readyAt": "2026-04-27T00:00:15.000Z"
-      }
-    },
-    {
       "name": "or composite delay anchors on earliest maturing branch (waiting)",
       "profile": "evm_strict",
       "hookName": "TRIGGER",
@@ -778,39 +784,381 @@
       }
     },
     {
-      "name": "evm nested delay waits on the chained outer due after the inner due",
+      "name": "or readies on a single live branch",
       "profile": "evm_strict",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:06.000Z",
+      "hookName": "ANY",
+      "hook": "buyer::task.a.cmp | task.b.cmp",
+      "now": "2026-04-27T00:00:03.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:02.000Z"
+      }
+    },
+    {
+      "name": "or survives a cancelled branch via the other live branch",
+      "profile": "evm_strict",
+      "hookName": "ANY",
+      "hook": "buyer::(task.a.cmp & ~task.cancel.cmp) | (task.b.cmp & ~task.fail.cmp)",
+      "now": "2026-04-27T00:00:05.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:03.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:03.000Z"
+      }
+    },
+    {
+      "name": "n-ary and of three needs every operand",
+      "profile": "evm_strict",
+      "hookName": "BOTH",
+      "hook": "buyer::task.a.cmp & task.b.cmp & task.c.cmp",
+      "now": "2026-04-27T00:00:05.000Z",
       "signals": [
         {
           "source": "buyer",
           "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.c.cmp",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more"
+      }
+    },
+    {
+      "name": "n-ary and of three readies at the latest anchor",
+      "profile": "evm_strict",
+      "hookName": "BOTH",
+      "hook": "buyer::task.a.cmp & task.b.cmp & task.c.cmp",
+      "now": "2026-04-27T00:00:05.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:03.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.c.cmp",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:03.000Z"
+      }
+    },
+    {
+      "name": "n-ary or of three readies on its single live branch",
+      "profile": "evm_strict",
+      "hookName": "ANY",
+      "hook": "buyer::task.a.cmp | task.b.cmp | task.c.cmp",
+      "now": "2026-04-27T00:00:05.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.c.cmp",
+          "receivedAt": "2026-04-27T00:00:04.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:04.000Z"
+      }
+    },
+    {
+      "name": "n-ary and waits on the max due while a ready operand contributes its anchor",
+      "profile": "cloud_compat",
+      "hookName": "BOTH",
+      "hook": "buyer::(task.a.cmp +5s) & (task.b.cmp +10s) & task.c.cmp",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.a.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.b.cmp",
+          "receivedAt": "2026-04-27T00:00:00.900Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.c.cmp",
           "receivedAt": "2026-04-27T00:00:00.900Z"
         }
       ],
       "expect": {
         "state": "wait",
-        "readyAt": "2026-04-27T00:00:15.000Z"
+        "readyAt": "2026-04-27T00:00:10.900Z"
       }
     },
     {
-      "name": "evm nested delay readies at the chained outer due on chain second precision",
-      "profile": "evm_strict",
-      "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
-      "now": "2026-04-27T00:00:15.001Z",
+      "name": "duplicate fact key reduces to the earliest receivedAt regardless of array order",
+      "profile": "cloud_compat",
+      "hookName": "TIMEOUT",
+      "hook": "buyer::task.pay.cmp +5s",
+      "now": "2026-04-27T00:00:06.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
-          "receivedAt": "2026-04-27T00:00:00.900Z"
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:01.500Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.pay.cmp",
+          "receivedAt": "2026-04-27T00:00:01.000Z"
         }
       ],
       "expect": {
         "state": "ready",
-        "readyAt": "2026-04-27T00:00:15.000Z"
+        "readyAt": "2026-04-27T00:00:06.000Z"
+      }
+    },
+    {
+      "name": "subscription channel addressing ignores a same-named fact from another source class",
+      "profile": "cloud_compat",
+      "hookName": "SUBSCRIBE",
+      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "trade.listing.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more",
+        "reasonContains": "delivered per"
+      }
+    },
+    {
+      "name": "decaying veto passes while the negated signal is absent",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "decaying veto passes until the negated delay matures",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z",
+        "expiresAt": "2026-05-11T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "decaying veto still passes one millisecond before the negated delay matures",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-05-10T23:59:59.999Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:05.000Z",
+        "expiresAt": "2026-05-11T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "decaying veto cancels exactly at the negated delay maturity",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "now": "2026-05-11T00:00:00.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "negated condition exists: task.cancel.cmp+14d"
+      }
+    },
+    {
+      "name": "and with a live veto still waits only on its positive branch",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::(task.ship.cmp +5s) & ~(task.cancel.cmp +10s)",
+      "now": "2026-04-27T00:00:02.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.ship.cmp",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.cancel.cmp",
+          "receivedAt": "2026-04-27T00:00:01.000Z"
+        }
+      ],
+      "expect": {
+        "state": "wait",
+        "readyAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "filter admission passes while the vetoed approval is absent",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.locked",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:02.000Z",
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "filter admission rejects while the positive anchor is missing",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.approved",
+          "receivedAt": "2026-04-27T00:00:08.000Z"
+        }
+      ],
+      "expect": {
+        "state": "needs_more",
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "filter admission passes one second before the window closes",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:04.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.locked",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.execute.approved",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:02.000Z",
+        "expiresAt": "2026-04-27T00:00:05.000Z"
+      }
+    },
+    {
+      "name": "filter admission rejects exactly at the window boundary",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "now": "2026-04-27T00:00:05.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "task.execute.locked",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "task.execute.approved",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "impossible",
+        "reasonContains": "negated condition exists: task.execute.approved+5s"
       }
     }
   ],
@@ -963,6 +1311,34 @@
       "messageContains": "unexpected token"
     },
     {
+      "name": "decaying veto at the root is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::~(task.cancel.cmp +14d)",
+      "messageContains": "only allowed as a direct operand of a conjunction"
+    },
+    {
+      "name": "decaying veto under an OR branch is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
+      "messageContains": "only allowed as a direct operand of a conjunction"
+    },
+    {
+      "name": "doubly negated decaying veto is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::task.a.cmp & ~(~(task.cancel.cmp +14d))",
+      "messageContains": "negation only supports direct signal references"
+    },
+    {
+      "name": "decaying veto inside a delay operand is rejected",
+      "profile": "evm_strict",
+      "hookName": "WINDOW",
+      "hook": "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
+      "messageContains": "no nested delays"
+    },
+    {
       "name": "channel name containing the signal separator dot is rejected",
       "profile": "evm_strict",
       "hookName": "BAD.KEY",
@@ -975,6 +1351,108 @@
       "hookName": "BAD#KEY",
       "hook": "buyer::task.main.cmp",
       "messageContains": "must not contain '.' or '#'"
+    },
+    {
+      "name": "filter gate keeps the composite negation vocabulary",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~(task.a.cmp & task.b.cmp)",
+      "messageContains": "negation only supports direct signal references"
+    },
+    {
+      "name": "filter gate keeps the 30d delay cap",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~(task.a.cmp +31d)",
+      "messageContains": "exceeds the maximum allowed delay"
+    },
+    {
+      "name": "double ampersand operator rejected with precise error",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::task.main.cmp && task2.main.cmp",
+      "messageContains": "unsupported operator"
+    },
+    {
+      "name": "double percent operator rejected with precise error",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::task.main.cmp %% task2.main.cmp",
+      "messageContains": "unsupported operator"
+    },
+    {
+      "name": "veto operand must contain no nested delays (hook gate)",
+      "profile": "cloud_compat",
+      "hookName": "HOOK",
+      "hook": "buyer::task.b.cmp & ~((task.a.cmp +5s) +10s)",
+      "messageContains": "nested delay"
+    },
+    {
+      "name": "veto operand must contain no nested delays (filter gate)",
+      "profile": "cloud_compat",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~((task.a.cmp +5s) +10s)",
+      "messageContains": "nested delay"
+    },
+    {
+      "name": "nested delay passes inner wait through before inner due (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "nested delay waits on the chained outer due after inner due poke (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "nested delay readies at the chained outer due (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "nested delay still chained when outer window not reached (now rejected: nested delay)",
+      "profile": "cloud_compat",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "evm nested delay waits on the chained outer due after the inner due (now rejected: nested delay)",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "evm nested delay readies at the chained outer due on chain second precision (now rejected: nested delay)",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "outer delay over an and operand accumulates per-fact offsets (now rejected: nested delay)",
+      "profile": "evm_strict",
+      "hookName": "NESTED",
+      "hook": "buyer::((task.a.cmp +5s) & task.b.cmp) +10s",
+      "messageContains": "no nested delays"
+    },
+    {
+      "name": "filter gate rejects a decaying veto inside a delay operand (nested delay)",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::(task.ship.cmp & ~(task.cancel.cmp +14d)) +5s",
+      "messageContains": "no nested delays"
     }
   ],
   "replayCases": [
@@ -2018,6 +2496,1763 @@
             "0x0000000000000000000000000000000000000000000000000000000000000b09": "ready"
           }
         }
+      }
+    },
+    {
+      "name": "timer poke replays after canonical reordering",
+      "events": [
+        {
+          "eventName": "TimerPoked",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+          "dueAt": "2026-04-27T00:00:05.000Z",
+          "pokedAt": "2026-04-27T00:00:06.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 7,
+          "logIndex": 0,
+          "transactionHash": "0x26",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+          "stageIdentifier": "task.main",
+          "hookName": "TIMEOUT"
+        },
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+            "zhixuId": "corpus-replay-reorder",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c12",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT",
+                "orderTriggerKind": "none",
+                "emitReady": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d12",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e12",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f12"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f12": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b12"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d12",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e12",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f12",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a12",
+          "zhixuId": "corpus-replay-reorder",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a12::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f12",
+        "senderId": "pay-executor",
+        "eventId": "3:0:0x23",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged",
+          "HookReady"
+        ],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a12::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b12": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "or instruction readies on a single live branch",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a21",
+            "zhixuId": "corpus-replay-or",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b21",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c21",
+                "stageIdentifier": "task.main",
+                "hookName": "ANY",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d21",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e21",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f21"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d22",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e22",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f22"
+                  },
+                  {
+                    "op": "OR",
+                    "arity": 2
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f21": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b21"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f22": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b21"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a21",
+          "zhixuId": "corpus-replay-or",
+          "orderId": "or-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a21",
+          "zhixuId": "corpus-replay-or",
+          "orderId": "or-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d21",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e21",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f21",
+          "senderId": "or-branch-a",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a21",
+          "zhixuId": "corpus-replay-or",
+          "orderId": "or-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b21",
+          "stageIdentifier": "task.main",
+          "hookName": "ANY"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a21::or-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f21",
+        "senderId": "or-branch-a",
+        "eventId": "3:0:0x23",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a21::or-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b21": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "or instruction survives a cancelled branch via the live branch",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a26",
+            "zhixuId": "corpus-replay-or-shortcircuit",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b26",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c26",
+                "stageIdentifier": "task.main",
+                "hookName": "ANY",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d26",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e26",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f26"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d27",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e27",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f27"
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d28",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e28",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f28"
+                  },
+                  {
+                    "op": "OR",
+                    "arity": 2
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f26": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b26"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f27": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b26"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f28": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b26"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a26",
+          "zhixuId": "corpus-replay-or-shortcircuit",
+          "orderId": "or-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a26",
+          "zhixuId": "corpus-replay-or-shortcircuit",
+          "orderId": "or-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d27",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e27",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f27",
+          "senderId": "canceller",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a26",
+          "zhixuId": "corpus-replay-or-shortcircuit",
+          "orderId": "or-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d28",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e28",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f28",
+          "senderId": "fallback-executor",
+          "submittedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a26",
+          "zhixuId": "corpus-replay-or-shortcircuit",
+          "orderId": "or-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b26",
+          "stageIdentifier": "task.main",
+          "hookName": "ANY"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a26::or-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f28",
+        "senderId": "fallback-executor",
+        "eventId": "4:0:0x24",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a26::or-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b26": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "or instruction with every branch cancelled lands on cxl",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a27",
+            "zhixuId": "corpus-replay-or-cancelled",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b27",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c27",
+                "stageIdentifier": "task.main",
+                "hookName": "ANY",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d29",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e29",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f29"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2a",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2a",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2a"
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2b",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2b",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2b"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2c",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2c",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2c"
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  },
+                  {
+                    "op": "OR",
+                    "arity": 2
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f29": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b27"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f2a": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b27"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f2b": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b27"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f2c": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b27"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a27",
+          "zhixuId": "corpus-replay-or-cancelled",
+          "orderId": "or-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a27",
+          "zhixuId": "corpus-replay-or-cancelled",
+          "orderId": "or-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2a",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2a",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2a",
+          "senderId": "first-canceller",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a27",
+          "zhixuId": "corpus-replay-or-cancelled",
+          "orderId": "or-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2c",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2c",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2c",
+          "senderId": "second-canceller",
+          "submittedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a27",
+          "zhixuId": "corpus-replay-or-cancelled",
+          "orderId": "or-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b27",
+          "status": "cxl"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a27::or-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2c",
+        "senderId": "second-canceller",
+        "eventId": "4:0:0x24",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a27::or-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b27": "cxl"
+          }
+        }
+      }
+    },
+    {
+      "name": "arity-three and waits on the max branch due then readies via poke",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+            "zhixuId": "corpus-replay-and3",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b28",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c28",
+                "stageIdentifier": "task.main",
+                "hookName": "BOTH",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2d",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2d",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2d"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2e",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2e",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2e"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 10
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2f",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2f",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2f"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 3
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f2d": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b28"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f2e": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b28"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f2f": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b28"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+          "zhixuId": "corpus-replay-and3",
+          "orderId": "and3-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+          "zhixuId": "corpus-replay-and3",
+          "orderId": "and3-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2d",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2d",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2d",
+          "senderId": "branch-a",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+          "zhixuId": "corpus-replay-and3",
+          "orderId": "and3-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2e",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2e",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2e",
+          "senderId": "branch-b",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+          "zhixuId": "corpus-replay-and3",
+          "orderId": "and3-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d2f",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e2f",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2f",
+          "senderId": "branch-c",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x26",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+          "zhixuId": "corpus-replay-and3",
+          "orderId": "and3-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b28",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:10.000Z"
+        },
+        {
+          "eventName": "TimerPoked",
+          "blockNumber": 7,
+          "logIndex": 0,
+          "transactionHash": "0x27",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+          "zhixuId": "corpus-replay-and3",
+          "orderId": "and3-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b28",
+          "dueAt": "2026-04-27T00:00:10.000Z",
+          "pokedAt": "2026-04-27T00:00:11.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 8,
+          "logIndex": 0,
+          "transactionHash": "0x28",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a28",
+          "zhixuId": "corpus-replay-and3",
+          "orderId": "and3-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b28",
+          "stageIdentifier": "task.main",
+          "hookName": "BOTH"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a28::and3-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f2f",
+        "senderId": "branch-c",
+        "eventId": "5:0:0x25",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged",
+          "HookReady"
+        ],
+        "waitDueAt": "2026-04-27T00:00:10.000Z",
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a28::and3-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b28": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate signal first writer is decided by logIndex within one block",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a29",
+            "zhixuId": "corpus-replay-dup",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b29",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c29",
+                "stageIdentifier": "task.main",
+                "hookName": "START",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d30",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e30",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f30"
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f30": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b29"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a29",
+          "zhixuId": "corpus-replay-dup",
+          "orderId": "dup-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 1,
+          "transactionHash": "0x33",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a29",
+          "zhixuId": "corpus-replay-dup",
+          "orderId": "dup-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d30",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e30",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f30",
+          "senderId": "late-in-array",
+          "submittedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x32",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a29",
+          "zhixuId": "corpus-replay-dup",
+          "orderId": "dup-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d30",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e30",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f30",
+          "senderId": "early-writer",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a29",
+          "zhixuId": "corpus-replay-dup",
+          "orderId": "dup-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b29",
+          "stageIdentifier": "task.main",
+          "hookName": "START"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a29::dup-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f30",
+        "senderId": "early-writer",
+        "eventId": "3:0:0x32",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a29::dup-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b29": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "chain wait claiming a wrong dueAt is a semantic mismatch at that hook",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a22",
+            "zhixuId": "corpus-replay-wrong-due",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b22",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c22",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d22",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e22",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f22"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f22": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b22"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a22",
+          "zhixuId": "corpus-replay-wrong-due",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a22",
+          "zhixuId": "corpus-replay-wrong-due",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d22",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e22",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f22",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a22",
+          "zhixuId": "corpus-replay-wrong-due",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b22",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:07.000Z"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a22::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f22",
+        "senderId": "pay-executor",
+        "eventId": "3:0:0x23",
+        "observedCount": 1,
+        "mismatchCount": 1,
+        "observedEvents": [
+          "HookStatusChanged"
+        ],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "mismatchDetails": [
+          {
+            "reason": "semantic-mismatch",
+            "hook": "0x0000000000000000000000000000000000000000000000000000000000000a22::order-1::0x0000000000000000000000000000000000000000000000000000000000000b22",
+            "occurrence": 0
+          }
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a22::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b22": "wait"
+          }
+        }
+      }
+    },
+    {
+      "name": "oracle-derived hook ready without a chain observation is an unexpected observation",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a23",
+            "zhixuId": "corpus-replay-dropped-ready",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b23",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c23",
+                "stageIdentifier": "task.main",
+                "hookName": "START",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d23",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e23",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f23"
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f23": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b23"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a23",
+          "zhixuId": "corpus-replay-dropped-ready",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a23",
+          "zhixuId": "corpus-replay-dropped-ready",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d23",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e23",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f23",
+          "senderId": "executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a23::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f23",
+        "senderId": "executor",
+        "eventId": "3:0:0x23",
+        "observedCount": 1,
+        "mismatchCount": 1,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "mismatchDetails": [
+          {
+            "reason": "unexpected-observed",
+            "hook": "0x0000000000000000000000000000000000000000000000000000000000000a23::order-1::0x0000000000000000000000000000000000000000000000000000000000000b23",
+            "occurrence": 0
+          }
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a23::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b23": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "dock hook ready without the entrance fact is a missing observation",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a31",
+            "zhixuId": "corpus-replay-dock-orphan",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b31",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c31",
+                "stageIdentifier": "docked.stage",
+                "hookName": "ENTER",
+                "orderTriggerKind": "dock",
+                "emitReady": true,
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d31",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e31",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f31"
+                  }
+                ]
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f31": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b31"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a31",
+          "zhixuId": "corpus-replay-dock-orphan",
+          "orderId": "orphan-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a31",
+          "zhixuId": "corpus-replay-dock-orphan",
+          "orderId": "orphan-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b31",
+          "stageIdentifier": "docked.stage",
+          "hookName": "ENTER"
+        }
+      ],
+      "expect": {
+        "observedCount": 0,
+        "mismatchCount": 1,
+        "mismatchDetails": [
+          {
+            "reason": "missing-observed",
+            "hook": "0x0000000000000000000000000000000000000000000000000000000000000a31::orphan-1::0x0000000000000000000000000000000000000000000000000000000000000b31",
+            "occurrence": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "timer poke without an evaluation clock fails loudly",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x21",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a24",
+            "zhixuId": "corpus-replay-poke-clock",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b24",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c24",
+                "stageIdentifier": "task.main",
+                "hookName": "TIMEOUT",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d24",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e24",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f24"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f24": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b24"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x22",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a24",
+          "zhixuId": "corpus-replay-poke-clock",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x23",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a24",
+          "zhixuId": "corpus-replay-poke-clock",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d24",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e24",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f24",
+          "senderId": "pay-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x24",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a24",
+          "zhixuId": "corpus-replay-poke-clock",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b24",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "TimerPoked",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x25",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a24",
+          "zhixuId": "corpus-replay-poke-clock",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b24"
+        }
+      ],
+      "expect": {
+        "errorContains": "pokedAt"
+      }
+    },
+    {
+      "name": "decaying veto passes while the negated signal is absent",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x41",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a32",
+            "zhixuId": "corpus-replay-decay-absent",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b32",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c32",
+                "stageIdentifier": "task.main",
+                "hookName": "WINDOW",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d33",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e33",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f33"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d34",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e34",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f34"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 1209600
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f33": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b32"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f34": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b32"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x42",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a32",
+          "zhixuId": "corpus-replay-decay-absent",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x43",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a32",
+          "zhixuId": "corpus-replay-decay-absent",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d33",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e33",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f33",
+          "senderId": "ship-executor",
+          "submittedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x44",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a32",
+          "zhixuId": "corpus-replay-decay-absent",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b32",
+          "stageIdentifier": "task.main",
+          "hookName": "WINDOW"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a32::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f33",
+        "senderId": "ship-executor",
+        "eventId": "3:0:0x43",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a32::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b32": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "decaying veto readies while the negated delay is immature",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x45",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a33",
+            "zhixuId": "corpus-replay-decay-ready",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b33",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c33",
+                "stageIdentifier": "task.main",
+                "hookName": "WINDOW",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d35",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e35",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f35"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d36",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e36",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f36"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 1209600
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f35": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b33"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f36": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b33"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x46",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a33",
+          "zhixuId": "corpus-replay-decay-ready",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x47",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a33",
+          "zhixuId": "corpus-replay-decay-ready",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d36",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e36",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f36",
+          "senderId": "cancel-sender",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x48",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a33",
+          "zhixuId": "corpus-replay-decay-ready",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d35",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e35",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f35",
+          "senderId": "ship-executor",
+          "submittedAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x49",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a33",
+          "zhixuId": "corpus-replay-decay-ready",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b33",
+          "stageIdentifier": "task.main",
+          "hookName": "WINDOW"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a33::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f35",
+        "senderId": "ship-executor",
+        "eventId": "4:0:0x48",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookReady"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a33::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b33": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "decaying veto cancels exactly at the negated delay maturity",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x4a",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a34",
+            "zhixuId": "corpus-replay-decay-cancel",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b34",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c34",
+                "stageIdentifier": "task.main",
+                "hookName": "WINDOW",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d37",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e37",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f37"
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d38",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e38",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f38"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 1209600
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f37": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b34"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f38": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b34"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x4b",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a34",
+          "zhixuId": "corpus-replay-decay-cancel",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x4c",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a34",
+          "zhixuId": "corpus-replay-decay-cancel",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d38",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e38",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f38",
+          "senderId": "cancel-sender",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x4d",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a34",
+          "zhixuId": "corpus-replay-decay-cancel",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d37",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e37",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f37",
+          "senderId": "ship-executor",
+          "submittedAt": "2026-05-11T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x4e",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a34",
+          "zhixuId": "corpus-replay-decay-cancel",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b34",
+          "status": "cxl"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a34::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f37",
+        "senderId": "ship-executor",
+        "eventId": "4:0:0x4d",
+        "observedCount": 1,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged"
+        ],
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a34::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b34": "cxl"
+          }
+        }
+      }
+    },
+    {
+      "name": "and with a live veto still waits only on its positive branch",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x4f",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a35",
+            "zhixuId": "corpus-replay-decay-wait",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b35",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c35",
+                "stageIdentifier": "task.main",
+                "hookName": "WINDOW",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d39",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e39",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f39"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 5
+                  },
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d3a",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e3a",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f3a"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 10
+                  },
+                  {
+                    "op": "NOT"
+                  },
+                  {
+                    "op": "AND",
+                    "arity": 2
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f39": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b35"
+              ],
+              "0x0000000000000000000000000000000000000000000000000000000000000f3a": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b35"
+              ]
+            }
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x50",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a35",
+          "zhixuId": "corpus-replay-decay-wait",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x51",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a35",
+          "zhixuId": "corpus-replay-decay-wait",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d39",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e39",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f39",
+          "senderId": "ship-executor",
+          "submittedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "HookStatusChanged",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x52",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a35",
+          "zhixuId": "corpus-replay-decay-wait",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b35",
+          "status": "wait",
+          "dueAt": "2026-04-27T00:00:05.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 5,
+          "logIndex": 0,
+          "transactionHash": "0x53",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a35",
+          "zhixuId": "corpus-replay-decay-wait",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d3a",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e3a",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f3a",
+          "senderId": "cancel-sender",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "TimerPoked",
+          "blockNumber": 6,
+          "logIndex": 0,
+          "transactionHash": "0x54",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a35",
+          "zhixuId": "corpus-replay-decay-wait",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b35",
+          "pokedAt": "2026-04-27T00:00:06.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 7,
+          "logIndex": 0,
+          "transactionHash": "0x55",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a35",
+          "zhixuId": "corpus-replay-decay-wait",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b35",
+          "stageIdentifier": "task.main",
+          "hookName": "WINDOW"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a35::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f3a",
+        "senderId": "cancel-sender",
+        "eventId": "5:0:0x53",
+        "observedCount": 2,
+        "mismatchCount": 0,
+        "observedEvents": [
+          "HookStatusChanged",
+          "HookReady"
+        ],
+        "waitDueAt": "2026-04-27T00:00:05.000Z",
+        "finalHookStatuses": {
+          "0x0000000000000000000000000000000000000000000000000000000000000a35::order-1": {
+            "0x0000000000000000000000000000000000000000000000000000000000000b35": "ready"
+          }
+        }
+      }
+    },
+    {
+      "name": "admission-declared plan registers and replays without replay-side filtering",
+      "events": [
+        {
+          "eventName": "PlanRegistered",
+          "blockNumber": 1,
+          "logIndex": 0,
+          "transactionHash": "0x01",
+          "plan": {
+            "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+            "zhixuId": "corpus-replay-admission",
+            "version": "1",
+            "compiledHooks": [
+              {
+                "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b06",
+                "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c06",
+                "stageIdentifier": "task.execute",
+                "hookName": "OBSERVE",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+                    "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06"
+                  }
+                ],
+                "orderTriggerKind": "none",
+                "emitReady": true
+              }
+            ],
+            "dependencyIndex": {
+              "0x0000000000000000000000000000000000000000000000000000000000000f06": [
+                "0x0000000000000000000000000000000000000000000000000000000000000b06"
+              ]
+            },
+            "admissions": [
+              {
+                "admissionId": "0x0000000000000000000000000000000000000000000000000000000000000a61",
+                "stageIdentifier": "task.execute",
+                "signalName": "launch",
+                "instructions": [
+                  {
+                    "op": "SIGNAL",
+                    "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f07"
+                  },
+                  {
+                    "op": "DELAY",
+                    "delaySeconds": 1209600
+                  },
+                  {
+                    "op": "NOT"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "eventName": "OrderRegistered",
+          "blockNumber": 2,
+          "logIndex": 0,
+          "transactionHash": "0x02",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+          "zhixuId": "corpus-replay-admission",
+          "orderId": "order-1",
+          "registeredAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "eventName": "SignalSubmitted",
+          "blockNumber": 3,
+          "logIndex": 0,
+          "transactionHash": "0x03",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+          "zhixuId": "corpus-replay-admission",
+          "orderId": "order-1",
+          "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000d06",
+          "signalId": "0x0000000000000000000000000000000000000000000000000000000000000e06",
+          "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+          "senderId": "executor",
+          "submittedAt": "2026-04-27T00:00:01.000Z"
+        },
+        {
+          "eventName": "HookReady",
+          "blockNumber": 4,
+          "logIndex": 0,
+          "transactionHash": "0x04",
+          "planId": "0x0000000000000000000000000000000000000000000000000000000000000a06",
+          "zhixuId": "corpus-replay-admission",
+          "orderId": "order-1",
+          "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b06",
+          "stageIdentifier": "task.execute",
+          "hookName": "OBSERVE"
+        }
+      ],
+      "expect": {
+        "orderKey": "0x0000000000000000000000000000000000000000000000000000000000000a06::order-1",
+        "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f06",
+        "senderId": "executor",
+        "eventId": "3:0:0x03",
+        "observedCount": 1,
+        "mismatchCount": 0
       }
     }
   ]

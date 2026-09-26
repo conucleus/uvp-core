@@ -4,7 +4,7 @@
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
-use uvp_hook_dsl::{parse_hook, Compatibility, ParseHookOutput, ParseHookRequest, Profile};
+use uvp_hook_dsl::{parse_hook, Compatibility, Gate, ParseHookOutput, ParseHookRequest, Profile};
 use uvp_model::{ZhixuDefinition, ZhixuStage};
 
 use crate::docking::{dock_entrance_hook_ids, DockState};
@@ -233,6 +233,7 @@ pub(crate) fn parse_hook_for_compiler(
 ) -> Result<ParseHookOutput> {
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: hook_name.to_string(),
         hook: raw_expression.to_string(),
     })
@@ -251,6 +252,7 @@ pub(crate) fn parse_hook_for_cloud(
 ) -> Result<ParseHookOutput> {
     parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: hook_name.to_string(),
         hook: raw_expression.to_string(),
     })

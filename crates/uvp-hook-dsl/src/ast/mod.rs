@@ -58,7 +58,7 @@ pub enum HookMode {
 // Subscription operators are cross-source delivery channels, not
 // backend/executor input declarations. Backend/executor external inputs are
 // sent to UVP only when the executor explicitly chooses to do so; there is no
-// externalSignals declaration any more.
+// externalSignals declaration.
 pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
     match expr {
         Expr::Subscription { .. } => {
@@ -81,8 +81,38 @@ pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<
     }
 }
 
+
+/// 嵌套延时一律拒绝（正位与否决位同闸）：Delay 的操作数子树内不得再含
+/// 任何延时节点。链式延时对锚点是纯加法，合并为单一时长书写
+/// （`((A+5s)+10s)` 即 `(A+15s)`）——嵌套没有等价改写覆盖不了的表达力，
+/// 唯一换来的是单段 30d 上限被逐段叠加绕过（累计等待无总预算）与
+/// 调度面多段逐醒的复杂度。`~((A+5s)+10s)` 与 `((A+5s)+10s)` 都应写作
+/// `~(A+15s)` / `(A+15s)`。
+fn reject_nested_delay(expr: &Expr, inside_delay: bool) -> Result<()> {
+    match expr {
+        Expr::Delay { expr, .. } => {
+            if inside_delay {
+                return Err(HookError::Message(
+                    "delay operand must contain no nested delays: collapse the delay chain into a single duration (e.g. ((A +5s) +10s) is (A +15s))"
+                        .to_string(),
+                ));
+            }
+            reject_nested_delay(expr, true)
+        }
+        Expr::Not(inner) => reject_nested_delay(inner, inside_delay),
+        Expr::And(terms) | Expr::Or(terms) => {
+            for term in terms {
+                reject_nested_delay(term, inside_delay)?;
+            }
+            Ok(())
+        }
+        Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
+    }
+}
+
 pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
-    let anchored = validate_anchors(expr)?;
+    reject_nested_delay(expr, false)?;
+    let anchored = validate_anchors(expr, false, false)?;
     if !anchored {
         return Err(HookError::Message(
             "hook condition must contain at least one positive signal anchor".to_string(),
@@ -100,17 +130,28 @@ pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
     Ok(())
 }
 
-fn validate_anchors(expr: &Expr) -> Result<bool> {
+/// 过滤档（发射适格面）校验：与钩子档并立、互不污染（不触碰
+/// validate_anchors）。过滤只在信号到达的一拍对已提交事实集求值、不参与
+/// 任何调度，因此无正锚要求、衰减否决位 `~(A+duration)` 在全部布尔位置
+/// （根/Or 子项/合取子项）合法；延时操作数内不放行——否决位自身是
+/// 延时节点，落入其中即被两档共用的嵌套延时禁令（reject_nested_delay）
+/// 先行拒绝。保留的闸只剩结构性词表：NOT 操作数仅裸 Signal 或 Delay
+/// 结果，duration 恒正（字面量语法与 30d 上限由解析器/解码层共用闸
+/// 把守）。
+pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
+    reject_nested_delay(expr, false)?;
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
-        Expr::Not(inner) => {
-            if !matches!(inner.as_ref(), Expr::Signal(_)) {
-                return Err(HookError::Message(
-                    "negation only supports direct signal references".to_string(),
-                ));
-            }
-            Ok(false)
-        }
+        Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
+        Expr::Not(inner) => match inner.as_ref() {
+            Expr::Signal(_) => Ok(()),
+            // 衰减否决位：位置在此不设闸（布尔位置一拍求值均良定义；
+            // 延时操作数内的形态已被嵌套延时禁令先行拒绝），时长正性
+            // 仍按 Delay 分支复核。
+            Expr::Delay { .. } => validate_filter_hook(inner),
+            _ => Err(HookError::Message(
+                "negation only supports direct signal references".to_string(),
+            )),
+        },
         Expr::Delay {
             expr,
             duration_seconds,
@@ -119,7 +160,64 @@ fn validate_anchors(expr: &Expr) -> Result<bool> {
             if *duration_seconds <= 0 {
                 return Err(HookError::Message("delay must be positive".to_string()));
             }
-            let anchored = validate_anchors(expr)?;
+            validate_filter_hook(expr)
+        }
+        Expr::And(terms) | Expr::Or(terms) => {
+            for term in terms {
+                validate_filter_hook(term)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// `veto_slot`：当前节点是否是某个 And 的直接子项——这是衰减否决位
+/// `~(A + duration)` 的合法位置。`inside_delay_operand`：当前子树是否
+/// 位于某个 Delay 的操作数内——否决位的 Ready 会衰减，而 Delay 的成熟
+/// 是永久的，二者组合会让外层延时锚定在已过期的否决上静默放行，因此
+/// Delay 操作数内任何深度一律禁止。两闸合并：根位置、Or 子项、Not
+/// 操作数、Delay 操作数内出现的否决位全部拒绝。
+fn validate_anchors(expr: &Expr, veto_slot: bool, inside_delay_operand: bool) -> Result<bool> {
+    match expr {
+        Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
+        Expr::Not(inner) => match inner.as_ref() {
+            Expr::Signal(_) => Ok(false),
+            Expr::Delay {
+                expr: delay_operand,
+                duration_seconds,
+                ..
+            } => {
+                if !veto_slot || inside_delay_operand {
+                    return Err(HookError::Message(
+                        "decaying veto ~(signal+duration) is only allowed as a direct operand of a conjunction (e.g. B & ~(A+14d)); not at the root, under OR/NOT, or inside a delay operand"
+                            .to_string(),
+                    ));
+                }
+                // Delay 自身校验不因外层取反放松：正时长、操作数须有正锚。
+                if *duration_seconds <= 0 {
+                    return Err(HookError::Message("delay must be positive".to_string()));
+                }
+                let anchored = validate_anchors(delay_operand, false, true)?;
+                if !anchored {
+                    return Err(HookError::Message(
+                        "delay requires a positive signal anchor".to_string(),
+                    ));
+                }
+                Ok(false)
+            }
+            _ => Err(HookError::Message(
+                "negation only supports direct signal references".to_string(),
+            )),
+        },
+        Expr::Delay {
+            expr,
+            duration_seconds,
+            ..
+        } => {
+            if *duration_seconds <= 0 {
+                return Err(HookError::Message("delay must be positive".to_string()));
+            }
+            let anchored = validate_anchors(expr, false, true)?;
             if !anchored {
                 return Err(HookError::Message(
                     "delay requires a positive signal anchor".to_string(),
@@ -130,14 +228,14 @@ fn validate_anchors(expr: &Expr) -> Result<bool> {
         Expr::And(terms) => {
             let mut anchored = false;
             for term in terms {
-                anchored |= validate_anchors(term)?;
+                anchored |= validate_anchors(term, true, inside_delay_operand)?;
             }
             Ok(anchored)
         }
         Expr::Or(terms) => {
             let mut anchored = false;
             for term in terms {
-                let term_anchored = validate_anchors(term)?;
+                let term_anchored = validate_anchors(term, false, inside_delay_operand)?;
                 if !term_anchored {
                     return Err(HookError::Message(
                         "each OR branch must contain a positive signal anchor".to_string(),

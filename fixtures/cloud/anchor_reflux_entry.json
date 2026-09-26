@@ -24,7 +24,9 @@
               "name": "packing",
               "source": "farmer",
               "sendSignals": [
-                "settled"
+                {
+                  "name": "settled"
+                }
               ],
               "executor": {
                 "supplierType": "organization",
@@ -43,7 +45,9 @@
                 "REFLUX": "::ANCHOR(@farmer::farmer.packing.settled)"
               },
               "sendSignals": [
-                "collected"
+                {
+                  "name": "collected"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

@@ -14,7 +14,7 @@ use crate::lower::{is_zhixu_executor_stage, parse_hook_for_compiler, value_str, 
 /// source 是"声明即死"命名空间——所有 hook/订阅引用在解析层被拒。严于
 /// 落库列宽（source_zhixu_id VARCHAR(64)），上限在编译期拒绝。
 const MAX_STAGE_SOURCE_BYTES: usize = 36;
-/// DDL 维度镜像：global_zhixu.name / global_stage.stage_identifier
+/// DDL 维度镜像：文档 metadata.name（展示属性）与 global_stage.stage_identifier
 /// VARCHAR(100)。
 const MAX_IDENTIFIER_BYTES: usize = 100;
 /// DDL 维度镜像：canonical 三段式 task.stage.signal 落
@@ -23,6 +23,20 @@ const MAX_SIGNAL_NAME_BYTES: usize = 100;
 /// metadata.name 的 slug 形态：技术名风格，仅限形态校验，
 /// 不承担任何语义判断（非唯一、不参与关系推断）。
 const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
+
+// 定义内计数上限（资源闸）：列宽族只约束单个标识符的长度，计数
+// 维度无闸时 plan 控制的输入可以让编译期的校验/产物规模无界增长。取值
+// 对真实计划留有余量，且不与合约侧同族上限打架（依赖键 1024）。
+// 能力表/绑定表由 capabilitiesRoot 一次承诺，无 256/128 规模上限，
+// 不在此闸的参照系内。
+/// 单定义 taskPatterns 数上限。
+const MAX_TASK_PATTERNS: usize = 64;
+/// 单定义摊平后的阶段总数上限（每阶段至少编译一个 hook，阶段数是
+/// hooks 与产物规模的直接下界——编译期资源闸，与链上注册面无关）。
+const MAX_STAGE_ENTRIES: usize = 256;
+/// 单定义 receiveSignals 通道（编译产物 hooks）总数上限：512 恰为合约
+/// MAX_PLAN_DEPENDENCIES=1024 的一半，给每钩平均 ≥2 个依赖键的余量。
+const MAX_HOOKS: usize = 512;
 
 pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     let mut issues = Vec::new();
@@ -37,11 +51,11 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
     }
     if definition.metadata.name.len() > MAX_IDENTIFIER_BYTES {
         issues.push(format!(
-            "metadata.name {:?} exceeds {MAX_IDENTIFIER_BYTES} bytes (global_zhixu.name)",
+            "metadata.name {:?} exceeds {MAX_IDENTIFIER_BYTES} bytes",
             definition.metadata.name
         ));
     }
-    // N7：name 是作者技术标签，slug 形态保证任何报错都有可读且可排序的
+    // name 是作者技术标签，slug 形态保证任何报错都有可读且可排序的
     // 标签；校验仅限形态。
     if !is_name_slug(&definition.metadata.name) {
         issues.push(format!(
@@ -60,6 +74,35 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
     }
     if definition.spec.task_patterns.is_empty() {
         issues.push("spec.taskPatterns must contain at least one task pattern".to_string());
+    }
+    if definition.spec.task_patterns.len() > MAX_TASK_PATTERNS {
+        issues.push(format!(
+            "spec.taskPatterns contains {} task patterns, limit is {MAX_TASK_PATTERNS}",
+            definition.spec.task_patterns.len()
+        ));
+    }
+    let stage_total: usize = definition
+        .spec
+        .task_patterns
+        .iter()
+        .map(|task| task.stages.len())
+        .sum();
+    if stage_total > MAX_STAGE_ENTRIES {
+        issues.push(format!(
+            "definition flattens to {stage_total} stages across taskPatterns, limit is {MAX_STAGE_ENTRIES}"
+        ));
+    }
+    let hook_total: usize = definition
+        .spec
+        .task_patterns
+        .iter()
+        .flat_map(|task| task.stages.iter())
+        .map(|stage| stage.receive_signals.len())
+        .sum();
+    if hook_total > MAX_HOOKS {
+        issues.push(format!(
+            "definition declares {hook_total} receiveSignals channels (compiled hooks) across taskPatterns, limit is {MAX_HOOKS}"
+        ));
     }
     for (task_index, task) in definition.spec.task_patterns.iter().enumerate() {
         if !valid_identifier_part(&task.name) {
@@ -97,12 +140,38 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                         executor.supplier_type
                     ));
                 }
+                // executor.selectableResource 与 stage.fileResources 同为
+                // FileResource 面：条目随 route 进链上承诺（executorHash /
+                // resourcesHash），词表外 fileType（含带空白变体）在此拒绝。
+                if let Some(selectable) = &executor.selectable_resource {
+                    let path = format!(
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}].executor.selectableResource"
+                    );
+                    match selectable.as_object() {
+                        Some(entries) => {
+                            for (key, resource) in entries {
+                                if let Some(issue) = file_resource_type_issue(&path, key, resource)
+                                {
+                                    issues.push(issue);
+                                }
+                            }
+                        }
+                        None => issues.push(format!("{path} must be a map of file resources")),
+                    }
+                }
+            }
+            for (key, resource) in &stage.file_resources {
+                let path =
+                    format!("spec.taskPatterns[{task_index}].stages[{stage_index}].fileResources");
+                if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+                    issues.push(issue);
+                }
             }
             // stage.source：非空、plain identifier 字符集、≤36（与
             // hook-dsl 标头/订阅目标的 source 类上限同口径）。
             // 空串会以空键混进 mintedSources；含空格/Unicode 的 source
-            // 是路由键，两侧必须逐字节一致（Go 镜像 zhixu_schema.go 同款
-            // 字符集校验；36 严于落库列宽 source_zhixu_id VARCHAR(64)）。
+            // 是路由键，两侧必须逐字节一致（36 严于落库列宽
+            // source_zhixu_id VARCHAR(64)）。
             if stage.source.trim().is_empty() {
                 issues.push(format!(
                     "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be non-empty"
@@ -129,11 +198,20 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
             }
             // sendSignals 组合维度（individual_record.signal_name）：stage
             // 标识符本身合法不等于组合合法，超限在编译期报确定性错误而不是
-            // 落库时 value too long（Go 镜像 validateDDLDimensions 同款）。
+            // 落库时 value too long。组合长度按 Go validateDDLDimensions
+            // 的全名精确计：canonical 三段式声明本身即全名，按原文精确计
+            // 长；裸名才拼 stage 前缀——三段式再拼一次前缀会把 task.stage
+            // 段重复计入，误拒真实 ≤100 的合法声明。
             for signal in &stage.send_signals {
-                if stage_identifier.len() + 1 + signal.len() > MAX_SIGNAL_NAME_BYTES {
+                let full_name_bytes = if signal.name.contains('.') {
+                    signal.name.len()
+                } else {
+                    stage_identifier.len() + 1 + signal.name.len()
+                };
+                if full_name_bytes > MAX_SIGNAL_NAME_BYTES {
                     issues.push(format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}] ({stage_identifier:?}) sendSignal {signal:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)"
+                        "spec.taskPatterns[{task_index}].stages[{stage_index}] ({stage_identifier:?}) sendSignal {:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)",
+                        signal.name
                     ));
                 }
             }
@@ -149,6 +227,34 @@ fn is_plain_source_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+/// 单个 FileResource 条目的 fileType 闭集检查（fileResources 与
+/// executor.selectableResource 共用）：缺失/非串/闭集外（含带空白变体）
+/// 都是确定性的非法输入——条目内容会原样进链上承诺，归一化放行会让
+/// 承诺侧按原文分叉。
+fn file_resource_type_issue(path: &str, key: &str, resource: &Value) -> Option<String> {
+    let file_type = resource.get("fileType").and_then(Value::as_str);
+    if file_type.is_some_and(uvp_model::is_known_file_type) {
+        return None;
+    }
+    Some(format!(
+        "{path}[{key:?}].fileType must be one of {} (exact match, whitespace variants rejected), found {:?}",
+        uvp_model::FILE_TYPES
+            .map(|value| format!("{value:?}"))
+            .join(", "),
+        resource.get("fileType")
+    ))
+}
+
+/// 定义身份 uid：`zx-<32hex>`（内容派生，uvp:definition-uid:v2 域）。
+pub(crate) fn is_definition_uid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 35
+        && bytes.starts_with(b"zx-")
+        && bytes[3..]
+            .iter()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
 }
 
 /// `^[a-z][a-z0-9_-]{0,99}$`（字节口径）。
@@ -242,7 +348,7 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
 
 // stage_is_subscription 报告阶段是否声明了 ANCHOR 订阅入口。解析失败的
 // hook 不算订阅形态：语法错误由引用存在性校验统一上报。
-fn stage_is_subscription(stage: &ZhixuStage) -> bool {
+pub(crate) fn stage_is_subscription(stage: &ZhixuStage) -> bool {
     stage.receive_signals.values().any(|raw| {
         parse_hook_for_compiler("HOOK", raw)
             .map(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
@@ -260,7 +366,7 @@ fn stage_is_subscription(stage: &ZhixuStage) -> bool {
 /// - 有 receiveSignals 但全部编译为 flags=0 纯 watcher 的阶段同样不物化。
 ///
 /// dockInterface entrance 端口钩子编译为 dock|emitReady（=6），是合法
-/// 物化路径，不按 watcher 拒绝（CORE-8）。
+/// 物化路径，不按 watcher 拒绝。
 pub(crate) fn validate_onchain_stage_materialization(
     entries: &[StageEntry],
     entrance_hook_ids: &BTreeSet<String>,
@@ -292,7 +398,7 @@ pub(crate) fn validate_onchain_stage_materialization(
     issues
 }
 
-/// UVP-01（模-1 同族裁决，对齐 Go 镜像 zhixu_schema.go 的同款检查）：zhixu
+/// UVP-01（模-1 同族裁决）：zhixu
 /// 委托执行器的信封恒为 NewSource=false 的订单锚定子信号，无法携带通道
 /// 事实身份。本域 source 类无 mint 声明时订阅注入 route=fanin、投递落通道
 /// 维度（order_id=''），委托信封缺 order_id 会被状态机按永久错误拒绝——
@@ -329,7 +435,10 @@ pub(crate) fn validate_subscription_delegation(entries: &[StageEntry]) -> Vec<St
     issues
 }
 
-pub(crate) fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
+pub(crate) fn validate_mint_anchors(
+    entries: &[StageEntry],
+    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
+) -> Vec<String> {
     let mut issues = Vec::new();
     // 编译期固定五件事（模-1/模-2 裁决）：
     // 1) mint 取值合法（当前仅 per-fact）；
@@ -415,8 +524,12 @@ pub(crate) fn validate_mint_anchors(entries: &[StageEntry]) -> Vec<String> {
     }
     // 5) 防跨源代铸环（源类级统一环检测，直连自环已在上面按条上报）。
     issues.extend(validate_mint_subscription_cycles(entries));
-    // 6) 一事一单：同一事实至多被一个 mint 阶段声明为出生入口。
-    issues.extend(validate_mint_signal_key_uniqueness(entries));
+    // 6) 出生通道键并集查重：mint 出生键 ∪ dock entrance 键内
+    //    不得重复——跨通道重复同样拒绝。
+    issues.extend(validate_birth_channel_key_uniqueness(
+        entries,
+        entrance_fact_keys,
+    ));
     issues
 }
 
@@ -457,12 +570,25 @@ fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
     }
 }
 
-/// 一事一单：同一 (source, signal) 事实键至多被一个 mint（per-fact 订阅
-/// 铸单）阶段声明为出生入口。两个及以上 mint 阶段声明同一事实时，云轨会
-/// 按阶段各铸一单、链上一事实物化多单，三线回放对"该事实对应哪个订单"
-/// 发散；需要多阶段消费同一事实的场合走正常 hook 依赖（普通 receive
-/// hook），不铸单。
-fn validate_mint_signal_key_uniqueness(entries: &[StageEntry]) -> Vec<String> {
+/// 出生通道键并集查重：同一 plan 内，出生通道键的并集——mint 阶段
+/// ANCHOR 订阅的出生事实键 (source, task.stage.signal) ∪ dockInterface
+/// entrance 端口（orderModes 含 new 的接口的 input 端口）atom 的事实键
+/// ——内不得重复。三个臂的裁决现状并不一致：
+/// - mint∪dock / dock∪dock：三方一致拒绝（合约注册门
+///   DuplicateBirthChannelKey、TS 编译器镜像、本仓编译期）。跨通道共享键
+///   会让任一侧的出生事务把另一侧的出生线一并推 Ready、物化幻影阶段；
+///   dock entrance 键按 route 钉死（planHookDependsOn），一键挂两条
+///   entrance 时任一 route 的子单会物化另一 route 的阶段。
+/// - mint∪mint：未收敛分叉。本仓拒绝（下方"一事一单"臂）：一事实多
+///   mint 各铸一单，"该事实对应哪个订单"三线发散，本仓选择在编译期
+///   收口；合约与 TS 放行：一事实扇出多条 mint 出生线是产品现行形态
+///   （customs 基准 plan：order::registered 同时出生执行者选择与资源
+///   发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段。收敛前
+///   如实登记两侧口径，不宣称一致。
+fn validate_birth_channel_key_uniqueness(
+    entries: &[StageEntry],
+    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
+) -> Vec<String> {
     let mut stages_by_key: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
     for entry in entries {
         if entry.stage.mint.is_none() {
@@ -482,15 +608,38 @@ fn validate_mint_signal_key_uniqueness(entries: &[StageEntry]) -> Vec<String> {
                 .insert(entry.stage_identifier.as_str());
         }
     }
-    stages_by_key
-        .into_iter()
-        .filter_map(|((source, signal), stages)| {
-            if stages.len() < 2 {
+    let mut keys: BTreeSet<&(String, String)> = stages_by_key.keys().collect();
+    keys.extend(entrance_fact_keys.keys());
+    keys.into_iter()
+        .filter_map(|key| {
+            let stages: Vec<&str> = stages_by_key
+                .get(key)
+                .map(|stages| stages.iter().copied().collect())
+                .unwrap_or_default();
+            let ports: Vec<&str> = entrance_fact_keys
+                .get(key)
+                .map(|ports| ports.iter().map(String::as_str).collect())
+                .unwrap_or_default();
+            if stages.len() + ports.len() < 2 {
                 return None;
             }
-            let stages = stages.into_iter().collect::<Vec<_>>().join(", ");
+            let (source, signal) = (&key.0, &key.1);
+            if ports.is_empty() {
+                let stages = stages.join(", ");
+                return Some(format!(
+                    "{source}::{signal} is declared as the birth entry by multiple mint stages ({stages}): one fact mints at most one order (一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖)"
+                ));
+            }
+            let mut claimants = Vec::new();
+            if !stages.is_empty() {
+                claimants.push(format!("mint stage(s) ({})", stages.join(", ")));
+            }
+            if ports.len() > 1 || !stages.is_empty() {
+                claimants.push(format!("dock entrance port(s) ({})", ports.join(", ")));
+            }
             Some(format!(
-                "{source}::{signal} is declared as the birth entry by multiple mint stages ({stages}): one fact mints at most one order (一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖)"
+                "{source}::{signal} is declared as a birth channel by both {}: one fact keys at most one birth channel in the plan (出生通道键并集查重：mint 出生键 ∪ dock entrance 键内不得重复)",
+                claimants.join(" and ")
             ))
         })
         .collect()
@@ -563,6 +712,19 @@ pub(crate) fn validate_receive_signal_references(
     issues
 }
 
+// 供 admissions（sendSignals 的 validWhen 过滤档）复用的引用存在性裁决：
+// 与 receiveSignals 共用同一 catalog、同一口径——标头 source 必须是本域
+// 声明的 source 类，每个 task.stage.signal 必须落在真实存在、source 一致
+// 且声明了该信号的阶段上。
+pub(crate) fn validate_signal_references(
+    hook: &ParseHookOutput,
+    path: &str,
+    entries: &[StageEntry],
+) -> Vec<String> {
+    let catalog = SignalReferenceCatalog::new(entries);
+    validate_hook_dependency_references(hook, path, &catalog)
+}
+
 // receiveSignals key 即阶段内 hook_name，落 hook_name 列（VARCHAR(36)）。
 // 语法手册 §7.4："key 不可为空且不能含 '.'"；'#' 是 hookId 分隔符
 // （stage#hook_name）——key 携带任一分隔符都会让 hookId 命名空间含混。
@@ -627,10 +789,10 @@ fn validate_hook_dependency_references(
             continue;
         }
         if !catalog.local_sources.contains(&dependency.source) {
-            // 订阅寻址只在本域解析（subscription-mint-spec §2.1）：receive
-            // 钩子的依赖 source 必须 ∈ 本域 source 类集合。
+            // 依赖 source（含表达式标头 source）必须 ∈ 本域声明的 source 类
+            // 集合（subscription-mint-spec §2.1：寻址只在本域解析）。
             issues.push(format!(
-                "{path} subscription source {} is not a declared source in this zhixu",
+                "{path} references source {} that is not a declared source in this zhixu",
                 dependency.source
             ));
             continue;
@@ -671,22 +833,18 @@ fn validate_hook_dependency_references(
 /// 声明阶段前缀 + 信号名；canonical 三段式（强制自指，见
 /// parse_signal_capability）本身就是全名。引用存在性（本函数）、
 /// capability 去重与 D014 一律按展开后的全名统一比较——只比第三段会把
-/// canonical 声明判成悬空引用（"声明即死"）。`<target>::<signal>`
-/// triggerOrigin 声明不参与该比较：它声明的是跨源触发能力（relation=1，
-/// 合约消费），不是本阶段 current 事实。
+/// canonical 声明判成悬空引用（"声明即死"）。
 pub(crate) fn declares_signal_expanding_to(
-    send_signals: &[String],
+    send_signals: &[uvp_model::ZhixuSendSignal],
     stage_identifier: &str,
     full_signal_name: &str,
 ) -> bool {
     send_signals.iter().any(|declared| {
-        if declared.contains("::") {
-            return false;
-        }
-        if declared == full_signal_name {
+        if declared.name == full_signal_name {
             return true;
         }
-        !declared.contains('.') && format!("{stage_identifier}.{declared}") == full_signal_name
+        !declared.name.contains('.')
+            && format!("{stage_identifier}.{}", declared.name) == full_signal_name
     })
 }
 

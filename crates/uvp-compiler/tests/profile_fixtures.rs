@@ -17,10 +17,10 @@ struct ProfileFixture {
     #[allow(dead_code)]
     portable: bool,
     input: Value,
-    /// 可选 dock resolution manifest：含 zhixu executor 的
-    /// 可运行 fixture 必须内嵌 manifest。
+    /// 可选 dockTargets 注册表：含 zhixu executor 静态目标的
+    /// 可运行 fixture 必须内嵌被引用的 uid 条目。
     #[serde(default)]
-    resolution_manifest: Option<Value>,
+    dock_targets: Option<Value>,
     expect: FixtureExpect,
 }
 
@@ -90,7 +90,7 @@ fn run_fixture(fixture: &ProfileFixture) {
     let result = compile_request(&CompileRequest {
         target: fixture.target.clone(),
         definition: fixture.input.clone(),
-        resolution_manifest: fixture.resolution_manifest.clone(),
+        dock_targets: fixture.dock_targets.clone(),
     });
     match (&fixture.expect.error_contains, result) {
         (Some(expected), Err(err)) => {
@@ -207,7 +207,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
     let rerun = compile_request(&CompileRequest {
         target: fixture.target.clone(),
         definition: fixture.input.clone(),
-        resolution_manifest: fixture.resolution_manifest.clone(),
+        dock_targets: fixture.dock_targets.clone(),
     })
     .unwrap_or_else(|err| {
         panic!(
@@ -225,7 +225,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
     match fixture.target.as_str() {
         "hook_plan" | "evm" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.hookPlan.v2",
+                value["schemaVersion"], "uvp.hookPlan.v4",
                 "{}",
                 fixture.name
             );
@@ -233,7 +233,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
         }
         "cloud" | "cloud_db" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.cloudArtifact.v2",
+                value["schemaVersion"], "uvp.cloudArtifact.v4",
                 "{}",
                 fixture.name
             );

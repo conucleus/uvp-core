@@ -29,8 +29,12 @@
                 "PAY": "buyer::(settle.pay.done +5s) & ~settle.pay.refunded"
               },
               "sendSignals": [
-                "done",
-                "refunded"
+                {
+                  "name": "done"
+                },
+                {
+                  "name": "refunded"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

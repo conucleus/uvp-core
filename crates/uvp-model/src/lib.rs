@@ -85,11 +85,23 @@ pub struct ZhixuStage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_stages: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub send_signals: Vec<String>,
+    pub send_signals: Vec<ZhixuSendSignal>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub receive_signals: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_resources: BTreeMap<String, Value>,
+}
+
+/// sendSignals 条目（发射适格面）：`name` 沿用既有信号声明值空间
+/// （裸名 / canonical 三段式自指）；`validWhen` 是钩子方言表达式
+/// （过滤档），缺省 = 无条件发射。
+/// 键闭集 `{name, validWhen}` 与 Go DisallowUnknownFields / TS 闭集三面同形。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ZhixuSendSignal {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_when: Option<String>,
 }
 
 /// typed executor。
@@ -128,6 +140,18 @@ pub const SUPPLIER_TYPES: [&str; 3] = ["individual", "organization", "zhixu"];
 /// Go 侧严格枚举闸（不 trim、空白即拒）同口径。
 pub fn is_known_supplier_type(value: &str) -> bool {
     SUPPLIER_TYPES.contains(&value)
+}
+
+/// `fileType` 闭集：`fileResources` 条目与 `executor.selectableResource`
+/// 条目（FileResource 词表）的取值面，与 TS compiler FILE_TYPES / Go
+/// fileTypes 同源。两类条目都随 route 进链上承诺（resourcesHash /
+/// executorHash），拼错的类型必须在编译期拒绝，而不是烧进承诺后才在
+/// 消费侧炸开。
+pub const FILE_TYPES: [&str; 4] = ["local", "http", "txcloud", "plain_text"];
+
+/// 与 supplierType 闭集同纪律：精确匹配、不 trim。
+pub fn is_known_file_type(value: &str) -> bool {
+    FILE_TYPES.contains(&value)
 }
 
 /// `spec.dockInterface` 下的具名接口。

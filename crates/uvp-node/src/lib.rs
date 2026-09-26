@@ -66,15 +66,17 @@ pub fn semantic_version() -> String {
 }
 
 #[napi]
-/// HookPlan 产物信封版本（uvp.hookPlan.v2）：TS 侧兼容门与 uvp-protocol
+/// HookPlan 产物信封版本（uvp.hookPlan.v4）：TS 侧兼容门与 uvp-protocol
 /// compiler 的 HOOK_PLAN_SCHEMA_VERSION 逐字比对，防两轨信封版本漂移。
 pub fn hook_plan_schema_version() -> String {
     uvp_compiler::HOOK_PLAN_SCHEMA_VERSION.to_string()
 }
 
 #[napi]
-/// 构建指纹（git-<rev>，build.rs 编译期烧入）：TS 侧据此比对当前 uvp-core
-/// 检出 HEAD，识别"版本+语义探针双检都放行但行为已变"的陈旧 dylib。
+/// 构建指纹（git-<rev>，build.rs 编译期烧入）：rev 是 uvp-core 检出的
+/// 内容树哈希（`HEAD^{tree}`，squash 只改提交图不改树），TS 侧据此比对
+/// 当前 uvp-core 检出内容树，识别"版本+语义探针双检都放行但行为已变"的
+/// 陈旧 dylib。
 /// `no-git-` 前缀表示构建时找不到 git 仓库，宿主侧应拒绝静默通过。
 pub fn build_fingerprint() -> String {
     env!("UVP_BUILD_FINGERPRINT").to_string()
@@ -89,9 +91,9 @@ mod tests {
         assert_eq!(uvp_hook_dsl::SEMANTIC_VERSION, "uvp.semantic.v1");
         assert_eq!(
             uvp_compiler::HOOK_PLAN_SCHEMA_VERSION,
-            "uvp.hookPlan.v2",
+            "uvp.hookPlan.v4",
             "TS authority literal is uvp.protocol compiler HOOK_PLAN_SCHEMA_VERSION"
         );
-        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v2");
+        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v4");
     }
 }

@@ -41,10 +41,10 @@ pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
 pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
 
 /// 以下跨秩序关键字不受支持：`::OUTSIDE@`、`ANCHOR@`（裸标头）、
-/// `OUTSOURCE`。解析器仍识别这些关键字，以便给出精确的 unsupported 报错
+/// `OUTSOURCE`。解析器词法识别这些关键字，以便给出精确的 unsupported 报错
 /// （统一入口为 `::ANCHOR(@source::task.stage.signal)` 订阅，见
-/// subscription-mint-spec.md），而不是笼统的语法错误。扇入类旧标头不再点名：
-/// 该形态按通用语法错误拒绝。
+/// subscription-mint-spec.md），而不是笼统的语法错误。扇入类标头不在
+/// 词表内：该形态按通用语法错误拒绝。
 pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::task.stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +53,21 @@ pub enum Profile {
     #[default]
     EvmStrict,
     CloudCompat,
+}
+
+/// 校验档（与 Profile 正交：profile 只影响归一化输出，gate 决定走哪套
+/// 位置/锚点校验）。`hook`（默认）：钩子档——正锚要求 + 否决位仅合取
+/// 直接子项；`filter`：过滤档（发射适格面）——无正锚要求、衰减否决位
+/// 位置开放到全部布尔位置（根/Or 子项/合取子项：到达一拍求值，这些
+/// 位置的瞬时值都良定义）；延时操作数内不放行——否决位自身是延时
+/// 节点，落入其中即触发两档共用的嵌套延时禁令。保留 duration 语法/
+/// 上限、NOT 操作数词表与身份闸。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Gate {
+    #[default]
+    Hook,
+    Filter,
 }
 
 #[derive(Debug, Error)]
@@ -99,7 +114,7 @@ pub fn lint_hook_json(input: &str) -> String {
     let result = serde_json::from_str::<ParseHookRequest>(input)
         .map_err(|err| HookError::Message(format!("invalid lint hook request: {err}")))
         .and_then(|req| {
-            lint_hook(req.profile, &req.hook_name, &req.hook)
+            lint_hook(req.profile, req.gate, &req.hook_name, &req.hook)
                 .map_err(|err| HookError::Message(err.to_string()))
         });
     envelope_json(result)

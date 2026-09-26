@@ -26,7 +26,7 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 
 - `HookStatusChanged(status=ready)`：合约对 →Ready 先 emit 状态变更再 emit
   `HookReady`；oracle 只以 `HookReady` 观察就绪，ready 状态变更被裁剪。
-- `HookStatusChanged(status=init)`：v0.10 合约不产出（Init 是隐含初值，无
+- `HookStatusChanged(status=init)`：合约不产出（Init 是隐含初值，无
   观察语义）；携带该状态的输入事件被裁剪——原生入口的输入契约因此不需要
   适配层预裁 init 观察。
 - 语义重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt 时刻）：

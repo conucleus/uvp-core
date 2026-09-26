@@ -24,7 +24,9 @@
               "name": "start",
               "source": "buyer",
               "sendSignals": [
-                "step_done"
+                {
+                  "name": "step_done"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

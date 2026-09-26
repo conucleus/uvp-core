@@ -23,9 +23,7 @@ pub use artifact::{CLOUD_ARTIFACT_SCHEMA_VERSION, HOOK_PLAN_SCHEMA_VERSION};
 mod tests;
 
 #[cfg(test)]
-// 模块内测试直引能力表规模上限与 serde_json::Map（见 tests.rs）。
-use artifact::MAX_SIGNAL_CAPABILITIES;
-#[cfg(test)]
+// 模块内测试直引 serde_json::Map（见 tests.rs）。
 use serde_json::Map;
 
 #[derive(Debug, Error)]
@@ -34,6 +32,33 @@ pub enum CompilerError {
     Message(String),
     #[error("compilation failed: {0}")]
     Issues(String),
+}
+
+/// 编译错误串上限：issues 的条数与单条长度都随 plan 输入无界
+/// 增长（毒定义可造出数百条 issue × 长路径），错误串经 FFI/NAPI 信封
+/// 外发——在拼装边界截断并标注被省略的条数，保留头部诊断。
+pub(crate) const MAX_ISSUES_STRING_BYTES: usize = 16 * 1024;
+
+pub(crate) fn join_issues_bounded(issues: &[String]) -> String {
+    let mut out = String::new();
+    let mut remaining = issues.len();
+    for issue in issues {
+        remaining -= 1;
+        let piece = if out.is_empty() {
+            issue.clone()
+        } else {
+            format!("; {issue}")
+        };
+        if out.len() + piece.len() > MAX_ISSUES_STRING_BYTES {
+            out.push_str(&format!(
+                "; …({} issues truncated: error string capped at {MAX_ISSUES_STRING_BYTES} bytes)",
+                remaining + 1
+            ));
+            return out;
+        }
+        out.push_str(&piece);
+    }
+    out
 }
 
 type Result<T> = std::result::Result<T, CompilerError>;
@@ -46,11 +71,12 @@ pub struct CompileRequest {
     #[serde(default = "default_target")]
     pub target: String,
     pub definition: Value,
-    /// Dock resolution manifest：由 Store/发布系统或离线
-    /// lock 文件提供；含 zhixu executor 的可运行编译必须提供，否则返回
-    /// `UNRESOLVED_DOCK_TARGET`。
+    /// Dock 目标注册表：编译入口按引用 uid 从权威存储直读后注入；
+    /// 静态目标 route 缺注册目标的可运行编译返回
+    /// `UNRESOLVED_DOCK_TARGET`（`target: null` 的动态选择 route 走
+    /// 未解析声明面）。
     #[serde(default)]
-    pub resolution_manifest: Option<Value>,
+    pub dock_targets: Option<Value>,
 }
 
 fn default_target() -> String {
@@ -65,16 +91,15 @@ pub fn compile_json(input: &str) -> String {
 }
 
 pub fn compile_request(req: &CompileRequest) -> Result<Value> {
-    let manifest = req.resolution_manifest.as_ref();
+    let dock_targets = req.dock_targets.as_ref();
     match req.target.as_str() {
-        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, manifest, false),
-        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, manifest, false),
+        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, dock_targets, false),
+        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, dock_targets, false),
         // parse-only：允许 unresolved route。
-        "parse" => compile_zhixu_hook_plan(&req.definition, manifest, true),
-        // dock link 编译 target（uvp.dock-link v1 产物面）已删除
-        // （无消费方，机制直接移除）：link 校验由
-        // hook_plan/cloud/parse 在 resolutionManifest 在场时同一链路承担，
-        // 无独立产物面。
+        "parse" => compile_zhixu_hook_plan(&req.definition, dock_targets, true),
+        // 不存在 dock link 编译 target（uvp.dock-link v1 产物面）：
+        // link 校验由 hook_plan/cloud/parse 在 dockTargets
+        // 在场时同一链路承担，无独立产物面。
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"
         ))),

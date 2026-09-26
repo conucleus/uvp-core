@@ -472,15 +472,20 @@ pub struct HookLintResult {
 }
 
 /// 解析 + 语义验证 + Layer 1 规则。语义验证失败是 `Err`（非法 DSL 不进入
-/// lint，PRD §4.2），不是 diagnostic。
+/// lint，PRD §4.2），不是 diagnostic。gate 决定走钩子档还是过滤档校验
+/// （发射适格面的合法形态在过滤档下不得被 lint 误报）。
 pub fn lint_hook_with_condition(
     _profile: Profile,
+    gate: crate::Gate,
     hook_name: &str,
     hook: &str,
 ) -> Result<HookLintResult, LintError> {
     crate::parser::validate_hook_name(hook_name)?;
     let (hook_expr, spans) = crate::parser::parse_hook_expr_with_spans(hook)?;
-    crate::ast::validate_hook(&hook_expr.condition)?;
+    match gate {
+        crate::Gate::Hook => crate::ast::validate_hook(&hook_expr.condition)?,
+        crate::Gate::Filter => crate::ast::validate_filter_hook(&hook_expr.condition)?,
+    }
     let normalized_expression = format!(
         "{}::{}",
         hook_expr.source,
@@ -500,8 +505,13 @@ pub fn lint_hook_with_condition(
 }
 
 /// 最低层 lint API（PRD §19）。
-pub fn lint_hook(profile: Profile, hook_name: &str, hook: &str) -> Result<LintReport, LintError> {
-    lint_hook_with_condition(profile, hook_name, hook).map(|result| result.report)
+pub fn lint_hook(
+    profile: Profile,
+    gate: crate::Gate,
+    hook_name: &str,
+    hook: &str,
+) -> Result<LintReport, LintError> {
+    lint_hook_with_condition(profile, gate, hook_name, hook).map(|result| result.report)
 }
 
 pub fn lint_spanned_tree(tree: &SpannedExpr, hook_name: &str) -> Vec<LintDiagnostic> {

@@ -96,7 +96,7 @@ fn retired_fan_in_instruction_is_rejected_as_unknown() {
 
 #[test]
 fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
-    // 负向 golden：手工 plan 携带退役扇入指令时，回放整体以错误收场
+    // 负向 golden：手工 plan 携带指令集外的扇入指令时，回放整体以错误收场
     // （envelope ok:false），不产出"部分观察 + mismatch"的软化报告——
     // 与合约 commitPlan 注册边界的响亮拒绝同口径。
     let retired_op = concat!("MER", "GE");
@@ -1011,6 +1011,81 @@ fn poke_before_due_or_not_waiting_is_skipped() {
 }
 
 #[test]
+fn timer_poked_without_poked_at_fails_loudly() {
+    // pokedAt 是 TimerPoked 的求值时钟：缺失/非串是结构性毒输入，整场
+    // 回放响亮失败——跳过（或按未到期静默滤除）会把"事件存在但时钟
+    // 不可知"吞成空洞。TS 镜像层按同口径抛错，此测试是两侧对齐的
+    // 权威侧钉子。
+    let events = vec![
+        json!({
+            "eventName": "PlanRegistered",
+            "blockNumber": 1,
+            "logIndex": 0,
+            "transactionHash": "0x01",
+            "plan": {
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "compiledHooks": [{
+                    "hookId": "flow.pay#TIMEOUT",
+                    "stageId": "flow.pay",
+                    "stageIdentifier": "flow.pay",
+                    "hookName": "TIMEOUT",
+                    // watcher 形态：order-trigger hook 禁 DELAY，出生钩
+                    // 携 DELAY 会在注册门先炸，到不了 pokedAt 口径。
+                    "orderTriggerKind": "none",
+                    "emitReady": true,
+                    "instructions": [
+                        {"op": "SIGNAL", "signalKey": "0x50"},
+                        {"op": "DELAY", "delaySeconds": 5}
+                    ],
+                }],
+                "dependencyIndex": {"0x50": ["flow.pay#TIMEOUT"]}
+            },
+        }),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x30",
+            "signalId": "0x40",
+            "signalKey": "0x50",
+            "senderId": "sender",
+            "submittedAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "TimerPoked",
+            "blockNumber": 4,
+            "logIndex": 0,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "flow.pay#TIMEOUT",
+            "dueAt": "2026-04-27T00:00:05.000Z"
+        }),
+    ];
+    let error = replay_chain_events(events, &ReplayOptions::default()).unwrap_err();
+    assert!(
+        error.to_string().contains("pokedAt must be a string"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn rejects_not_without_operand() {
     let instructions = vec![json!({"op": "NOT"})];
     let error = evaluate_instructions(
@@ -1758,7 +1833,7 @@ fn case_distinct_hook_ids_stay_separate() {
 
 #[test]
 fn init_status_changes_are_trimmed() {
-    // v0.10 合约不产出 HookStatusChanged(status=init)（Init 是隐含初值，
+    // 合约不产出 HookStatusChanged(status=init)（Init 是隐含初值，
     // 无观察语义）：携带该状态的输入事件被裁剪，不产生 expected、
     // 不参与比对——原生入口可直接喂，无需适配层预裁。
     let plan = single_hook_plan(
@@ -2160,6 +2235,331 @@ fn epoch_zero_submission_is_a_real_anchor_for_delay() {
 }
 
 #[test]
+fn not_value_mirrors_the_decaying_veto_three_branches() {
+    // 衰减否决位 ~(A+duration) 的三分支取补（对齐合约 _notValue 与核心
+    // 求值器 Expr::Not）：内层 Ready→Impossible、内层 Wait→Ready 且
+    // due_at 承载内层到期时刻（有效期）、其余（Impossible/NeedsMore）→
+    // 无限期 Ready。旧语义把内层 Wait 一律折成 cancel，未熟窗口内的
+    // 放行被判成否决成立——与链上/权威求值分叉。
+    let anchored = signal_value(
+        &{
+            let mut order = OracleOrderState::default();
+            order.signals.insert(
+                "0x50".to_string(),
+                json!({"submittedAt": "2026-04-27T00:00:00.000Z"}),
+            );
+            order
+        },
+        "0x50",
+    )
+    .expect("signal value");
+
+    // 内层在案未熟：本项此刻 Ready，有效期 = 内层到期时刻（元数据，
+    // 无锚——外层 DELAY 依旧按缺正锚拒绝，位置闸也在注册期封死该形态）。
+    let waiting = delay_value(anchored, 5, "2026-04-27T00:00:02.000Z").expect("wait");
+    let veto_live = not_value(waiting);
+    assert!(veto_live.value && !veto_live.wait && !veto_live.cancel);
+    assert_eq!(
+        veto_live.due_at,
+        Some(seconds_from_iso("2026-04-27T00:00:05.000Z").unwrap())
+    );
+    assert_eq!(veto_live.anchor_at, None);
+
+    // 内层已熟（成熟边界含端点：now == due 即 Ready）：否决成立。
+    let matured = delay_value(anchored, 5, "2026-04-27T00:00:05.000Z").expect("matured");
+    let veto_expired = not_value(matured);
+    assert!(veto_expired.cancel && !veto_expired.value && !veto_expired.wait);
+    assert_eq!(veto_expired.due_at, None);
+
+    // 其余分支：内层取消/缺席归约 → 无限期 Ready（due_at 不携带）。
+    let cancelled = EvalValue {
+        value: false,
+        wait: false,
+        cancel: true,
+        due_at: None,
+        anchor_at: None,
+    };
+    for inner in [cancelled, false_value()] {
+        let unbounded = not_value(inner);
+        assert!(unbounded.value && !unbounded.wait && !unbounded.cancel);
+        assert_eq!(unbounded.due_at, None);
+    }
+}
+
+/// `ship & ~(cancel + 14d)` 的指令形态（衰减否决位是 AND 直接子项）。
+fn window_instructions() -> Vec<Value> {
+    vec![
+        json!({"op": "SIGNAL", "signalKey": "0x50"}),
+        json!({"op": "SIGNAL", "signalKey": "0x51"}),
+        json!({"op": "DELAY", "delaySeconds": 1209600}),
+        json!({"op": "NOT"}),
+        json!({"op": "AND", "arity": 2}),
+    ]
+}
+
+fn order_with_signals(signals: &[(&str, &str)]) -> OracleOrderState {
+    let mut order = OracleOrderState::default();
+    for (key, submitted_at) in signals {
+        order
+            .signals
+            .insert(key.to_string(), json!({"submittedAt": submitted_at}));
+    }
+    order
+}
+
+#[test]
+fn decaying_veto_window_three_states_match_the_evaluator() {
+    // 与语义语料 evalCases 同形态对拍（decaying veto passes/…matures/
+    // …exactly at maturity）：缺席→无限期放行；在案未熟→放行至成熟
+    // 时刻（due_at = 2026-05-11）；恰在成熟时刻→否决成立（cancel）。
+    let absent = evaluate_instructions(
+        &order_with_signals(&[("0x50", "2026-04-27T00:00:05.000Z")]),
+        &window_instructions(),
+        "2026-04-27T00:00:10.000Z",
+    )
+    .expect("absent veto passes unbounded");
+    assert!(absent.value && !absent.wait && !absent.cancel);
+    assert_eq!(absent.due_at, None);
+
+    let immature = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:05.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+        ]),
+        &window_instructions(),
+        "2026-04-27T00:00:10.000Z",
+    )
+    .expect("live veto passes");
+    assert!(immature.value && !immature.wait && !immature.cancel);
+    assert_eq!(
+        immature.due_at,
+        Some(seconds_from_iso("2026-05-11T00:00:00.000Z").unwrap())
+    );
+
+    let last_millisecond = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:05.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+        ]),
+        &window_instructions(),
+        "2026-05-10T23:59:59.999Z",
+    )
+    .expect("veto still passes one millisecond before maturity");
+    assert!(last_millisecond.value);
+    assert_eq!(
+        last_millisecond.due_at,
+        Some(seconds_from_iso("2026-05-11T00:00:00.000Z").unwrap())
+    );
+
+    let at_maturity = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:05.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+        ]),
+        &window_instructions(),
+        "2026-05-11T00:00:00.000Z",
+    )
+    .expect("evaluation returns a verdict");
+    assert!(at_maturity.cancel && !at_maturity.value && !at_maturity.wait);
+}
+
+#[test]
+fn and_wait_due_excludes_the_live_vetos_validity() {
+    // `(A +5s) & ~(B +10s)`：AND 等待期限只由等待成员贡献——就绪成员
+    // （活性否决位）的 due_at 是衰减有效期而非等待期限，混入 max 会把
+    // 等待期限错拓到否决位的有效期（合约 _andValue 以 wait 门隔离）。
+    let instructions = vec![
+        json!({"op": "SIGNAL", "signalKey": "0x50"}),
+        json!({"op": "DELAY", "delaySeconds": 5}),
+        json!({"op": "SIGNAL", "signalKey": "0x51"}),
+        json!({"op": "DELAY", "delaySeconds": 10}),
+        json!({"op": "NOT"}),
+        json!({"op": "AND", "arity": 2}),
+    ];
+    let result = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:00.000Z"),
+            ("0x51", "2026-04-27T00:00:01.000Z"),
+        ]),
+        &instructions,
+        "2026-04-27T00:00:02.000Z",
+    )
+    .expect("and waits on its positive branch");
+    assert!(result.wait && !result.value && !result.cancel);
+    assert_eq!(
+        result.due_at,
+        Some(seconds_from_iso("2026-04-27T00:00:05.000Z").unwrap())
+    );
+}
+
+#[test]
+fn or_winner_carries_its_own_expiry_verbatim() {
+    // 嵌套 Or 内 And 含衰减（唯一能携带有效期的合法 Or 形态）：获胜分支
+    // 的衰减有效期原样上浮，不跨分支取 min（合约 _orValue 的 leftWins
+    // 载荷选择同形）。
+    let instructions = vec![
+        json!({"op": "SIGNAL", "signalKey": "0x50"}),
+        json!({"op": "SIGNAL", "signalKey": "0x51"}),
+        json!({"op": "DELAY", "delaySeconds": 600}),
+        json!({"op": "NOT"}),
+        json!({"op": "AND", "arity": 2}),
+        json!({"op": "SIGNAL", "signalKey": "0x52"}),
+        json!({"op": "OR", "arity": 2}),
+    ];
+    let result = evaluate_instructions(
+        &order_with_signals(&[
+            ("0x50", "2026-04-27T00:00:10.000Z"),
+            ("0x51", "2026-04-27T00:00:00.000Z"),
+            ("0x52", "2026-04-27T00:00:20.000Z"),
+        ]),
+        &instructions,
+        "2026-04-27T00:00:30.000Z",
+    )
+    .expect("or picks the earliest-maturity ready branch");
+    assert!(result.value && !result.wait && !result.cancel);
+    assert_eq!(
+        result.anchor_at,
+        Some(seconds_from_iso("2026-04-27T00:00:10.000Z").unwrap()),
+        "and branch matures first"
+    );
+    assert_eq!(
+        result.due_at,
+        Some(seconds_from_iso("2026-04-27T00:10:00.000Z").unwrap()),
+        "the winning branch's decaying validity floats up verbatim"
+    );
+}
+
+#[test]
+fn decaying_veto_positions_are_rejected_at_registration() {
+    // 位置规则镜像（合约 _validateHook 的 vetoTerm/vetoInside 双闸）：
+    // 否决位唯一合法位置是合取直接子项——根位、Or 子项、Delay 操作数
+    // 内（任意深度）一律拒绝；合法形态（And 直接子项、嵌套 Or 内 And
+    // 含衰减）注册放行。
+    let veto_root = watcher_plan(
+        "flow.pay#VETO_ROOT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(veto_root)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("places a decaying veto at the root"),
+        "{error}"
+    );
+
+    let veto_under_or = watcher_plan(
+        "flow.pay#VETO_OR",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "OR", "arity": 2 }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(veto_under_or)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("places a decaying veto under an OR branch"),
+        "{error}"
+    );
+
+    // Delay 操作数内（任意深度）：外层延时锚在已过期的否决上会静默
+    // 放行——衰减与成熟永久的语义冲突在注册边界封死。
+    let veto_in_delay = watcher_plan(
+        "flow.pay#VETO_DELAY",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "AND", "arity": 2 },
+            { "op": "DELAY", "delaySeconds": 10 }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(veto_in_delay)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("applies DELAY to an operand containing a decaying veto"),
+        "{error}"
+    );
+
+    // 双重否定：内层 NOT 消费掉 DELAY 产出后，外层 NOT 的操作数既非裸
+    // SIGNAL 也非 DELAY 产出——词表闸拒绝。
+    let double_negation = watcher_plan(
+        "flow.pay#VETO_NOT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(double_negation)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("applies NOT to a non-bare-SIGNAL operand"),
+        "{error}"
+    );
+
+    // 合法形态对照：And 直接子项（依赖索引逐点镜像）注册放行。
+    let mut legal = watcher_plan(
+        "flow.pay#VETO",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "DELAY", "delaySeconds": 5 },
+            { "op": "NOT" },
+            { "op": "AND", "arity": 2 }
+        ]),
+    );
+    legal["dependencyIndex"] = json!({ "0x50": ["flow.pay#VETO"], "0x51": ["flow.pay#VETO"] });
+    replay_chain_events(
+        vec![plan_registered_event(legal)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a veto as a direct conjunction operand registers");
+}
+
+#[test]
 fn non_positive_delay_seconds_is_rejected_at_replay_decode() {
     // 回放解码镜像合约注册门（delaySeconds == 0 revert
     // InvalidInstruction）与在线入口（uvp-hook-dsl 解码层 positive 门）：
@@ -2318,4 +2718,975 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
     );
     let order = &result["state"]["orders"]["0x01::order-1"];
     assert_eq!(order["hookStatuses"]["flow.start#WAIT"]["status"], "ready");
+}
+
+// ------------------------------------------------------------------
+// 链上注册门镜像（30d 上限 / 根正锚 / NOT 裸操作数 / 深度 120）、
+// 重复 OrderRegistered 吸收、非整数 blockNumber、dueAt 渲染响亮失败。
+// ------------------------------------------------------------------
+
+/// 单 watcher 钩子的最小 plan（注册门探针基底：orderTriggerKind=none）。
+fn watcher_plan(hook_id: &str, instructions: Value) -> Value {
+    json!({
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "compiledHooks": [{
+            "hookId": hook_id,
+            "stageId": "flow.pay",
+            "stageIdentifier": "flow.pay",
+            "hookName": "TIMEOUT",
+            "orderTriggerKind": "none",
+            "emitReady": true,
+            "instructions": instructions,
+        }],
+        "dependencyIndex": { "0x50": [hook_id] }
+    })
+}
+
+fn plan_registered_event(plan: Value) -> Value {
+    json!({
+        "eventName": "PlanRegistered",
+        "blockNumber": 1,
+        "logIndex": 0,
+        "transactionHash": "0x01",
+        "plan": plan
+    })
+}
+
+#[test]
+fn delay_cap_30d_is_enforced_at_registration() {
+    // 合约 MAX_HOOK_DELAY_SECONDS = 30 days = 2592000s：超限在 commitPlan
+    // 即 revert HookDelayTooLong——"合约不可能的 plan"在回放注册门响亮
+    // 失败，不产出远期 wait 的软化观察。
+    let over = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 2592001 }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(over)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("exceeds the maximum allowed delay of 2592000s (30d)"),
+        "{error}"
+    );
+
+    // 边界值 2592000 恰在限内：注册放行。
+    let at_limit = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 2592000 }
+        ]),
+    );
+    replay_chain_events(
+        vec![plan_registered_event(at_limit)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a 30d delay sits exactly at the contract cap and must register");
+}
+
+#[test]
+fn root_without_positive_anchor_is_rejected_at_registration() {
+    // 纯否定条件（~A）：value=true 时 anchorAt 无源，合约注册边界按
+    // hasPosAnchor[0] 拒绝——镜像同口径。
+    let plan = watcher_plan(
+        "flow.pay#GUARD",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(plan)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("no positive signal anchor at the root"),
+        "{error}"
+    );
+}
+
+#[test]
+fn not_on_composite_operand_is_rejected_at_registration() {
+    // ~(A&B)：NOT 的操作数必须是裸 SIGNAL——组合否定的取消/锚点语义与
+    // 编译器产物形态分叉，合约 _validateHook 注册边界拒绝。
+    let plan = watcher_plan(
+        "flow.pay#COMPOSITE_NOT",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "AND", "arity": 2 },
+            { "op": "NOT" }
+        ]),
+    );
+    let error = replay_chain_events(
+        vec![plan_registered_event(plan)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("applies NOT to a non-bare-SIGNAL operand"),
+        "{error}"
+    );
+
+    // 对照：NOT 直接作用于裸 SIGNAL 合法（A&~B 的负依赖形态）。指令集
+    // 携带两个 SIGNAL 原子，dependencyIndex 须逐点镜像（真实编译产物按
+    // 全部原子建索引）。
+    let mut plan = watcher_plan(
+        "flow.pay#GUARD",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "NOT" },
+            { "op": "AND", "arity": 2 }
+        ]),
+    );
+    plan["dependencyIndex"] = json!({ "0x50": ["flow.pay#GUARD"], "0x51": ["flow.pay#GUARD"] });
+    replay_chain_events(
+        vec![plan_registered_event(plan)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("NOT over a bare SIGNAL is the compiler-produced negative-dependency shape");
+}
+
+#[test]
+fn instruction_depth_cap_120_is_enforced_at_registration() {
+    // 深度闸镜像 MAX_PARSE_DEPTH=120 / Go MaxASTDepth=120：逐槽计数
+    // （SIGNAL=0，组合=操作数最大深度+1）。121 层嵌套超限拒绝，120 层
+    // 恰在限内。
+    let nested_and_plan = |levels: usize| {
+        let mut instructions = vec![json!({ "op": "SIGNAL", "signalKey": "0x50" })];
+        for _ in 0..levels {
+            instructions.push(json!({ "op": "SIGNAL", "signalKey": "0x50" }));
+            instructions.push(json!({ "op": "AND", "arity": 2 }));
+        }
+        watcher_plan("flow.pay#DEEP", Value::Array(instructions))
+    };
+    let error = replay_chain_events(
+        vec![plan_registered_event(nested_and_plan(121))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("instruction nesting exceeds the maximum depth of 120"),
+        "{error}"
+    );
+    replay_chain_events(
+        vec![plan_registered_event(nested_and_plan(120))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("nesting depth exactly 120 sits at the cap and must register");
+}
+
+#[test]
+fn dependency_index_key_mismatch_is_rejected_at_registration() {
+    // 绕过形态：instructions 全合法（SIGNAL 原子可求值、根含正锚），但
+    // dependencyIndex 用不匹配的键挂该 hook。oracle 的求值范围由
+    // dependencyIndex 反查决定——指令轨与索引错位时事件流回放产出零观察，
+    // observed/mismatches 全 0 仍 ok:true（空洞假 PASS）。镜像合约
+    // HookDependencyKeyMismatch 门，注册期响亮失败。
+    let mut wrong_key = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    wrong_key["dependencyIndex"] = json!({ "0x99": ["flow.pay#TIMEOUT"] });
+    let error = replay_chain_events(
+        vec![plan_registered_event(wrong_key)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("dependencyIndex maps key 0x99 to hook flow.pay#TIMEOUT but the key is not a SIGNAL atom"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("HookDependencyKeyMismatch"),
+        "{error}"
+    );
+
+    // 反向错位：SIGNAL 原子不在索引内——该事实到达永不触发求值，hook
+    // 永久 Init 且零告警，同样必须响亮失败。
+    let mut unindexed = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    unindexed["dependencyIndex"] = json!({});
+    let error = replay_chain_events(
+        vec![plan_registered_event(unindexed)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("references SIGNAL key 0x50 that dependencyIndex does not map back to it"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("HookDependencyKeyMismatch"),
+        "{error}"
+    );
+
+    // dependencyIndex 整体缺失：求值范围反查恒为空，一切信号零观察——
+    // "合约不可能的 plan"（注册必然写入索引），按结构错误拒绝。
+    let mut missing_index = watcher_plan(
+        "flow.pay#TIMEOUT",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    missing_index
+        .as_object_mut()
+        .expect("plan object")
+        .remove("dependencyIndex");
+    let error = replay_chain_events(
+        vec![plan_registered_event(missing_index)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("missing dependencyIndex"),
+        "{error}"
+    );
+
+    // 对照：指令原子键与索引逐点一致的 plan 照常注册（watcher_plan 基底
+    // 即该形态）。
+    replay_chain_events(
+        vec![plan_registered_event(watcher_plan(
+            "flow.pay#TIMEOUT",
+            json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+        ))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("an index that mirrors the SIGNAL atoms exactly must register");
+}
+
+#[test]
+fn silent_order_trigger_is_rejected_at_registration() {
+    // 镜像合约 SilentOrderTriggerHook 门：order-trigger hook 必须携带
+    // emitReady。沉默 trigger 物化阶段但不发 HookReady——该形态会让
+    // oracle 的 expected 观察与链上事件流系统性分叉，注册边界拒绝，
+    // 不留到求值期。
+    let mut silent = single_hook_plan(
+        "flow.start#TRIGGER",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    silent["compiledHooks"][0]["emitReady"] = json!(false);
+    let error = replay_chain_events(
+        vec![plan_registered_event(silent)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("order-trigger hook flow.start#TRIGGER must carry emitReady=true"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("SilentOrderTriggerHook"),
+        "{error}"
+    );
+
+    // 对照：非 trigger 的沉默 watcher（emitReady=false）合法——物化门由
+    // 阶段物化状态承担，不发 HookReady 是其正常形态。
+    let mut silent_watcher = watcher_plan(
+        "flow.pay#WATCH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    silent_watcher["compiledHooks"][0]["emitReady"] = json!(false);
+    replay_chain_events(
+        vec![plan_registered_event(silent_watcher)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a silent non-trigger watcher is a legal shape and must register");
+}
+
+#[test]
+fn duplicate_order_registered_is_absorbed_without_resetting_state() {
+    // 合约对重复注册 revert OrderAlreadyRegistered：订单在链上恰注册一次，
+    // 事件流中的重复 OrderRegistered 是投影重放——吸收并保留已积累状态，
+    // 不得清空重放（清空会把已验证的出生事实吞成空洞）。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    let mut events = vec![
+        plan_registered_event(plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x30",
+            "signalId": "0x40",
+            "signalKey": "0x50",
+            "senderId": "sender",
+            "submittedAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 3,
+            "logIndex": 1,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "flow.start#BIRTH",
+            "stageIdentifier": "flow.start",
+            "hookName": "START"
+        }),
+    ];
+    // 重发的 OrderRegistered（同键同身份）落在事实之后。
+    events.push(json!({
+        "eventName": "OrderRegistered",
+        "blockNumber": 4,
+        "logIndex": 0,
+        "transactionHash": "0x04",
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "orderId": "order-1",
+        "registeredAt": "2026-04-27T00:00:00.000Z"
+    }));
+    let result = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("a re-emitted OrderRegistered must be absorbed");
+    assert_eq!(result["mismatches"].as_array().map(Vec::len), Some(0));
+    let order = &result["state"]["orders"]["0x01::order-1"];
+    assert_eq!(
+        order["signals"].as_object().map(serde_json::Map::len),
+        Some(1),
+        "absorbed re-registration must keep accumulated signals: {order}"
+    );
+    assert_eq!(order["hookStatuses"]["flow.start#BIRTH"]["status"], "ready");
+
+    // 同键不同 zhixu：身份矛盾的事件流，响亮失败。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    let events = vec![
+        plan_registered_event(plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "impostor",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:01.000Z"
+        }),
+    ];
+    let error = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("carries a different zhixuId"),
+        "{error}"
+    );
+}
+
+#[test]
+fn non_integer_block_number_fails_loudly_at_sorting() {
+    // 排序键非整数（字符串/浮点/缺失）不得折 0 静默重排：排序前响亮
+    // 报错，保住事件流的因果序判定。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    for bad_block in [json!("later"), json!(1.5), Value::Null] {
+        let mut event = plan_registered_event(plan.clone());
+        event["blockNumber"] = bad_block;
+        let error = replay_chain_events(
+            vec![event],
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("blockNumber must be an integer")
+                && error
+                    .to_string()
+                    .contains("refuses to fold a non-integer to 0"),
+            "{error}"
+        );
+    }
+    // 缺失字段同口径（value_i64 对缺失报 must be an integer）。
+    let mut event = plan_registered_event(plan);
+    event.as_object_mut().unwrap().remove("blockNumber");
+    let error = replay_chain_events(
+        vec![event],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("blockNumber must be an integer"),
+        "{error}"
+    );
+    // sort=false 时不消费排序键，非整数不在此门（调用方自报因果序）。
+    let plan = single_hook_plan(
+        "flow.start#BIRTH",
+        json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
+    );
+    let mut event = plan_registered_event(plan);
+    event["blockNumber"] = json!("later");
+    replay_chain_events(
+        vec![event],
+        &ReplayOptions {
+            sort: Some(false),
+            strict: Some(true),
+        },
+    )
+    .expect("unsorted replays take the caller-asserted order and skip the sort-key gate");
+}
+
+#[test]
+fn unrenderable_due_at_fails_loudly_instead_of_folding_to_permanent_wait() {
+    // 渲染失败折 None 会把等待行变成无期限永久 wait（poke 资格闸按存在性
+    // 判永不合资格）——确定性毒输入响亮失败。
+    let error = render_due_at(8_210_866_176_000).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to fold to an undated permanent wait"),
+        "{error}"
+    );
+    // epoch 0 是真实期限，照常渲染（既有口径不回退）。
+    assert_eq!(render_due_at(0).unwrap(), "1970-01-01T00:00:00.000Z");
+}
+
+// ------------------------------------------------------------------
+// Rust 编译产物（无指令轨）直连回放的空洞 PASS 断层。
+// ------------------------------------------------------------------
+
+#[test]
+fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
+    // Rust 编译产物（uvp-core hook_plan）不携带 instructions（指令轨归
+    // TS 编译器），dependencyIndex 的键也是 source::task.stage.signal 而
+    // 非链上 signalKey——直连回放时链上信号找不到可求值钩子，旧行为是
+    // observed=0/expected=0/mismatches=0 的空洞 PASS。注册门按合约
+    // InvalidHook 同口径要求每个钩子携带非空 instructions，断层在
+    // PlanRegistered 即响亮失败。
+    let rust_shaped_plan = json!({
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "compiledHooks": [{
+            "hookId": "flow.pay#OBSERVE",
+            "stageIdentifier": "flow.pay",
+            "hookName": "OBSERVE",
+            "orderTriggerKind": "none",
+            "emitReady": true,
+            "dependencies": [{ "source": "buyer", "signalName": "flow.pay.ack" }]
+        }],
+        "dependencyIndex": { "buyer::flow.pay.ack": ["flow.pay#OBSERVE"] }
+    });
+    let events = vec![
+        plan_registered_event(rust_shaped_plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x30",
+            "signalId": "0x40",
+            "signalKey": "0x50",
+            "senderId": "sender",
+            "submittedAt": "2026-04-27T00:00:00.000Z"
+        }),
+    ];
+    let error = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("flow.pay#OBSERVE")
+            && message.contains("missing instructions")
+            && message.contains("cannot be replayed"),
+        "{message}"
+    );
+
+    // 空指令数组同罪（合约 InvalidHook：instructions.length == 0）。
+    let empty_track = json!({
+        "planId": "0x01",
+        "zhixuId": "demo",
+        "compiledHooks": [{
+            "hookId": "flow.pay#OBSERVE",
+            "stageId": "flow.pay",
+            "stageIdentifier": "flow.pay",
+            "hookName": "OBSERVE",
+            "orderTriggerKind": "none",
+            "emitReady": true,
+            "instructions": []
+        }],
+        "dependencyIndex": { "0x50": ["flow.pay#OBSERVE"] }
+    });
+    let error = replay_chain_events(
+        vec![plan_registered_event(empty_track)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("carries no instructions"),
+        "{error}"
+    );
+}
+
+// ------------------------------------------------------------------
+// 适格面注册门镜像（_validateAdmission）：过滤档——无正锚、否决位
+// 位置放开；词表/时长/栈形态保留。
+// ------------------------------------------------------------------
+
+/// 带 admissions 数组的单 watcher plan（适格面注册门探针基底）。
+fn admission_plan(admissions: Value) -> Value {
+    let mut plan = watcher_plan(
+        "flow.pay#OBSERVE",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" }
+        ]),
+    );
+    plan["admissions"] = admissions;
+    plan
+}
+
+fn admission_entry(label: &str, instructions: Value) -> Value {
+    json!({
+        "admissionId": label,
+        "stageIdentifier": "flow.pay",
+        "signalName": label,
+        "instructions": instructions,
+    })
+}
+
+#[test]
+fn admission_decaying_veto_positions_register_under_the_filter_gate() {
+    // 适格一拍求值、不参与调度：钩子档拒绝的三类否决位位置（根/Or 子项/
+    // Delay 操作数内）在适格面注册放行——镜像合约 _validateAdmission 对
+    // _validateHook 的差异面。
+    let admissions = json!([
+        admission_entry(
+            "root_veto",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "NOT" }
+            ])
+        ),
+        admission_entry(
+            "or_veto",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "NOT" },
+                { "op": "OR", "arity": 2 }
+            ])
+        ),
+        admission_entry(
+            "delay_operand_veto",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "NOT" },
+                { "op": "AND", "arity": 2 },
+                { "op": "DELAY", "delaySeconds": 10 }
+            ])
+        ),
+        admission_entry(
+            "no_positive_anchor",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "NOT" }
+            ])
+        )
+    ]);
+    replay_chain_events(
+        vec![plan_registered_event(admission_plan(admissions))],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("filter-gate admission shapes register");
+}
+
+#[test]
+fn admission_not_vocabulary_and_delay_bounds_are_enforced_at_registration() {
+    // 保留闸：NOT 操作数仅裸 SIGNAL 或 DELAY 产出（组合否定拒绝）、
+    // DELAY 时长恒正且 ≤30d——两档同守的结构词表。
+    let composite_not = admission_plan(json!([admission_entry(
+        "cmp",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "AND", "arity": 2 },
+            { "op": "NOT" }
+        ])
+    )]));
+    let error = replay_chain_events(
+        vec![plan_registered_event(composite_not)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("admission cmp applies NOT to a non-bare-SIGNAL operand"),
+        "{error}"
+    );
+
+    for (label, seconds) in [("zero", 0i64), ("over_30d", 2592001)] {
+        let over = admission_plan(json!([admission_entry(
+            label,
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "DELAY", "delaySeconds": seconds }
+            ])
+        )]));
+        let error = replay_chain_events(
+            vec![plan_registered_event(over)],
+            &ReplayOptions {
+                sort: None,
+                strict: Some(true),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("DELAY")
+                && (error.to_string().contains("must be positive")
+                    || error
+                        .to_string()
+                        .contains("exceeds the maximum allowed delay")),
+            "{label}: {error}"
+        );
+    }
+}
+
+#[test]
+fn admission_declared_plans_replay_without_replay_side_filtering() {
+    // 适格求值在链上 _submitSignal 内部 revert，revert 不发事件——回放
+    // 对适格面零过滤，事件流形态与无适格声明的 plan 完全一致（被拒提交
+    // 不出现，出现的都是已落库事实）。
+    let mut plan = watcher_plan(
+        "flow.pay#OBSERVE",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" }
+        ]),
+    );
+    plan["admissions"] = json!([admission_entry(
+        "cmp",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x51" },
+            { "op": "DELAY", "delaySeconds": 1209600 },
+            { "op": "NOT" }
+        ])
+    )]);
+    let events = vec![
+        plan_registered_event(plan),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0xd0",
+            "signalId": "0xe0",
+            "signalKey": "0x50",
+            "senderId": "executor",
+            "submittedAt": "2026-04-27T00:00:01.000Z"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 4,
+            "logIndex": 0,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "flow.pay#OBSERVE",
+            "stageIdentifier": "flow.pay",
+            "hookName": "OBSERVE"
+        }),
+    ];
+    let result = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("admission-declared plans replay like ordinary plans");
+    let observed = result["observed"].as_array().expect("observed array");
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|item| item["eventName"] == "HookReady")
+            .count(),
+        1,
+        "the single settled fact still drives the hook: {result}"
+    );
+}
+
+// 注册门镜像补全：hookId 唯一性（合约 HookAlreadyRegistered）——重复
+// id 的投影片按"首个匹配"求值会让第二份成为静默死钩子，必须响亮失败。
+#[test]
+fn duplicate_hook_id_in_plan_is_a_structural_error() {
+    let events = vec![
+        json!({
+            "eventName": "PlanRegistered",
+            "blockNumber": 1,
+            "logIndex": 0,
+            "transactionHash": "0x01",
+            "plan": {
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "compiledHooks": [
+                    {
+                        "hookId": "match.exchange#PAIR",
+                        "stageId": "match.exchange",
+                        "stageIdentifier": "match.exchange",
+                        "hookName": "PAIR",
+                        "orderTriggerKind": "mint",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    },
+                    {
+                        "hookId": "match.exchange#PAIR",
+                        "stageId": "match.exchange",
+                        "stageIdentifier": "match.exchange",
+                        "hookName": "PAIR",
+                        "orderTriggerKind": "none",
+                        "emitReady": false,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }
+                ],
+                "dependencyIndex": { "0x50": ["match.exchange#PAIR"] }
+            }
+        }),
+    ];
+    let error = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("duplicate hookId"),
+        "{error}"
+    );
+}
+
+// 矛盾流检测：同键订单的第二次 OrderTriggered 携带不同事务哈希时响亮
+// 失败（合约一单恰发一次；静默覆盖会改写出生通道判别基準）。
+#[test]
+fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
+    let base_events = |trigger_tx: &str| {
+        vec![
+            json!({
+                "eventName": "PlanRegistered",
+                "blockNumber": 1,
+                "logIndex": 0,
+                "transactionHash": "0x01",
+                "plan": {
+                    "planId": "0x01",
+                    "zhixuId": "demo",
+                    "compiledHooks": [{
+                        "hookId": "linked.entry#BIRTH",
+                        "stageId": "linked.entry",
+                        "stageIdentifier": "linked.entry",
+                        "hookName": "BIRTH",
+                        "orderTriggerKind": "mint",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }],
+                    "dependencyIndex": { "0x50": ["linked.entry#BIRTH"] }
+                }
+            }),
+            json!({
+                "eventName": "OrderRegistered",
+                "blockNumber": 2,
+                "logIndex": 0,
+                "transactionHash": "0x02",
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "orderId": "order-7",
+                "registeredAt": "2026-04-27T00:00:00.000Z"
+            }),
+            json!({
+                "eventName": "OrderTriggered",
+                "blockNumber": 3,
+                "logIndex": 0,
+                "transactionHash": trigger_tx,
+                "planId": "0x01",
+                "orderId": "order-7"
+            }),
+        ]
+    };
+    // 同哈希重放：同一事件被投递两次，吸收为 no-op。
+    replay_chain_events(
+        {
+            let mut events = base_events("0x03");
+            let replayed = events[2].clone();
+            events.push(replayed);
+            events
+        },
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .expect("same-tx duplicate OrderTriggered must be absorbed");
+    // 异哈希矛盾流：响亮失败。
+    let error = replay_chain_events(
+        {
+            let mut events = base_events("0x03");
+            let mut conflicting = events[2].clone();
+            conflicting["transactionHash"] = json!("0x09");
+            conflicting["blockNumber"] = json!(4);
+            conflicting["logIndex"] = json!(0);
+            events.push(conflicting);
+            events
+        },
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate OrderTriggered"),
+        "{error}"
+    );
 }

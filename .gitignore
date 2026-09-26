@@ -66,3 +66,6 @@ claude*.md
 .claude/
 .codex/
 .cursor/
+
+# Local AI agent instruction files (never distribute instructions via git)
+AGENTS.md

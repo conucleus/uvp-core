@@ -27,7 +27,9 @@
                 "SETTLE": "buyer::settle.pay.done"
               },
               "sendSignals": [
-                "done"
+                {
+                  "name": "done"
+                }
               ],
               "executor": {
                 "supplierType": "organization",

@@ -83,6 +83,18 @@ pub fn replay_json(input: &str) -> String {
 
 pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> Result<Value> {
     if options.sort.unwrap_or(true) {
+        // blockNumber/logIndex 是排序键：非整数（或缺失）折 0 会把事件流
+        // 静默重排成错误因果序——排序前响亮校验，不做默认值兜底。
+        for event in &events {
+            for key in ["blockNumber", "logIndex"] {
+                value_i64(event, key).map_err(|err| {
+                    ReplayError::Message(format!(
+                        "chain oracle event {} (sorting refuses to fold a non-integer to 0): {err}",
+                        value_str(event, "eventName").unwrap_or("<unknown>")
+                    ))
+                })?;
+            }
+        }
         events.sort_by(|left, right| {
             event_i64(left, "blockNumber")
                 .cmp(&event_i64(right, "blockNumber"))
@@ -110,17 +122,33 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                 let plan_id = value_str(event, "planId")?.to_string();
                 let zhixu_id = value_str(event, "zhixuId")?.to_string();
                 let order_id = value_str(event, "orderId")?.to_string();
-                state.orders.insert(
-                    order_key(&plan_id, &order_id),
-                    OracleOrderState {
-                        plan_id,
-                        zhixu_id,
-                        order_id,
-                        signals: BTreeMap::new(),
-                        hook_statuses: BTreeMap::new(),
-                        materialized_stages: BTreeMap::new(),
-                    },
-                );
+                let key = order_key(&plan_id, &order_id);
+                // 合约对重复注册 revert OrderAlreadyRegistered——订单在链上
+                // 恰注册一次，事件流中的重复 OrderRegistered 只能是投影
+                // 重放/重发。吸收（保留已积累的信号与钩子状态），不按
+                // "重新注册"清空状态：第二次注册从未在链上发生，重置会把
+                // 已验证的事实吞成空洞。同键不同 zhixu 的身份矛盾是损坏
+                // 的事件流，响亮失败。
+                if let Some(existing) = state.orders.get(&key) {
+                    if existing.zhixu_id != zhixu_id {
+                        return Err(ReplayError::Message(format!(
+                            "duplicate OrderRegistered for {key} carries a different zhixuId ({} != {}): a contradictory event stream",
+                            existing.zhixu_id, zhixu_id
+                        )));
+                    }
+                } else {
+                    state.orders.insert(
+                        key,
+                        OracleOrderState {
+                            plan_id,
+                            zhixu_id,
+                            order_id,
+                            signals: BTreeMap::new(),
+                            hook_statuses: BTreeMap::new(),
+                            materialized_stages: BTreeMap::new(),
+                        },
+                    );
+                }
             }
             "SignalSubmitted" => {
                 observed.extend(record_signal_and_evaluate(&mut state, event)?);
@@ -156,13 +184,24 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
             }
             // OrderTriggered 被记录为出生事务标记（outside 出生事实与其同
             // 事务；order-link 出生不 _recordSignal，见 record_signal_and_evaluate
-            // 的出生通道判别）。
+            // 的出生通道判别）。合约一单恰发一次 OrderTriggered：同键再次
+            // 到达且事务哈希不同是损坏的事件流——静默覆盖会改写出生通道
+            // 判别基準，响亮失败（与 OrderRegistered 的矛盾流检测同形）。
             "OrderTriggered" => {
                 let order_key =
                     order_key(value_str(event, "planId")?, value_str(event, "orderId")?);
-                state
-                    .order_trigger_tx
-                    .insert(order_key, value_str(event, "transactionHash")?.to_string());
+                let trigger_tx = value_str(event, "transactionHash")?.to_string();
+                match state.order_trigger_tx.get(&order_key) {
+                    Some(existing) if *existing != trigger_tx => {
+                        return Err(ReplayError::Message(format!(
+                            "duplicate OrderTriggered for {order_key} carries a different transactionHash ({existing} != {trigger_tx}): a contradictory event stream"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        state.order_trigger_tx.insert(order_key, trigger_tx);
+                    }
+                }
             }
             "OrderMaterialized" | "OrderLinked" => {}
             other => {
@@ -212,13 +251,24 @@ fn seconds_from_iso(value: &str) -> Result<i64> {
 }
 
 fn iso_from_seconds(value: i64) -> Option<String> {
-    // 0 不再是"无 due"哨兵（区分已移至 EvalValue::due_at 的显式 Option）：
+    // "无 due"由 EvalValue::due_at 的显式 Option 区分，epoch 0 不是哨兵：
     // epoch 0 的等待期限照常渲染，poke 资格闸按存在性判断。
     Some(
         Utc.timestamp_opt(value, 0)
             .single()?
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     )
+}
+
+/// dueAt 渲染失败要响亮失败：把不可渲染的期限折成 None 会让等待行变成
+/// 无期限的永久 wait（poke 资格闸按存在性判永不合资格）——静默吞掉一个
+/// 确定性的毒输入，不如报错让事件流的问题暴露。
+fn render_due_at(seconds: i64) -> Result<String> {
+    iso_from_seconds(seconds).ok_or_else(|| {
+        ReplayError::Message(format!(
+            "wait dueAt {seconds} cannot be rendered as a timestamp (delay horizon out of the renderable range): refusing to fold to an undated permanent wait"
+        ))
+    })
 }
 
 fn field_eq(left: &Value, right: &Value, key: &str) -> bool {

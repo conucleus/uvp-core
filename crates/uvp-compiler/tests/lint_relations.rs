@@ -271,30 +271,33 @@ fn lint_zhixu_does_not_change_compile_artifacts() {
     // 编译入口要求 receiveSignals 引用真实存在的 task.stage：信号名用
     // 本定义自己的 task 段（flow.main.*）。
     let definition: ZhixuDefinition = serde_json::from_value(json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "lint_relations" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "core" },
-            "taskPatterns": [{
-                "name": "flow",
-                "stages": [{
-                    "name": "main",
-                    "source": "buyer",
-                    "sendSignals": ["a", "b"],
-                    "receiveSignals": {
-                        "A_READY": "buyer::flow.main.a & flow.main.b",
-                        "ALSO_READY": "buyer::flow.main.a & flow.main.b"
-                    },
-                    "executor": {
-                        "supplierType": "organization",
-                        "supplierID": "org-lint"
-                    }
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "lint_relations" },
+            "spec": {
+                "platform": { "type": "cloud" },
+                "nucleation": { "id": "core" },
+                "taskPatterns": [{
+                    "name": "flow",
+                    "stages": [{
+                        "name": "main",
+                        "source": "buyer",
+                        "sendSignals": [
+    { "name": "a" },
+    { "name": "b" }
+    ],
+                        "receiveSignals": {
+                            "A_READY": "buyer::flow.main.a & flow.main.b",
+                            "ALSO_READY": "buyer::flow.main.a & flow.main.b"
+                        },
+                        "executor": {
+                            "supplierType": "organization",
+                            "supplierID": "org-lint"
+                        }
+                    }]
                 }]
-            }]
-        }
-    }))
+            }
+        }))
     .expect("test definition should deserialize");
     // 该定义带 lint 诊断（L020）但仍应正常通过 parse-only 编译——
     // "合法 DSL + lint error 仍然可以完成 parse / compile"（PRD §4.1）。

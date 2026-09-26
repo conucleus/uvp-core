@@ -10,6 +10,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 uvp-compiler.workspace = true
+uvp-ir.workspace = true
 uvp-hook-dsl.workspace = true
 uvp-replay.workspace = true
 serde_json.workspace = true
+sha3 = "0.12.0"

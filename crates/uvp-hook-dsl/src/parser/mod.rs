@@ -6,13 +6,15 @@ use serde_json::Value;
 
 use crate::ast::{
     cloud_ast_for, compatibility_for, hook_mode, hook_to_value, is_plain_identifier,
-    is_strict_signal_ref, normalize_condition, runtime_condition, validate_hook,
-    validate_subscription_position, Compatibility, Expr, HookExpr, HookMode, NormalizeStyle,
-    SubscriptionTarget,
+    is_strict_signal_ref, normalize_condition, runtime_condition, validate_filter_hook,
+    validate_hook, validate_subscription_position, Compatibility, Expr, HookExpr, HookMode,
+    NormalizeStyle, SubscriptionTarget,
 };
 use crate::dependency::{extract_dependencies, Dependency};
 use crate::lint::Span;
-use crate::{HookError, Profile, Result, CORE_VERSION, RETIRED_KEYWORDS_HINT, SEMANTIC_VERSION};
+use crate::{
+    Gate, HookError, Profile, Result, CORE_VERSION, RETIRED_KEYWORDS_HINT, SEMANTIC_VERSION,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +44,10 @@ pub struct ParseHookOutput {
 pub struct ParseHookRequest {
     #[serde(default)]
     pub profile: Profile,
+    /// 校验档（默认 hook）：既有调用方不携带该字段时语义不变（与
+    /// profile 字段同先例）。gate=filter 走过滤档校验（发射适格面）。
+    #[serde(default)]
+    pub gate: Gate,
     #[serde(default)]
     pub hook_name: String,
     pub hook: String,
@@ -51,10 +57,13 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     let profile = req.profile;
     let hook_name = req.hook_name;
     validate_hook_name(&hook_name)?;
-    // 解析行为与 profile 无关（profile 只影响归一化/兼容性输出），
-    // 因此 parse_hook_expr 不接收 profile。
+    // 解析行为与 profile/gate 无关（二者只影响校验与归一化输出），
+    // 因此 parse_hook_expr 不接收 profile/gate。
     let (hook, _spans) = parse_hook_expr_with_spans(&req.hook)?;
-    validate_hook(&hook.condition)?;
+    match req.gate {
+        Gate::Hook => validate_hook(&hook.condition)?,
+        Gate::Filter => validate_filter_hook(&hook.condition)?,
+    }
 
     let raw_condition = req
         .hook
@@ -152,8 +161,7 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
     }
     if !source.is_empty() {
         // 标头 source 类是路由键：解析期钉死长度与字符集（编译期 ≤36 上限
-        // 严于落库列宽 source_zhixu_id VARCHAR(64)，对齐 Go 镜像
-        // zhixu_schema.go 的 ≤36 与 plain-identifier 规则）。订阅形态
+        // 严于落库列宽 source_zhixu_id VARCHAR(64)）。订阅形态
         // （::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
         // source 在解析 ANCHOR 目标时按同值（≤36 + plain identifier）校验。
         if source.len() > 36 {
@@ -192,7 +200,7 @@ fn starts_cross_source(value: &str) -> bool {
     // 不受支持的关键字仍放行进解析器，以便命中精确的 unsupported 报错
     // 而非笼统的空标头报错。匹配必须落到完整 token 边界：关键字后随
     // 标识符字符（如 ::ANCHORX 伪前缀）不是关键字形态，
-    // 不得绕过空标头门禁。扇入类旧标头不在词表内：
+    // 不得绕过空标头门禁。扇入类标头不在词表内：
     // 其字面按通用语法错误（空标头门禁）拒绝，没有退役清单条目。
     ["ANCHOR", "OUTSIDE", "OUTSOURCE"].iter().any(|keyword| {
         let Some(rest) = value.strip_prefix(keyword) else {
@@ -361,7 +369,7 @@ impl<'a> Parser<'a> {
         match ident.as_str() {
             "ANCHOR" => self.parse_subscription(ident_start),
             "OUTSIDE" | "OUTSOURCE" => Err(HookError::Message(format!(
-                "{ident}@ has been retired: {RETIRED_KEYWORDS_HINT}"
+                "{ident}@ is not supported: {RETIRED_KEYWORDS_HINT}"
             ))),
             _ => {
                 if !is_strict_signal_ref(&ident) {
@@ -382,7 +390,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         if self.peek() == '@' {
             return Err(HookError::Message(format!(
-                "ANCHOR@ header form has been retired: {RETIRED_KEYWORDS_HINT}"
+                "ANCHOR@ header form is not supported: {RETIRED_KEYWORDS_HINT}"
             )));
         }
         if !self.consume("(") {

@@ -6,9 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::facts::{find_hook, order_key, HookRuntime, OracleOrderState, OracleState};
 use crate::snapshot::{base_hook_observation, chain_event_to_expected_observation, same_due_at};
-use crate::{
-    chain_event_id, iso_from_seconds, seconds_from_iso, value_i64, value_str, ReplayError, Result,
-};
+use crate::{chain_event_id, seconds_from_iso, value_i64, value_str, ReplayError, Result};
 
 /// 链上可观察事件（HookReady/HookStatusChanged）的吸收口。真实事件流与
 /// oracle 模型存在两类系统性分叉，规则如下（与 crate README 同步）：
@@ -17,7 +15,7 @@ use crate::{
 /// - `HookStatusChanged(status=ready)`：合约对 →Ready 先 emit 状态变更再
 ///   emit HookReady；oracle 只以 HookReady 观察就绪，ready 状态变更被裁剪
 ///   出 expected，不参与比对。
-/// - `HookStatusChanged(status=init)`：v0.10 合约不产出（Init 是隐含初值，
+/// - `HookStatusChanged(status=init)`：合约不产出（Init 是隐含初值，
 ///   无观察语义）；适配层抬升的遗留形状被裁剪，原生输入契约据此免裁剪
 ///   直喂。
 /// - 语义重复的 `HookStatusChanged`（同 hook、同 status、同 dueAt 时刻）：
@@ -296,8 +294,8 @@ pub(crate) fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Res
     evaluate_hook(order, &hook, poked_at)
 }
 
-/// hook-plan v2 把单一 `isTrigger` 拆成 `orderTriggerKind`(mint|dock|none)
-/// 加 `emitReady`。oracle 只认 v2 字段，缺失即结构性错误
+/// hook-plan v2 的出生标记字段是 `orderTriggerKind`(mint|dock|none) 加
+/// `emitReady`。oracle 只认 v2 字段，缺失即结构性错误
 /// （fail-closed，不做隐式回退）。
 pub(crate) fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
     Ok(matches!(order_trigger_kind(hook)?, "mint" | "dock"))
@@ -386,7 +384,7 @@ pub(crate) fn evaluate_hook(
         next.status = "cxl".to_string();
     } else if result.wait {
         next.status = "wait".to_string();
-        next.due_at = result.due_at.and_then(iso_from_seconds);
+        next.due_at = result.due_at.map(crate::render_due_at).transpose()?;
     } else if result.value {
         next.status = "ready".to_string();
     }
@@ -548,7 +546,22 @@ pub(crate) fn false_value() -> EvalValue {
 }
 
 pub(crate) fn not_value(value: EvalValue) -> EvalValue {
-    if value.value || value.wait {
+    // 衰减否决位（合取直接子项上的 ~(A+duration)，注册门位置闸保证
+    // 唯一合法形态）三分支取补，与合约 _notValue / 核心求值器 Expr::Not
+    // 同形：内层已熟（Ready）→ 否决成立，Impossible；内层在案未熟
+    // （Wait）→ 本项此刻 Ready，due_at 承载内层到期时刻（有效期——
+    // 纯输出元数据，HookRuntime 只为 Wait 渲染 due，调度不得依赖它）；
+    // 其余（Impossible/NeedsMore，含缺席分支）→ 无限期 Ready。
+    if value.wait {
+        return EvalValue {
+            value: true,
+            wait: false,
+            cancel: false,
+            due_at: value.due_at,
+            anchor_at: None,
+        };
+    }
+    if value.value {
         return EvalValue {
             value: false,
             wait: false,
@@ -609,7 +622,8 @@ pub(crate) fn delay_value(value: EvalValue, delay_seconds: i64, now: &str) -> Re
         cancel: false,
         due_at: None,
         // 锚点推进（链式延时语义）：延时到期时刻本身成为新的锚点，
-        // 使 `(A+5s)+10s` 的外层延时从 A+5s 起算，与生产求值器一致。
+        // 使 `(A+5s)+10s` 的外层延时从 A+5s 起算，对齐链上求值器
+        // （uvp-hook-dsl 两档拒绝嵌套延时，链式锚点语义的权威在链上）。
         anchor_at: Some(due_at),
     })
 }
@@ -629,7 +643,10 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: true,
             wait: false,
             cancel: false,
-            due_at: None,
+            // 衰减有效期取成员最紧者（None = 无限，不放宽有限期）：任一
+            // 成员到期即整体不再成立——与合约 _andValue 的
+            // _minDue(left.dueAt, right.dueAt)（0=无限）同形。
+            due_at: min_due(left.due_at, right.due_at),
             anchor_at: max_anchor(left.anchor_at, right.anchor_at),
         };
     }
@@ -638,7 +655,13 @@ fn and_value(left: EvalValue, right: EvalValue) -> EvalValue {
             value: false,
             wait: true,
             cancel: false,
-            due_at: max_due(left.due_at, right.due_at),
+            // 等待期限只由等待成员贡献：就绪成员的 due_at 是衰减有效期而
+            // 非等待期限，不得混入 max（合约 _andValue 以
+            // _maxDue(left.wait ? left.dueAt : 0, ...) 同口径隔离）。
+            due_at: max_due(
+                left.wait.then_some(left.due_at).flatten(),
+                right.wait.then_some(right.due_at).flatten(),
+            ),
             anchor_at: max_anchor(left.anchor_at, right.anchor_at),
         };
     }
@@ -652,19 +675,33 @@ pub(crate) fn or_value(left: EvalValue, right: EvalValue) -> EvalValue {
     // 不得获胜——就绪胜者保留自己的计时。与核心求值器（uvp-hook-dsl
     // Expr::Or）及合约 _orValue 对齐。
     if left.value || right.value {
-        let anchor = if left.value && right.value {
-            min_anchor(left.anchor_at, right.anchor_at)
-        } else if left.value {
-            left.anchor_at
+        let left_wins = if left.value && right.value {
+            // 就绪双分支按"最早成熟时刻"竞争，无锚就绪（如 Not 产出）不
+            // 参与竞争、平局保持左操作数（incumbent）——与核心求值器
+            // branch_maturity 的严格小于替换同形。
+            match (left.anchor_at, right.anchor_at) {
+                (Some(left_anchor), Some(right_anchor)) => left_anchor <= right_anchor,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => true,
+            }
         } else {
-            right.anchor_at
+            left.value
         };
+        // 获胜分支原样上浮——包括其衰减有效期 due_at：衰减只收紧获胜
+        // 分支自身的有效期，不跨分支取 min（合约 _orValue 的 leftWins
+        // 载荷选择同形；合法 plan 里否决位不进 Or，此为手工 plan 的
+        // 载荷保真）。
         return EvalValue {
             value: true,
             wait: false,
             cancel: false,
-            due_at: None,
-            anchor_at: anchor,
+            due_at: if left_wins { left.due_at } else { right.due_at },
+            anchor_at: if left_wins {
+                left.anchor_at
+            } else {
+                right.anchor_at
+            },
         };
     }
     if left.wait || right.wait {
@@ -708,8 +745,7 @@ fn min_anchor(left: Option<i64>, right: Option<i64>) -> Option<i64> {
 
 /// 可用 due 取较晚者；无 due 侧（就绪/取消归约的产物）不参与（AND 等待
 /// 的归约口径，与核心求值器 Expr::And 的 waits.max() 同形：waits 只收集
-/// Some 的 ready_at）。替代旧 0 哨兵的裸 max——那会把"无 due"折成
-/// epoch 0 参与比较。
+/// Some 的 ready_at，"无 due"不得折成 epoch 0 参与比较）。
 fn max_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.max(right)),
@@ -719,7 +755,7 @@ fn max_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
 }
 
 /// 可用 due 取较早者；无 due 侧让位（OR 等待的归约口径，与核心求值器
-/// Expr::Or 的 waits.min() 同形）。替代 min_non_zero 的哨兵特判。
+/// Expr::Or 的 waits.min() 同形：无 due 侧不做非零哨兵特判）。
 fn min_due(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),

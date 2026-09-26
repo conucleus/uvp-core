@@ -4,6 +4,7 @@ use serde_json::json;
 fn parse_value(raw: &str, profile: Profile, hook_name: &str) -> Value {
     let out = parse_hook(ParseHookRequest {
         profile,
+        gate: Gate::Hook,
         hook_name: hook_name.to_string(),
         hook: raw.to_string(),
     })
@@ -20,12 +21,14 @@ fn evaluate_compiled(
 ) -> EvalCompiledHookOutput {
     let parsed = parse_hook(ParseHookRequest {
         profile,
+        gate: Gate::Hook,
         hook_name: hook_name.to_string(),
         hook: hook.to_string(),
     })
     .unwrap();
     eval_compiled_hook(EvalCompiledHookRequest {
         profile,
+        gate: Gate::Hook,
         ast: parsed.cloud_ast,
         signals,
         now: now.to_string(),
@@ -62,6 +65,7 @@ fn rejects_deeply_nested_expressions_instead_of_overflowing() {
     let deep = format!("buyer::{}a{}", "(".repeat(50_000), ")".repeat(50_000));
     let err = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: deep,
     })
@@ -83,6 +87,7 @@ fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
     );
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
         hook: legal,
     })
@@ -110,6 +115,7 @@ fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
     );
     let err = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
         hook: illegal,
     })
@@ -127,6 +133,7 @@ fn unsupported_cross_source_keywords_fail_fast() {
     }
     let err = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: expression,
     })
@@ -150,6 +157,7 @@ fn rejects_deeply_nested_cloud_ast() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         ast,
         signals: vec![],
         now: "2026-04-27T00:00:00.000Z".to_string(),
@@ -168,6 +176,7 @@ fn rejects_pure_negative_compiled_root() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         ast,
         signals: vec![],
         now: "2026-04-27T00:00:00.000Z".to_string(),
@@ -182,12 +191,14 @@ fn rejects_pure_negative_compiled_root() {
 fn repeated_signals_keep_first_received_fact() {
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "TRIGGER".to_string(),
         hook: "buyer::(task.pay.cmp +5s)".to_string(),
     })
     .unwrap();
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         ast: parsed.cloud_ast,
         signals: vec![
             SignalFact {
@@ -230,6 +241,7 @@ fn evm_strict_handles_delay_and_negative_guard() {
 fn cloud_ast_preserves_delay_operand_and_source() {
     let out = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
         hook: "buyer::task.receive.cmp +14d".to_string(),
     })
@@ -254,6 +266,7 @@ fn cloud_ast_preserves_delay_operand_and_source() {
 fn delay_duration_above_30d_cap_is_rejected_at_parse_time() {
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
         hook: "buyer::task.receive.cmp +31d".to_string(),
     })
@@ -262,6 +275,7 @@ fn delay_duration_above_30d_cap_is_rejected_at_parse_time() {
 
     let boundary = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
         hook: "buyer::task.receive.cmp +2592000s".to_string(),
     });
@@ -275,6 +289,7 @@ fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
     // 非对象形态同样响亮失败。
     let mut ast = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "SUB".to_string(),
         hook: "::ANCHOR(@seller::trade.listing.cmp)".to_string(),
     })
@@ -286,6 +301,7 @@ fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
         .insert("singal".to_string(), json!("trade.listing.cmp"));
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: ast.clone(),
         signals: vec![],
         now: "2026-04-27T00:00:00.000Z".to_string(),
@@ -300,6 +316,7 @@ fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
     ast["subscriptionTarget"] = json!(["seller", "trade.listing.cmp"]);
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast,
         signals: vec![],
         now: "2026-04-27T00:00:00.000Z".to_string(),
@@ -331,6 +348,7 @@ fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
 
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: poisoned,
         signals: vec![SignalFact {
             source: "buyer".to_string(),
@@ -347,6 +365,7 @@ fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
 fn compiled_cloud_ast_evaluates_without_reparsing_source_expression() {
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
         hook: "buyer::task.receive.cmp +14d".to_string(),
     })
@@ -354,6 +373,7 @@ fn compiled_cloud_ast_evaluates_without_reparsing_source_expression() {
 
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: parsed.cloud_ast,
         signals: vec![SignalFact {
             source: "buyer".to_string(),
@@ -372,6 +392,7 @@ fn compiled_cloud_ast_evaluates_without_reparsing_source_expression() {
 fn compiled_hook_evaluation_requires_schema_version() {
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: json!({
             "source": "buyer",
             "root": {
@@ -391,6 +412,7 @@ fn compiled_hook_evaluation_requires_schema_version() {
 fn compiled_hook_evaluation_rejects_unknown_node_fields() {
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": "buyer",
@@ -426,6 +448,7 @@ fn cloud_compat_requires_full_signal_names() {
 
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "EXECUTE".to_string(),
         hook: "buyer::pay.cmp".to_string(),
     })
@@ -434,6 +457,7 @@ fn cloud_compat_requires_full_signal_names() {
 
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "TRIGGER".to_string(),
         hook: "::OUTSIDE".to_string(),
     })
@@ -450,6 +474,7 @@ fn rejects_subscription_inside_composite_condition() {
     ] {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook: hook.to_string(),
         })
@@ -460,12 +485,13 @@ fn rejects_subscription_inside_composite_condition() {
         );
     }
 
-    // 扇入类旧标头没有退役清单条目：字面按通用空标头语法错误拒绝，
+    // 扇入类标头没有退役清单条目：字面按通用空标头语法错误拒绝，
     // 报错不点名该词。
     let retired_word: String = ["M", "E", "R", "G", "E"].concat();
     let hook = format!("::{retired_word} & task.main.cmp");
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook,
     })
@@ -481,6 +507,7 @@ fn rejects_subscription_inside_composite_condition() {
 
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: "::ANCHOR(@seller::task.main.cmp) & task.other.cmp".to_string(),
     })
@@ -493,6 +520,7 @@ fn rejects_subscription_inside_composite_condition() {
 
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: "buyer::ANCHOR(@seller::task.main.cmp)".to_string(),
     })
@@ -513,6 +541,7 @@ fn parser_rejects_unbounded_nesting_and_short_subscription_targets() {
     ] {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook: poisoned,
         })
@@ -525,6 +554,7 @@ fn parser_rejects_unbounded_nesting_and_short_subscription_targets() {
 
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: "::ANCHOR(@seller::listing.cmp)".to_string(),
     })
@@ -544,6 +574,7 @@ fn outsource_forms_are_rejected_with_hint() {
     ] {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook: hook.to_string(),
         })
@@ -557,10 +588,10 @@ fn outsource_forms_are_rejected_with_hint() {
 
 #[test]
 fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
-    // 伪前缀形态（如 ::ANCHORX / ::OUTSIDER，及已移除的旧扇入标头加
-    // 伪后缀）不是退役关键字：空标头门禁按完整 token 边界匹配，直接
-    // 以空标头错误拒绝，而不是借 starts_with 前缀命中放行进解析器。
-    // 旧扇入词按字节拼装，保持全文检索零命中口径。
+    // 伪前缀形态（如 ::ANCHORX / ::OUTSIDER，及扇入标头加伪后缀）
+    // 不是退役关键字：空标头门禁按完整 token 边界匹配，直接以空标头
+    // 错误拒绝，而不是借 starts_with 前缀命中放行进解析器。
+    // 扇入词按字节拼装，保持全文检索零命中口径。
     let retired_word: String = ["M", "E", "R", "G", "E"].concat();
     for hook in [
         format!("::{retired_word}X@(seller::task.main.cmp)"),
@@ -569,6 +600,7 @@ fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
     ] {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook,
         })
@@ -581,6 +613,7 @@ fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
     // 真关键字仍然放行到解析器，命中精确的 retired 报错。
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: "::OUTSIDE @seller::task.main.cmp".to_string(),
     })
@@ -605,6 +638,7 @@ fn signed_raw_duration_is_rejected_at_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: poisoned,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -622,6 +656,7 @@ fn signed_raw_duration_is_rejected_at_decode() {
 fn eval_rejects_signal_facts_with_invalid_identity() {
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "TRIGGER".to_string(),
         hook: "buyer::task.main.cmp".to_string(),
     })
@@ -660,6 +695,7 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
     ] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast: parsed.cloud_ast.clone(),
             signals: vec![fact],
             now: "2026-04-27T00:00:00Z".to_string(),
@@ -673,6 +709,7 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
     // 边界值（36/100 字节、三段式）照常放行。
     eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: parsed.cloud_ast.clone(),
         signals: vec![SignalFact {
             source: "s".repeat(36),
@@ -686,6 +723,7 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
     // hook（与语义语料的负例口径一致）。
     let unattributed = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: parsed.cloud_ast,
         signals: vec![SignalFact {
             source: String::new(),
@@ -711,6 +749,7 @@ fn normal_ast_with_subscription_target_is_rejected_at_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: poisoned,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -758,6 +797,7 @@ fn subscription_entry_parses_target_and_dependencies() {
     // 按接收方锚定状态路由（按单经对接记录，无锚按类扇入）。
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: cloud_ast,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -787,6 +827,7 @@ fn subscription_entry_rejects_degenerate_shapes() {
     ] {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook: hook.to_string(),
         })
@@ -802,6 +843,7 @@ fn unsupported_hook_modes_are_rejected_at_decode() {
     for mode in ["outside_spawn", "anchor", "bundle"] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast: json!({
                 "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
                 "source": "",
@@ -830,6 +872,7 @@ fn subscription_ast_without_target_is_rejected_at_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: cloud_ast,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -854,6 +897,7 @@ fn mint_and_route_validation_matches_go_decode() {
         ast[field] = json!(value);
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast,
             signals: vec![],
             now: "2026-04-27T00:00:00Z".to_string(),
@@ -877,6 +921,7 @@ fn mint_and_route_validation_matches_go_decode() {
     });
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: legal,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -894,6 +939,7 @@ fn mint_and_route_validation_matches_go_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: poisoned_mint,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -914,6 +960,7 @@ fn mint_and_route_validation_matches_go_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: poisoned_route,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -935,6 +982,7 @@ fn mint_and_route_validation_matches_go_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: poisoned_type,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -957,6 +1005,7 @@ fn subscription_ast_with_nonempty_source_is_rejected_at_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: cloud_ast,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -979,6 +1028,7 @@ fn subscription_ast_target_root_mismatch_is_rejected_at_decode() {
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: cloud_ast,
         signals: vec![],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -1002,6 +1052,7 @@ fn rejects_invalid_strict_signal_names() {
         ] {
             let err = parse_hook(ParseHookRequest {
                 profile,
+                gate: Gate::Hook,
                 hook_name: "HOOK".to_string(),
                 hook: hook.to_string(),
             })
@@ -1022,6 +1073,7 @@ fn rejects_hook_names_containing_whitespace() {
     for hook_name in ["BAD KEY", " LEAD", "TRAIL ", "TAB\tKEY"] {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::EvmStrict,
+            gate: Gate::Hook,
             hook_name: hook_name.to_string(),
             hook: "buyer::task.main.cmp".to_string(),
         })
@@ -1061,6 +1113,7 @@ fn cloud_normalization_emits_single_parentheses_for_grouped_delay_operands() {
     for (hook, expected) in cases {
         let out = parse_hook(ParseHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             hook_name: "TIMEOUT".to_string(),
             hook: hook.to_string(),
         })
@@ -1073,6 +1126,7 @@ fn cloud_normalization_emits_single_parentheses_for_grouped_delay_operands() {
 fn rejects_duration_overflow() {
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
         hook: "buyer::task.receive.cmp +9223372036854775807d".to_string(),
     })
@@ -1084,12 +1138,14 @@ fn rejects_duration_overflow() {
 fn or_branches_resolve_by_earliest_received_signal() {
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "TRIGGER".to_string(),
         hook: "buyer::(task.pay.cmp | task.ship.cmp) +5s".to_string(),
     })
     .unwrap();
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         ast: parsed.cloud_ast,
         signals: vec![
             SignalFact {
@@ -1114,12 +1170,14 @@ fn or_branches_resolve_by_earliest_received_signal() {
 fn or_anchor_uses_arrival_not_expression_order_without_delay() {
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "TRIGGER".to_string(),
         hook: "buyer::(task.pay.cmp | task.ship.cmp)".to_string(),
     })
     .unwrap();
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         ast: parsed.cloud_ast,
         signals: vec![
             SignalFact {
@@ -1148,6 +1206,7 @@ fn or_composite_delay_anchors_on_earliest_maturing_branch() {
     // or_value 同口径）。
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "TRIGGER".to_string(),
         hook: "buyer::((task.a.cmp & task.b.cmp) | task.c.cmp) +10s".to_string(),
     })
@@ -1155,6 +1214,7 @@ fn or_composite_delay_anchors_on_earliest_maturing_branch() {
     let cloud_ast = parsed.cloud_ast.clone();
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         ast: cloud_ast.clone(),
         signals: vec![
             SignalFact {
@@ -1184,6 +1244,7 @@ fn or_composite_delay_anchors_on_earliest_maturing_branch() {
     // 同一事实在 00:00:45 观察必须仍在等待（readyAt 00:00:50 未到）。
     let waiting = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         ast: cloud_ast,
         signals: vec![
             SignalFact {
@@ -1233,8 +1294,7 @@ fn duration_with_multibyte_tail_fails_bounded_instead_of_panicking() {
 #[test]
 fn non_subscription_source_header_requires_plain_identifier_of_at_most_36() {
     // 标头 source 类是路由键：编译期上限 36 字节（严于落库列宽
-    // source_zhixu_id VARCHAR(64)，对齐 Go 镜像 zhixu_schema.go 的
-    // ≤36 与标识符规则），超长/非法字符集在解析期拒绝。
+    // source_zhixu_id VARCHAR(64)），超长/非法字符集在解析期拒绝。
     let overlong = "s".repeat(37);
     for raw in [
         format!("{overlong}::task.main.cmp"),
@@ -1243,6 +1303,7 @@ fn non_subscription_source_header_requires_plain_identifier_of_at_most_36() {
     ] {
         let err = parse_hook(ParseHookRequest {
             profile: Profile::EvmStrict,
+            gate: Gate::Hook,
             hook_name: "HOOK".to_string(),
             hook: raw.clone(),
         })
@@ -1256,6 +1317,7 @@ fn non_subscription_source_header_requires_plain_identifier_of_at_most_36() {
     let boundary = "s".repeat(36);
     parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: format!("{boundary}::task.main.cmp"),
     })
@@ -1342,6 +1404,7 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
     for ast in poisoned_atoms {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast,
             signals: vec![],
             now: "2026-04-27T00:00:00Z".to_string(),
@@ -1372,6 +1435,7 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
     ] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast,
             signals: vec![],
             now: "2026-04-27T00:00:00Z".to_string(),
@@ -1392,6 +1456,7 @@ fn subscription_header_form_is_unaffected_by_source_header_cap() {
     // 订阅目标 source 自身按同值规则（≤36 + plain identifier）校验。
     parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: "::ANCHOR(@seller::task.main.cmp)".to_string(),
     })
@@ -1401,6 +1466,7 @@ fn subscription_header_form_is_unaffected_by_source_header_cap() {
     let overlong = "s".repeat(37);
     let err = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: format!("::ANCHOR(@{overlong}::task.main.cmp)"),
     })
@@ -1414,6 +1480,7 @@ fn subscription_header_form_is_unaffected_by_source_header_cap() {
     let boundary = "s".repeat(36);
     parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: format!("::ANCHOR(@{boundary}::task.main.cmp)"),
     })
@@ -1421,6 +1488,7 @@ fn subscription_header_form_is_unaffected_by_source_header_cap() {
     // 订阅条目带非空标头仍按既有口径拒绝（而非新的标头错误）。
     let err = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
         hook: "buyer::ANCHOR(@seller::task.main.cmp)".to_string(),
     })
@@ -1454,6 +1522,7 @@ fn top_level_source_identity_is_validated_on_the_raw_text() {
     ] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast: ast_with_root(
                 json!({ "type": "signal", "signal": "task.main.cmp" }),
                 source.clone(),
@@ -1472,6 +1541,7 @@ fn top_level_source_identity_is_validated_on_the_raw_text() {
     // null 与缺席等同（Go 零值解码同口径）：normal 模式按缺失拒绝。
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
+        gate: Gate::Hook,
         ast: ast_with_root(
             json!({ "type": "signal", "signal": "task.main.cmp" }),
             Value::Null,
@@ -1504,6 +1574,7 @@ fn subscription_mode_rejects_non_string_and_whitespace_source() {
     for source in [json!(5), json!(" "), json!("\tbuyer")] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast: subscription_ast(source.clone()),
             signals: vec![],
             now: "2026-04-27T00:00:00Z".to_string(),
@@ -1539,6 +1610,7 @@ fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
     ] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
+            gate: Gate::Hook,
             ast: target_ast(target.clone()),
             signals: vec![],
             now: "2026-04-27T00:00:00Z".to_string(),
@@ -1555,58 +1627,55 @@ fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
 }
 
 #[test]
-fn chained_delay_timers_accumulate_inner_expiry() {
-    // 链式延时口径：(A+5s)+10s 的外层 timer 必须按内层到期累计——
-    // timer(A,15) 是最终到期；timer(A,5) 是内层延时自己的中间 poke
-    // 期限（与求值器分段等待语义一致），不再产出低估的 timer(A,10)。
-    let out = parse_hook(ParseHookRequest {
-        profile: Profile::EvmStrict,
-        hook_name: "NESTED".to_string(),
-        hook: "buyer::(task.a.cmp +5s) +10s".to_string(),
-    })
-    .unwrap();
-    assert_eq!(
-        out.dependencies,
-        vec![
-            Dependency {
-                kind: DependencyKind::Positive,
-                source: "buyer".to_string(),
-                signal_name: "task.a.cmp".to_string(),
-                delay_seconds: None,
-            },
-            Dependency {
-                kind: DependencyKind::Timer,
-                source: "buyer".to_string(),
-                signal_name: "task.a.cmp".to_string(),
-                delay_seconds: Some(5),
-            },
-            Dependency {
-                kind: DependencyKind::Timer,
-                source: "buyer".to_string(),
-                signal_name: "task.a.cmp".to_string(),
-                delay_seconds: Some(15),
-            },
-        ]
-    );
+fn nested_delays_are_rejected_in_both_positions() {
+    // 嵌套延时一律拒绝（正位与否决位同闸）：链式对锚点纯加法，合并为
+    // 单一时长书写——嵌套没有表达力收益，只会让单段 30d 上限被逐段
+    // 叠加绕过（累计等待无总预算）。报错统一指引平铺合并。
+    for (gate, hook) in [
+        (Gate::Hook, "buyer::(task.a.cmp +5s) +10s"),
+        (Gate::Hook, "buyer::((task.a.cmp +1s) +2s) +3s"),
+        (Gate::Hook, "buyer::task.b.cmp & ~((task.a.cmp +5s) +10s)"),
+        (Gate::Filter, "buyer::(task.a.cmp +5s) +10s"),
+        (Gate::Filter, "buyer::~((task.a.cmp +5s) +10s)"),
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate,
+            hook_name: "NESTED".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("no nested delays"),
+            "{hook}: {err}"
+        );
+    }
+    // 对照：合并后的平铺形态两档合法，timer 语义不变（单段一个 timer）。
+    for hook in ["buyer::task.a.cmp +15s", "buyer::task.b.cmp & ~(task.a.cmp +15s)"] {
+        let out = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Hook,
+            hook_name: "FLAT".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_or_else(|err| panic!("flat form must parse: {hook}: {err}"));
+        assert!(
+            out.dependencies
+                .iter()
+                .filter(|dep| dep.kind == DependencyKind::Timer)
+                .all(|dep| dep.delay_seconds == Some(15)),
+            "{hook}: {:?}",
+            out.dependencies
+        );
+    }
+}
 
-    // 三层链：((A+1s)+2s)+3s → 中间期限 1、3，最终到期 6。
-    let out = parse_hook(ParseHookRequest {
-        profile: Profile::EvmStrict,
-        hook_name: "CHAIN".to_string(),
-        hook: "buyer::((task.a.cmp +1s) +2s) +3s".to_string(),
-    })
-    .unwrap();
-    let timers = out
-        .dependencies
-        .iter()
-        .filter(|dep| dep.kind == DependencyKind::Timer)
-        .map(|dep| dep.delay_seconds.unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(timers, vec![1, 3, 6]);
-
+#[test]
+fn negated_operands_do_not_anchor_timers() {
     // 否定子树不产生 timer 锚：(A & ~B)+5s 只对 A 出 timer。
     let out = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
+        gate: Gate::Hook,
         hook_name: "GUARD".to_string(),
         hook: "buyer::(task.a.cmp & ~task.b.cmp) +5s".to_string(),
     })
@@ -1622,5 +1691,444 @@ fn chained_delay_timers_accumulate_inner_expiry() {
         vec![("task.a.cmp".to_string(), 5)],
         "negated operands must not anchor timers: {:?}",
         out.dependencies
+    );
+}
+
+#[test]
+fn decaying_veto_position_rules_reject_non_conjunction_slots() {
+    // 否决位仅合取直接子项合法：根位 / Or 子项 / Not 操作数 / Delay
+    // 操作数内（任意深度，含 Delay 内嵌套 And/Or 再包衰减）一律编译期拒绝。
+    let position_error = "only allowed as a direct operand of a conjunction";
+    for hook in [
+        "buyer::~(task.cancel.cmp +14d)",
+        "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Hook,
+            hook_name: "WINDOW".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains(position_error),
+            "unexpected error for {hook}: {err}"
+        );
+    }
+    // Delay 操作数内的否决位现在先被嵌套延时闸拦截（正位与否决位同闸）：
+    // 报错换为 no-nested-delays 口径。
+    for hook in [
+        "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
+        "buyer::((task.a.cmp & (task.b.cmp & ~(task.cancel.cmp +14d))) | task.c.cmp) +5s",
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Hook,
+            hook_name: "WINDOW".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("no nested delays"),
+            "unexpected error for {hook}: {err}"
+        );
+    }
+
+    let err = parse_hook(ParseHookRequest {
+        profile: Profile::EvmStrict,
+        gate: Gate::Hook,
+        hook_name: "WINDOW".to_string(),
+        hook: "buyer::task.a.cmp & ~(~(task.cancel.cmp +14d))".to_string(),
+    })
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("negation only supports direct signal references"),
+        "unexpected error for doubly negated veto: {err}"
+    );
+}
+
+#[test]
+fn decaying_veto_expires_at_takes_the_and_minimum() {
+    // And 的有效期取成员最紧者：两个衰减项取较早成熟；无期限成员
+    // （缺席否决/正向项）不放宽有限期。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let both_live = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.b.cmp & ~(task.a1.cmp +5s) & ~(task.a2.cmp +10s)",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a1.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("task.a2.cmp", "2026-04-27T00:00:02.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(both_live.state, EvalState::Ready);
+    assert_eq!(
+        both_live.expires_at.as_deref(),
+        Some("2026-04-27T00:00:06.000Z"),
+        "min(5s, 10s) decay must win"
+    );
+
+    let one_unbounded = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.b.cmp & ~(task.a1.cmp +5s) & ~task.a2.cmp",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a1.cmp", "2026-04-27T00:00:01.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(one_unbounded.state, EvalState::Ready);
+    assert_eq!(
+        one_unbounded.expires_at.as_deref(),
+        Some("2026-04-27T00:00:06.000Z"),
+        "an unbounded member must not loosen the finite decay"
+    );
+}
+
+#[test]
+fn decaying_veto_inside_an_or_winning_branch_floats_its_expiry() {
+    // Or：获胜分支的 expires_at 原样上浮，不跨分支取 min——另一分支
+    // 就绪且无衰减时，整体的 Ready 无有效期。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let veto_branch_wins = evaluate_compiled(
+        "ANY",
+        "buyer::(task.b.cmp & ~(task.a.cmp +5s)) | task.d.cmp",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(veto_branch_wins.state, EvalState::Ready);
+    assert_eq!(
+        veto_branch_wins.expires_at.as_deref(),
+        Some("2026-04-27T00:00:06.000Z"),
+        "the winning AND branch must float its decay up through the OR"
+    );
+
+    let plain_branch_wins = evaluate_compiled(
+        "ANY",
+        "buyer::(task.b.cmp & ~(task.a.cmp +5s)) | task.d.cmp",
+        Profile::EvmStrict,
+        vec![
+            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("task.d.cmp", "2026-04-27T00:00:02.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(plain_branch_wins.state, EvalState::Ready);
+    assert_eq!(
+        plain_branch_wins.expires_at, None,
+        "OR must not take a cross-branch expiry minimum"
+    );
+}
+
+#[test]
+fn decaying_veto_over_a_composite_delay_operand() {
+    // 否定延时操作数可以是复合式：~((A|C)+5s) 的有效期 = 复合延时
+    // 的成熟时刻（C 缺席不阻塞 A 分支成熟）。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let eval = evaluate_compiled(
+        "WINDOW",
+        "buyer::task.b.cmp & ~((task.a.cmp | task.c.cmp) +5s)",
+        Profile::EvmStrict,
+        vec![
+            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+        ],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(eval.state, EvalState::Ready);
+    assert_eq!(eval.expires_at.as_deref(), Some("2026-04-27T00:00:06.000Z"));
+}
+
+#[test]
+fn decaying_veto_serializes_expires_at_across_the_json_boundary() {
+    // FFI/NAPI 序列化边界：有效期以 camelCase expiresAt 字段出场，
+    // 无期限时字段缺席（skip_serializing_if）。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let request_for = |signals: Vec<SignalFact>, now: &str| {
+        let parsed = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Hook,
+            hook_name: "WINDOW".to_string(),
+            hook: "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)".to_string(),
+        })
+        .unwrap();
+        json!({
+            "profile": "evm_strict",
+            "ast": parsed.cloud_ast,
+            "signals": signals
+                .into_iter()
+                .map(|fact| json!({
+                    "source": fact.source,
+                    "signalName": fact.signal_name,
+                    "receivedAt": fact.received_at,
+                }))
+                .collect::<Vec<_>>(),
+            "now": now,
+        })
+    };
+
+    let bounded = eval_compiled_hook_json(
+        &request_for(
+            vec![
+                fact("task.ship.cmp", "2026-04-27T00:00:05.000Z"),
+                fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z"),
+            ],
+            "2026-04-27T00:00:10.000Z",
+        )
+        .to_string(),
+    );
+    assert!(
+        bounded.contains("\"expiresAt\":\"2026-05-11T00:00:00.000Z\""),
+        "expiresAt must serialize on the JSON boundary: {bounded}"
+    );
+
+    let unbounded = eval_compiled_hook_json(
+        &request_for(
+            vec![fact("task.ship.cmp", "2026-04-27T00:00:05.000Z")],
+            "2026-04-27T00:00:10.000Z",
+        )
+        .to_string(),
+    );
+    assert!(
+        !bounded.is_empty() && !unbounded.contains("expiresAt"),
+        "absent veto must leave expiresAt out of the envelope: {unbounded}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 过滤档（gate=filter，发射适格面）：位置闸放开、词表闸保留。
+// ---------------------------------------------------------------------------
+
+fn evaluate_compiled_filter(
+    hook: &str,
+    profile: Profile,
+    signals: Vec<SignalFact>,
+    now: &str,
+) -> EvalCompiledHookOutput {
+    let parsed = parse_hook(ParseHookRequest {
+        profile,
+        gate: Gate::Filter,
+        hook_name: "ADMIT".to_string(),
+        hook: hook.to_string(),
+    })
+    .unwrap();
+    eval_compiled_hook(EvalCompiledHookRequest {
+        profile,
+        gate: Gate::Filter,
+        ast: parsed.cloud_ast,
+        signals,
+        now: now.to_string(),
+    })
+    .unwrap()
+}
+
+#[test]
+fn filter_gate_opens_every_decaying_veto_position() {
+    // 适格面只在一拍对已提交事实集求值、不参与调度，任何位置的瞬时值
+    // 都良定义：根、Or 分支、Delay 操作数内（任意深度）的衰减否决位
+    // 一律合法（钩子档的同形态见 decaying_veto_position_rules_*）。
+    // 「Not 下」由保留的 NOT 操作数词表独立封死（Not 的操作数只能是裸
+    // Signal 或 Delay 结果，~(~(A+duration)) 在词表闸拒绝），位置闸对其
+    // 不设限——见 filter_gate_keeps_the_not_vocabulary_*。
+    for hook in [
+        "buyer::~(task.cancel.cmp +14d)",
+        "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
+        "buyer::(task.a.cmp & ~(task.cancel.cmp +14d) & (task.e.cmp +5s)) & task.d.cmp",
+        "buyer::((task.a.cmp | (task.b.cmp & ~(task.cancel.cmp +14d))) & task.d.cmp) & ~(task.f.cmp +1s)",
+    ] {
+        parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Filter,
+            hook_name: "ADMIT".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_or_else(|err| panic!("filter gate must admit {hook}: {err}"));
+    }
+}
+
+#[test]
+fn filter_gate_keeps_the_not_vocabulary_and_delay_bounds() {
+    // 放开的只有位置/正锚：NOT 操作数词表（裸 Signal 或 Delay 结果）与
+    // duration 语法/上限/正性是结构闸，两档同守。
+    for hook in [
+        "buyer::~(task.a.cmp & task.b.cmp)",
+        "buyer::~(~(task.cancel.cmp +14d))",
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Filter,
+            hook_name: "ADMIT".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("negation only supports direct signal references"),
+            "unexpected error for {hook}: {err}"
+        );
+    }
+    for (hook, expected) in [
+        (
+            "buyer::~(task.a.cmp +31d)",
+            "exceeds the maximum allowed delay",
+        ),
+        ("buyer::task.a.cmp +0s", "invalid duration"),
+    ] {
+        let err = parse_hook(ParseHookRequest {
+            profile: Profile::EvmStrict,
+            gate: Gate::Filter,
+            hook_name: "ADMIT".to_string(),
+            hook: hook.to_string(),
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains(expected),
+            "unexpected error for {hook}: {err}"
+        );
+    }
+}
+
+#[test]
+fn filter_gate_admission_three_states_on_a_bare_veto_root() {
+    // admit-iff-Ready 的三态（裸衰减根是过滤档独有形态，同时钉住求值
+    // 解码防御对 gate=filter 放行其合法形态）：否决信号缺席 → Ready
+    // （无限期）；在案未熟 → Ready（有效期至成熟时刻）；已熟 → 非 Ready
+    // （Impossible）。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let absent = evaluate_compiled_filter(
+        "buyer::~(task.cancel.cmp +5s)",
+        Profile::EvmStrict,
+        vec![],
+        "2026-04-27T00:00:10.000Z",
+    );
+    assert_eq!(absent.state, EvalState::Ready);
+    assert_eq!(absent.expires_at, None, "absent veto must not decay");
+
+    let immature = evaluate_compiled_filter(
+        "buyer::~(task.cancel.cmp +5s)",
+        Profile::EvmStrict,
+        vec![fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z")],
+        "2026-04-27T00:00:03.000Z",
+    );
+    assert_eq!(immature.state, EvalState::Ready);
+    assert_eq!(
+        immature.expires_at.as_deref(),
+        Some("2026-04-27T00:00:05.000Z"),
+        "validity must end at the negated delay's maturity"
+    );
+
+    let matured = evaluate_compiled_filter(
+        "buyer::~(task.cancel.cmp +5s)",
+        Profile::EvmStrict,
+        vec![fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z")],
+        "2026-04-27T00:00:05.000Z",
+    );
+    assert_eq!(matured.state, EvalState::Impossible);
+}
+
+#[test]
+fn filter_gate_window_boundary_flips_exactly_at_expiry() {
+    // 成熟边界含端点：到期前一秒仍 Ready（准入），恰到期 Not 翻
+    // Impossible（拒绝）——适格求值整棵 admit-iff-Ready，不是逐项投票。
+    let fact = |signal: &str, received_at: &str| SignalFact {
+        source: "buyer".to_string(),
+        signal_name: signal.to_string(),
+        received_at: received_at.to_string(),
+    };
+    let one_before = evaluate_compiled_filter(
+        "buyer::~(task.cancel.cmp +5s)",
+        Profile::EvmStrict,
+        vec![fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z")],
+        "2026-04-27T00:00:04.000Z",
+    );
+    assert_eq!(one_before.state, EvalState::Ready);
+    assert_eq!(
+        one_before.expires_at.as_deref(),
+        Some("2026-04-27T00:00:05.000Z")
+    );
+
+    let at_expiry = evaluate_compiled_filter(
+        "buyer::~(task.cancel.cmp +5s)",
+        Profile::EvmStrict,
+        vec![fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z")],
+        "2026-04-27T00:00:05.000Z",
+    );
+    assert_eq!(at_expiry.state, EvalState::Impossible);
+}
+
+#[test]
+fn gate_rides_the_json_boundary_and_defaults_to_hook() {
+    // FFI/NAPI 信封：gate 缺省 = hook（既有调用方语义不变），
+    // "gate":"filter" 才切换过滤档——裸衰减根在缺省档照旧拒绝。
+    let request = |gate: Option<&str>| {
+        let mut envelope = json!({
+            "hookName": "ADMIT",
+            "hook": "buyer::~(task.cancel.cmp +14d)"
+        });
+        if let Some(gate) = gate {
+            envelope["gate"] = json!(gate);
+        }
+        envelope.to_string()
+    };
+    let hooked = parse_hook_json(&request(None));
+    assert!(
+        hooked.contains("only allowed as a direct operand of a conjunction"),
+        "absent gate must keep hook-gate semantics: {hooked}"
+    );
+    let filtered = parse_hook_json(&request(Some("filter")));
+    assert!(
+        filtered.contains("\"ok\":true"),
+        "gate=filter must admit the bare veto root: {filtered}"
+    );
+
+    // 求值信封同形态：gate=filter 的解码防御放行过滤档合法形态，
+    // 缺省档同 AST 拒绝。
+    let ast = serde_json::from_str::<Value>(&filtered).expect("envelope decodes")["value"]
+        ["cloudAst"]
+        .clone();
+    let eval_request = |gate: Option<&str>| {
+        let mut envelope = json!({ "ast": ast, "signals": [], "now": "2026-04-27T00:00:10.000Z" });
+        if let Some(gate) = gate {
+            envelope["gate"] = json!(gate);
+        }
+        envelope.to_string()
+    };
+    let eval_filtered = eval_compiled_hook_json(&eval_request(Some("filter")));
+    assert!(
+        eval_filtered.contains("\"state\":\"ready\""),
+        "gate=filter must evaluate the veto root: {eval_filtered}"
+    );
+    let eval_hooked = eval_compiled_hook_json(&eval_request(None));
+    assert!(
+        eval_hooked.contains("only allowed as a direct operand of a conjunction"),
+        "absent gate must keep hook-gate decode defense: {eval_hooked}"
     );
 }

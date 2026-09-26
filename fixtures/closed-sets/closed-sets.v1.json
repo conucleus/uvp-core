@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "uvp.closedSets.v1",
+  "note": "链上承诺词表的跨语言钉死语料：Rust（uvp-model 常量）与 TS（compiler 闭集常量）两侧测试对同一份文件做逐元素相等比对。supplierTypes 经 executorRoutes 进 executorHash、fileTypes 经 fileResources/selectableResource 进 resourcesHash/executorHash——任一侧增删成员或改变比对口径（如引入 trim）都会让至少一侧的测试报警。改本文件必须同改两侧实现。",
+  "supplierTypes": ["individual", "organization", "zhixu"],
+  "fileTypes": ["local", "http", "txcloud", "plain_text"]
+}

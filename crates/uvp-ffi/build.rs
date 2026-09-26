@@ -1,12 +1,16 @@
-//! 把 uvp-core 的 git rev 在编译期烧进 uvp-ffi 二进制（构建指纹）。
+//! 把 uvp-core 的内容树哈希在编译期烧进 uvp-ffi 二进制（构建指纹）。
 //!
 //! 构建指纹是产物身份的最终依据：语义版本常量不变而行为已变的陈旧
 //! 构建，能同时骗过宿主侧的"二进制版本 + 语义探针"双检；宿主侧必须
-//! 比对指纹与当前 uvp-core 检出 HEAD，不一致即判定陈旧产物并响亮报错。
+//! 比对指纹与当前 uvp-core 检出的内容树，不一致即判定陈旧产物并响亮
+//! 报错。指纹取内容树（`HEAD^{tree}`）而非提交 SHA：本仓 dev→main
+//! 惯例是 squash 收敛，会以内容完全相同的新提交改写全部 SHA，提交
+//! SHA 指纹会把这类检出误判为陈旧并强迫重编；树哈希下内容变则指纹
+//! 变，squash 只改提交图不误伤。
 //!
 //! 取值优先级：
 //! 1. 环境变量 `UVP_FFI_GIT_REV`（hermetic 构建显式指定）；
-//! 2. 运行 `git rev-parse HEAD` 读取 workspace 根的提交；
+//! 2. 运行 `git rev-parse HEAD^{tree}` 读取 workspace 根提交的内容树；
 //! 3. 都不可用则退化为 `no-git-<CARGO_PKG_VERSION>`，宿主侧据此拒绝静默通过。
 
 use std::path::{Path, PathBuf};
@@ -26,7 +30,7 @@ fn main() {
 
     let fingerprint = match std::env::var("UVP_FFI_GIT_REV") {
         Ok(rev) if !rev.trim().is_empty() => format!("git-{}", rev.trim()),
-        _ => match git_head_rev(&workspace_root) {
+        _ => match git_head_content_tree(&workspace_root) {
             Some(rev) => format!("git-{rev}"),
             None => format!(
                 "no-git-{}",
@@ -38,7 +42,7 @@ fn main() {
 }
 
 // git ref 变化（新提交、切分支）必须触发 build script 重跑，否则指纹会停在
-// 上次编译时的 rev，钉测试只能看到过期的"当前"HEAD。
+// 上次编译时的 rev，钉测试只能看到过期的"当前"内容树。
 fn emit_git_rerun_triggers(workspace_root: &Path) {
     let Some(git_dir) = resolve_git_dir(workspace_root) else {
         return;
@@ -70,11 +74,11 @@ fn resolve_git_dir(workspace_root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn git_head_rev(workspace_root: &Path) -> Option<String> {
+fn git_head_content_tree(workspace_root: &Path) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(workspace_root)
-        .args(["rev-parse", "HEAD"])
+        .args(["rev-parse", "HEAD^{tree}"])
         .output()
         .ok()?;
     if !output.status.success() {
