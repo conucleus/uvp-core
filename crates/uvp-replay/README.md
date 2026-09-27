@@ -1,10 +1,26 @@
 # uvp-replay
 
-链上事件流回放 oracle：给定按 `(blockNumber, logIndex)` 排序的合约事件
-（`PlanRegistered` / `OrderRegistered` / `SignalSubmitted` / `TimerPoked` /
-`StageMaterialized` / `HookReady` / `HookStatusChanged` 等），用 Rust 权威语义
-重演求值，产出 `expected`（链上声明的观察）/ `observed`（oracle 自推导的
-观察）/ `mismatches` 三列表并逐位比对。
+重放 oracle 家族，两条轨道各持一个入口：
+
+- **链轨**（`replay_json` / `replay_chain_events`）：链上事件流回放
+  oracle——给定按 `(blockNumber, logIndex)` 排序的合约事件
+  （`PlanRegistered` / `OrderRegistered` / `SignalSubmitted` /
+  `TimerPoked` / `StageMaterialized` / `HookReady` / `HookStatusChanged`
+  等），用 Rust 权威语义重演求值，产出 `expected`（链上声明的观察）/
+  `observed`（oracle 自推导的观察）/ `mismatches` 三列表并逐位比对。
+- **云轨**（`cloud/`，`replay_compiled_hook_json`）：云侧事实日志重放
+  走带——把 DB 持久化的依赖信号事实按受理因果序逐条喂给纯函数
+  kernel（uvp-hook-dsl cloud AST 求值器），在每个事实截点与 wait 成熟
+  决策点求值并施加终态吸收，复现在线裁决的时间线（先到先成立：负依赖
+  晚到不翻转已就绪的裁决），产出 hook_state 词表口径的期望状态
+  （`ready`/`wait`/`cxl`/`init`），供对账方与库内状态逐行 diff。请求
+  形态：`{"ast": <uvp.cloudAst.v1>, "facts": [{"signalName", "arrivedAt"}]
+  （按受理序，走带不重排）, "now": "<RFC3339>"}`；订阅模式入口短路为
+  `ready`（首事件即是就绪事件，事实不参与裁决）。
+
+两轨输入域与输出域互不重叠（链上事件 vs DB 事实日志；观察级 diff vs
+终态 diff），不共享状态模型；共享的是"确定性重放裁决持久化状态"的
+oracle 职责与 hook 状态词表。
 
 ## 状态词表
 

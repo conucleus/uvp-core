@@ -38,6 +38,15 @@ pub fn replay_json(request_json: String) -> Result<String> {
 }
 
 #[napi]
+/// 云轨重放走带：请求/响应形态与 FFI uvp_replay_compiled_hook_json 一致
+/// （{"ast", "facts" 按受理序, "now"} → value.status 为 hook_state 词表）。
+pub fn replay_compiled_hook_json(request_json: String) -> Result<String> {
+    run_json("replayCompiledHookJson", || {
+        uvp_replay::replay_compiled_hook_json(&request_json)
+    })
+}
+
+#[napi]
 /// UVP Core Lint（PRD 109）单 Hook 入口：请求/信封形态与 parse_hook_json
 /// 一致；diagnostics 在 ok:true 的 value 里，lint 不改变语言合法性。
 pub fn lint_hook_json(request_json: String) -> Result<String> {

@@ -20,10 +20,11 @@ pub use lint::{
     MAX_LINT_BOOLEAN_DEPTH, MAX_LINT_BOOLEAN_OPERANDS, MAX_LINT_NODES, MAX_PAIRWISE_HOOKS,
 };
 
-pub use ast::{Compatibility, Expr, HookExpr, HookMode, SubscriptionTarget};
+pub use ast::{valid_signal_identity, Compatibility, Expr, HookExpr, HookMode, SubscriptionTarget};
 pub use dependency::{Dependency, DependencyKind};
 pub use evaluation::{
-    eval_compiled_hook, EvalCompiledHookOutput, EvalCompiledHookRequest, EvalState, SignalFact,
+    decode_compiled_hook, eval_compiled_hook, DecodedCompiledHook, EvalCompiledHookOutput,
+    EvalCompiledHookRequest, EvalState, HookEval, SignalFact,
 };
 pub use parser::{parse_hook, parse_hook_expr_with_spans, ParseHookOutput, ParseHookRequest};
 

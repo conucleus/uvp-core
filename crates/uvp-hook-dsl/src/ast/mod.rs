@@ -509,7 +509,9 @@ pub(crate) fn is_strict_signal_ref(value: &str) -> bool {
 /// 全名 ≤100（individual_record.signal_name VARCHAR(100)）。解析期标识符
 /// 扫描、事实键校验（signal_map）与 cloud AST 解码共用，保证三处口径
 /// 收敛——任一入口放行的身份另两处必然接受。
-pub(crate) fn valid_signal_identity(value: &str) -> bool {
+/// 三段式信号身份（task.stage.signal，每段 plain identifier，全长 ≤100）：
+/// 解码防御与重放走带共用的事实身份闸。
+pub fn valid_signal_identity(value: &str) -> bool {
     is_strict_signal_ref(value) && value.len() <= 100 && value.split('.').all(is_plain_identifier)
 }
 

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use crate::ast::{
     contains_nested_subscription, is_plain_identifier, normalize_tight, valid_signal_identity,
-    validate_filter_hook, validate_hook, Expr,
+    validate_filter_hook, validate_hook, Expr, HookMode,
 };
 use crate::parser::{duration_to_seconds, MAX_PARSE_DEPTH};
 use crate::{
@@ -66,9 +66,55 @@ pub struct SignalFact {
     pub received_at: String,
 }
 
-pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHookOutput> {
-    let ast_object = req
-        .ast
+/// 解码后的云侧编译钩子：AST 解码与档位校验的产物。同一份 AST 上需要
+/// 反复求值的消费方（重放走带按事实截点逐点求值）复用同一份解码产物，
+/// 解码校验只在入口执行一次。
+#[derive(Debug, Clone)]
+pub struct DecodedCompiledHook {
+    pub mode: HookMode,
+    pub source: String,
+    pub expr: Expr,
+}
+
+/// 单次求值的消费面：state 是求值态；ready_at 仅 Wait 态携带（等待期限）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HookEval {
+    pub state: EvalState,
+    pub ready_at: Option<DateTime<Utc>>,
+}
+
+impl DecodedCompiledHook {
+    /// 在事实集（裸信号名 → 到达时刻）上求值。事实的 source 归属由解码
+    /// 产物统一钉住：云轨事实日志不携带逐事实 source，求值前统一以 AST
+    /// source 盖戳（与 statemachine 喂入求值的口径一致）。
+    pub fn eval(
+        &self,
+        signals: &BTreeMap<String, DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> Result<HookEval> {
+        let entries = signals
+            .iter()
+            .map(|(name, received_at)| {
+                (
+                    signal_key(&self.source, name),
+                    SignalEntry {
+                        source: self.source.clone(),
+                        signal_name: name.clone(),
+                        received_at: *received_at,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let evaluated = eval_expr(&self.expr, &self.source, &entries, now)?;
+        Ok(HookEval {
+            state: evaluated.state,
+            ready_at: evaluated.ready_at,
+        })
+    }
+}
+
+pub fn decode_compiled_hook(ast: &Value, gate: Gate) -> Result<DecodedCompiledHook> {
+    let ast_object = ast
         .as_object()
         .ok_or_else(|| HookError::Message("compiled hook AST must be an object".to_string()))?;
     reject_unknown_keys(
@@ -84,8 +130,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         ],
         "compiled hook AST",
     )?;
-    let schema_version = req
-        .ast
+    let schema_version = ast
         .get("schemaVersion")
         .and_then(Value::as_str)
         .ok_or_else(|| {
@@ -96,8 +141,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             "unsupported compiled hook AST schemaVersion: {schema_version}"
         )));
     }
-    let mode = req
-        .ast
+    let mode = ast
         .get("mode")
         .and_then(Value::as_str)
         .ok_or_else(|| HookError::Message("compiled hook AST is missing mode".to_string()))?;
@@ -135,8 +179,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
     let (target_source, target_signal) = if mode == "subscription" {
         // normal 模式不得携带 subscriptionTarget：解析器只为订阅形态产出
         // 该字段，normal 产物上出现只能是手写毒 AST。
-        let target = req
-            .ast
+        let target = ast
             .get("subscriptionTarget")
             .ok_or_else(|| {
                 HookError::Message(
@@ -193,7 +236,6 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         }
         (String::new(), String::new())
     };
-    let now = parse_time(&req.now, req.profile)?;
     // 订阅钩子标头恒为空：投递目标由阶段静态执行器决定，路由由接收方锚定
     // 状态与对接记录裁决，因此仅 subscription 模式允许空 source。字段类型
     // 与 mint/route 同走 optional_ast_str 纪律：在场且非字符串（含布尔/
@@ -231,8 +273,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             source
         }
     };
-    let root = req
-        .ast
+    let root = ast
         .get("root")
         .ok_or_else(|| HookError::Message("compiled hook AST root is missing".to_string()))?;
     let expr = expr_from_cloud_value(root)?;
@@ -269,12 +310,26 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
     // invariants as a parsed expression before it may drive state
     // transitions — per gate (hook: positive-anchor invariant; filter:
     // admission vocabulary).
-    match req.gate {
+    match gate {
         Gate::Hook => validate_hook(&expr)?,
         Gate::Filter => validate_filter_hook(&expr)?,
     }
+    Ok(DecodedCompiledHook {
+        mode: if mode == "subscription" {
+            HookMode::Subscription
+        } else {
+            HookMode::Normal
+        },
+        source,
+        expr,
+    })
+}
+
+pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHookOutput> {
+    let decoded = decode_compiled_hook(&req.ast, req.gate)?;
+    let now = parse_time(&req.now, req.profile)?;
     let signals = signal_map(req.signals, req.profile)?;
-    let result = eval_expr(&expr, &source, &signals, now)?;
+    let result = eval_expr(&decoded.expr, &decoded.source, &signals, now)?;
 
     Ok(EvalCompiledHookOutput {
         uvp_core_version: CORE_VERSION,

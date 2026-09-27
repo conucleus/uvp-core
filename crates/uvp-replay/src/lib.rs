@@ -1,7 +1,9 @@
-//! uvp-replay：链上事件流对 hook 状态机的回放 oracle。crate 根保留
-//! 入口（replay_json/replay_chain_events）、请求信封、跨模块共享的
-//! JSON/时间读取辅助与公共导出；生产逻辑见 `facts/`、`transition/`、
-//! `snapshot/`。
+//! uvp-replay：重放 oracle 家族。链轨（`facts/`、`transition/`、
+//! `snapshot/`）以链上事件流重演求值做观察级 diff；云轨（`cloud/`）以
+//! DB 事实日志逐点求值复现在线裁决时间线，产出 hook_state 口径的期望
+//! 状态。crate 根保留入口（replay_json/replay_chain_events/
+//! replay_compiled_hook_json）、请求信封、跨模块共享的 JSON/时间读取
+//! 辅助与公共导出。
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
@@ -9,9 +11,15 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+pub mod cloud;
 mod facts;
 mod snapshot;
 mod transition;
+
+pub use cloud::{
+    replay_compiled_hook, CloudReplayFact, CloudReplayOutcome, CloudReplayRequest, STATUS_CXL,
+    STATUS_INIT, STATUS_READY, STATUS_WAIT,
+};
 
 use facts::{order_key, validate_plan_registration_gates, OracleOrderState, OracleState};
 use snapshot::compare_hook_observations;
@@ -78,6 +86,16 @@ pub fn replay_json(input: &str) -> String {
         }
         Ok(result)
     });
+    envelope_json(result)
+}
+
+/// 云轨重放的 JSON 入口：请求/响应形态见 `cloud::CloudReplayRequest` 与
+/// `cloud::CloudReplayOutcome`（ok:true 的 value 内为 outcome）。
+pub fn replay_compiled_hook_json(input: &str) -> String {
+    let result = serde_json::from_str::<cloud::CloudReplayRequest>(input)
+        .map_err(|err| ReplayError::Message(format!("invalid cloud replay request: {err}")))
+        .and_then(replay_compiled_hook)
+        .map(|outcome| json!({ "status": outcome.status }));
     envelope_json(result)
 }
 
