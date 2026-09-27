@@ -1094,4 +1094,3 @@ fn constraints_registry_probes_rust_line() {
         assert_violate(outcome, anchor, &rule);
     }
 }
-

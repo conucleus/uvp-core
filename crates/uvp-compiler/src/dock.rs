@@ -1701,7 +1701,10 @@ mod tests {
         let parsed = parse_dock_targets(&targets).expect("duplicate bare stage names parse");
         let inputs = &parsed.targets[0].interfaces[0].inputs;
         assert_eq!(inputs.len(), 1);
-        assert_eq!(inputs[0].source, "wwt", "seam must follow the qualified owning stage");
+        assert_eq!(
+            inputs[0].source, "wwt",
+            "seam must follow the qualified owning stage"
+        );
     }
 
     /// 无 executor 的最小 stage（source 供 input 端口单源推导）。

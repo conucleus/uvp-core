@@ -145,16 +145,13 @@ mod tests {
     fn definition_uid_golden_vectors() {
         // 金向量：链轨 TS 实现与 Go FFI 消费方按同一向量对拍；向量变更=
         // 派生公式变更=所有定义换 uid。
-        let cases: &[(Value, &str)] = &[
-            (
-                json!({"apiVersion":"uvp/v0","kind":"Zhixu","metadata":{"name":"weaving_order"},"spec":{"platform":{"type":"cloud"}}}),
-                "zx-e906ad47866918682d1e2ed2528682f5",
-            ),
-        ];
+        let cases: &[(Value, &str)] = &[(
+            json!({"apiVersion":"uvp/v0","kind":"Zhixu","metadata":{"name":"weaving_order"},"spec":{"platform":{"type":"cloud"}}}),
+            "zx-e906ad47866918682d1e2ed2528682f5",
+        )];
         for (definition, want) in cases {
             let got = derive_definition_uid(definition).unwrap();
             assert_eq!(&got, want, "definition: {definition}");
         }
     }
-
 }

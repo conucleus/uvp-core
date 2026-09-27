@@ -176,7 +176,7 @@ fn read_definition(path: &str) -> Result<serde_json::Value, String> {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
         return Ok(value);
     }
-    serde_yaml::from_str::<serde_json::Value>(&content).map_err(|err| err.to_string())
+    serde_yaml_ng::from_str::<serde_json::Value>(&content).map_err(|err| err.to_string())
 }
 
 fn print_lint_text(report: &serde_json::Value) {

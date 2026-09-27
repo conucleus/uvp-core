@@ -81,7 +81,6 @@ pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<
     }
 }
 
-
 /// 嵌套延时一律拒绝（正位与否决位同闸）：Delay 的操作数子树内不得再含
 /// 任何延时节点。链式延时对锚点是纯加法，合并为单一时长书写
 /// （`((A+5s)+10s)` 即 `(A+15s)`）——嵌套没有等价改写覆盖不了的表达力，

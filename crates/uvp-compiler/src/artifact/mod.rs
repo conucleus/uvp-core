@@ -60,12 +60,7 @@ pub fn compile_zhixu_hook_plan(
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
 
     // Dock：目标接口编译 + 调用方 route 收集 + link。
-    let dock_state = compile_dock_state(
-        &definition,
-        &stage_pairs,
-        dock_targets,
-        allow_unresolved,
-    )?;
+    let dock_state = compile_dock_state(&definition, &stage_pairs, dock_targets, allow_unresolved)?;
 
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_stage_executors(
@@ -154,12 +149,7 @@ pub fn compile_cloud_artifact(
         .map(|entry| entry.stage_identifier.clone())
         .collect::<BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-    let dock_state = compile_dock_state(
-        &definition,
-        &stage_pairs,
-        dock_targets,
-        allow_unresolved,
-    )?;
+    let dock_state = compile_dock_state(&definition, &stage_pairs, dock_targets, allow_unresolved)?;
 
     let mut validation_issues = Vec::new();
     // Cloud and hook_plan are two artifact profiles over the same definition;

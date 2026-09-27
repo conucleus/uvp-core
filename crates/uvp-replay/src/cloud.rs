@@ -76,7 +76,10 @@ pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOu
                 fact.signal_name
             )));
         }
-        facts.push((fact.signal_name.clone(), parse_cloud_time(&fact.arrived_at)?));
+        facts.push((
+            fact.signal_name.clone(),
+            parse_cloud_time(&fact.arrived_at)?,
+        ));
     }
 
     let mut signals: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
@@ -176,10 +179,8 @@ mod tests {
     }
 
     fn iso(seconds_ago: i64) -> String {
-        (Utc::now() - chrono::Duration::seconds(seconds_ago)).to_rfc3339_opts(
-            chrono::SecondsFormat::Millis,
-            true,
-        )
+        (Utc::now() - chrono::Duration::seconds(seconds_ago))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     }
 
     fn walk(hook: &str, facts: &[(&str, String)], now: &str) -> Result<CloudReplayOutcome> {
@@ -205,10 +206,7 @@ mod tests {
         // 负依赖不翻案。
         let outcome = walk(
             READY_FIRST,
-            &[
-                ("a.b.ready", iso(3600)),
-                ("a.b.rejected", iso(1800)),
-            ],
+            &[("a.b.ready", iso(3600)), ("a.b.rejected", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -220,10 +218,7 @@ mod tests {
         // 因果序敏感：同一对事实反序到达，负依赖先到即判 cxl。
         let outcome = walk(
             READY_FIRST,
-            &[
-                ("a.b.rejected", iso(3600)),
-                ("a.b.ready", iso(1800)),
-            ],
+            &[("a.b.rejected", iso(3600)), ("a.b.ready", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -236,10 +231,7 @@ mod tests {
         // 判 ready（终态）→ rejected@-1h 被吸收。
         let outcome = walk(
             HOLD,
-            &[
-                ("a.b.approved", iso(3 * 3600)),
-                ("a.b.rejected", iso(3600)),
-            ],
+            &[("a.b.approved", iso(3 * 3600)), ("a.b.rejected", iso(3600))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -300,10 +292,7 @@ mod tests {
         // 求值——无关名字进日志不改变裁决（每名独立入表）。
         let outcome = walk(
             READY_FIRST,
-            &[
-                ("a.b.ready", iso(3600)),
-                ("a.b.unrelated", iso(1800)),
-            ],
+            &[("a.b.ready", iso(3600)), ("a.b.unrelated", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -327,10 +316,7 @@ mod tests {
         // 以最新锚点收口（与在线事实表每名取最新到达同口径）。
         let outcome = walk(
             "src::a.b.approved + 2h",
-            &[
-                ("a.b.approved", iso(3600)),
-                ("a.b.approved", iso(1800)),
-            ],
+            &[("a.b.approved", iso(3600)), ("a.b.approved", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");

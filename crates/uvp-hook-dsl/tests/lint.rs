@@ -45,7 +45,8 @@ struct InvalidCase {
 }
 
 fn load_corpus() -> LintCorpus {
-    let corpus: LintCorpus = serde_json::from_str(CORPUS).expect("lint corpus fixture should parse");
+    let corpus: LintCorpus =
+        serde_json::from_str(CORPUS).expect("lint corpus fixture should parse");
     // 语料格式版本钉住：文件升版时这里必须先响亮失败（semantics/
     // closed-sets 消费面同款纪律）。
     assert_eq!(
@@ -376,7 +377,12 @@ fn random_expressions_never_panic_in_lint() {
     for iteration in 0..2000 {
         let hook = generate_random_hook(&mut rng);
         let result = std::panic::catch_unwind(|| {
-            lint_hook(Profile::EvmStrict, Gate::Hook, &format!("R{iteration}"), &hook)
+            lint_hook(
+                Profile::EvmStrict,
+                Gate::Hook,
+                &format!("R{iteration}"),
+                &hook,
+            )
         });
         assert!(
             result.is_ok(),

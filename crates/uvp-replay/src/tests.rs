@@ -2715,39 +2715,37 @@ fn admission_not_vocabulary_and_delay_bounds_are_enforced_at_registration() {
 // id 的投影片按"首个匹配"求值会让第二份成为静默死钩子，必须响亮失败。
 #[test]
 fn duplicate_hook_id_in_plan_is_a_structural_error() {
-    let events = vec![
-        json!({
-            "eventName": "PlanRegistered",
-            "blockNumber": 1,
-            "logIndex": 0,
-            "transactionHash": "0x01",
-            "plan": {
-                "planId": "0x01",
-                "zhixuId": "demo",
-                "compiledHooks": [
-                    {
-                        "hookId": "match.exchange#PAIR",
-                        "stageId": "match.exchange",
-                        "stageIdentifier": "match.exchange",
-                        "hookName": "PAIR",
-                        "orderTriggerKind": "mint",
-                        "emitReady": true,
-                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
-                    },
-                    {
-                        "hookId": "match.exchange#PAIR",
-                        "stageId": "match.exchange",
-                        "stageIdentifier": "match.exchange",
-                        "hookName": "PAIR",
-                        "orderTriggerKind": "none",
-                        "emitReady": false,
-                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
-                    }
-                ],
-                "dependencyIndex": { "0x50": ["match.exchange#PAIR"] }
-            }
-        }),
-    ];
+    let events = vec![json!({
+        "eventName": "PlanRegistered",
+        "blockNumber": 1,
+        "logIndex": 0,
+        "transactionHash": "0x01",
+        "plan": {
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "compiledHooks": [
+                {
+                    "hookId": "match.exchange#PAIR",
+                    "stageId": "match.exchange",
+                    "stageIdentifier": "match.exchange",
+                    "hookName": "PAIR",
+                    "orderTriggerKind": "mint",
+                    "emitReady": true,
+                    "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                },
+                {
+                    "hookId": "match.exchange#PAIR",
+                    "stageId": "match.exchange",
+                    "stageIdentifier": "match.exchange",
+                    "hookName": "PAIR",
+                    "orderTriggerKind": "none",
+                    "emitReady": false,
+                    "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                }
+            ],
+            "dependencyIndex": { "0x50": ["match.exchange#PAIR"] }
+        }
+    })];
     let error = replay_chain_events(
         events,
         &ReplayOptions {
@@ -2756,10 +2754,7 @@ fn duplicate_hook_id_in_plan_is_a_structural_error() {
         },
     )
     .unwrap_err();
-    assert!(
-        error.to_string().contains("duplicate hookId"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("duplicate hookId"), "{error}");
 }
 
 // 矛盾流检测：同键订单的第二次 OrderTriggered 携带不同事务哈希时响亮
@@ -2840,9 +2835,7 @@ fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
     )
     .unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("duplicate OrderTriggered"),
+        error.to_string().contains("duplicate OrderTriggered"),
         "{error}"
     );
 }

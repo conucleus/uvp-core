@@ -2315,8 +2315,9 @@ fn admission_self_reference_is_rejected_in_both_targets() {
     for target in ["hook_plan", "cloud"] {
         for header in ["payment", "seller"] {
             let mut definition = target_payment_definition();
-            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
-                json!(format!("{header}::payment_flow.settle.cmp & payment_flow.init.str"));
+            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] = json!(
+                format!("{header}::payment_flow.settle.cmp & payment_flow.init.str")
+            );
             let result = if target == "hook_plan" {
                 compile_zhixu_hook_plan(&definition, None, true)
             } else {
@@ -2338,7 +2339,9 @@ fn admission_self_reference_is_rejected_in_both_targets() {
     let error = compile_zhixu_hook_plan(&definition, None, true)
         .expect_err("a same-named fact under another source class still addresses the declaring signal's fact key");
     assert!(
-        error.to_string().contains("D028 payment_flow.settle.sendSignals[cmp].validWhen"),
+        error
+            .to_string()
+            .contains("D028 payment_flow.settle.sendSignals[cmp].validWhen"),
         "{error}"
     );
 }

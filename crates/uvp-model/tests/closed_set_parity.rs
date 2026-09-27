@@ -36,4 +36,3 @@ fn closed_set_constants_match_the_pinned_corpus() {
         "fileType 闭集与钉死语料分叉：改词表必须同改语料与 TS/Go 镜像"
     );
 }
-

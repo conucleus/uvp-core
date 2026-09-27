@@ -143,10 +143,9 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
     // 匹配"求值会让第二份成为静默死钩子，本应暴露的流异常被吞。
     let mut seen_hook_ids = std::collections::BTreeSet::new();
     for hook in hooks {
-        let hook_id = hook
-            .get("hookId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ReplayError::Message("chain oracle plan hook missing hookId".to_string()))?;
+        let hook_id = hook.get("hookId").and_then(Value::as_str).ok_or_else(|| {
+            ReplayError::Message("chain oracle plan hook missing hookId".to_string())
+        })?;
         if !seen_hook_ids.insert(hook_id) {
             return Err(ReplayError::Message(format!(
                 "chain oracle plan carries duplicate hookId {hook_id}: the contract reverts HookAlreadyRegistered, a plan with duplicate ids is not a contract-reachable state"
