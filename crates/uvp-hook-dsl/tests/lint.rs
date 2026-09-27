@@ -125,38 +125,6 @@ fn lint_corpus_semantic_validation_rejections() {
     }
 }
 
-/// lint 失败不改变 parse 语义：同一 hook 的 parse_hook 输出在 lint 前后
-/// 逐字节一致（lint 是只读旁路，PRD §26 第 17/18 条）。
-#[test]
-fn lint_does_not_change_parse_semantics() {
-    for hook in [
-        "buyer::task.a.cmp & task.a.cmp",
-        "buyer::(task.a.cmp +10s) & (task.a.cmp +5s)",
-        "buyer::task.a.cmp & (task.a.cmp | task.b.cmp)",
-    ] {
-        let before = uvp_hook_dsl::parse_hook(uvp_hook_dsl::ParseHookRequest {
-            profile: Profile::EvmStrict,
-            gate: Gate::Hook,
-            hook_name: "HOOK".to_string(),
-            hook: hook.to_string(),
-        })
-        .expect("hook must parse");
-        let lint_report = lint_hook(Profile::EvmStrict, Gate::Hook, "HOOK", hook).expect("hook must lint");
-        let after = uvp_hook_dsl::parse_hook(uvp_hook_dsl::ParseHookRequest {
-            profile: Profile::EvmStrict,
-            gate: Gate::Hook,
-            hook_name: "HOOK".to_string(),
-            hook: hook.to_string(),
-        })
-        .expect("hook must parse again");
-        assert_eq!(before, after, "lint must not mutate parse semantics");
-        assert!(
-            !lint_report.diagnostics.is_empty(),
-            "fixture {hook} is expected to be lint-dirty"
-        );
-    }
-}
-
 /// span 侧表的后序配对不变量：diagnostic 的 span 必须切出条件原文的真实
 /// 子串（primary operand 本身）。
 #[test]

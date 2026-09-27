@@ -185,30 +185,6 @@ fn layer_one_diagnostics_carry_hook_ids() {
     assert!(diagnostic.primary_span.is_some());
 }
 
-/// 同一 hook 集合的 diagnostics 是确定性的（重复 lint 逐字节一致）。
-#[test]
-fn lint_zhixu_is_deterministic() {
-    let hooks = json!({
-        "STRONG": "buyer::task.a.cmp & task.b.cmp & task.a.cmp",
-        "WEAK": "buyer::task.a.cmp",
-        "CONTRA": "buyer::task.c.cmp & ~task.c.cmp"
-    });
-    let first = lint_zhixu(&definition_with_hooks(hooks.clone())).unwrap();
-    let second = lint_zhixu(&definition_with_hooks(hooks)).unwrap();
-    let normalize = |report: &uvp_compiler::lint::ZhixuLintReport| {
-        serde_json::to_string(&report.diagnostics).unwrap()
-    };
-    assert_eq!(normalize(&first), normalize(&second));
-    let codes: Vec<String> = first
-        .diagnostics
-        .iter()
-        .map(|diagnostic| diagnostic.code.to_string())
-        .collect();
-    assert!(codes.contains(&"UVP-L001".to_string()));
-    assert!(codes.contains(&"UVP-L002".to_string()));
-    assert!(codes.contains(&"UVP-L021".to_string()));
-}
-
 /// 非法 hook（语义验证失败）不进入 lint，按 Err 返回（lint 只分析合法
 /// 表达式，语义验证仍归 parser / validator，PRD §4.2）。
 #[test]

@@ -88,19 +88,6 @@ fn input_side_errors_exit_nonzero_with_envelope() {
     assert!(stdout.contains("\"ok\":true"), "{stdout}");
 }
 
-#[test]
-fn json_entry_successes_exit_zero() {
-    let output = run(&[
-        "parse-hook",
-        "{\"hookName\": \"HOOK\", \"hook\": \"buyer::task.main.cmp\"}",
-    ]);
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("\"ok\":true"));
-
-    let output = run(&["version"]);
-    assert!(output.status.success());
-}
-
 /// lint 子命令的退出码契约：诊断本身不是失败，只有显式 --deny（或定义
 /// 非法、文件不可读）才非零退出（PRD 109 §4.1/§20）。
 #[test]

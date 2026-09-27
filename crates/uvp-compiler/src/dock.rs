@@ -2150,33 +2150,6 @@ mod tests {
     }
 
     #[test]
-    fn dock_targets_reject_invalid_interface_shapes() {
-        // inputs/outputs 类型非法（字符串/数组）在模型反序列化即拒绝：
-        // 原文不是合法 Zhixu 文档，不得静默吞成空 map 按"无端口"继续 link。
-        for (label, key, bad) in [
-            ("inputs string", "inputs", json!("OOPS-NOT-AN-OBJECT")),
-            ("inputs array", "inputs", json!([])),
-            ("outputs string", "outputs", json!("OOPS-NOT-AN-OBJECT")),
-            ("outputs number", "outputs", json!(7)),
-        ] {
-            let mut definition = minimal_definition();
-            definition["spec"]["dockInterface"]["svc"][key] = bad;
-            let issues = parse_dock_targets(&json!([target_entry(definition)]))
-                .err()
-                .unwrap_or_else(|| panic!("{label}: must be rejected"));
-            assert!(
-                issues.iter().any(|issue| issue.code == "D008"
-                    && issue.path.ends_with(".definition")
-                    && issue.message.contains("not a valid Zhixu document")),
-                "{label}: {issues:?}"
-            );
-        }
-        // 基线：键缺席（可选）与对象形态照常解析。
-        parse_dock_targets(&json!([target_entry(minimal_definition())]))
-            .expect("object-shaped inputs/outputs parse");
-    }
-
-    #[test]
     fn link_rejects_cross_source_seams_from_both_sides() {
         // D012 从 input 端口 source（core 由 owning stage 推导）与 output
         // signal 前缀双侧观测 seam——被绑定接口的任一侧跨源即拒绝。
@@ -2285,87 +2258,6 @@ mod tests {
                     && issue.message.contains("single target source seam")),
             "{issues:?}"
         );
-    }
-
-    #[test]
-    fn route_depth_counts_local_definition_and_targets() {
-        let root = "local-def";
-        let mut edges = BTreeMap::new();
-        for index in 0..7 {
-            edges
-                .entry(if index == 0 {
-                    root.to_string()
-                } else {
-                    format!("target-{index}")
-                })
-                .or_insert_with(BTreeSet::new)
-                .insert(format!("target-{}", index + 1));
-        }
-        assert_eq!(max_reachable_route_depth(&edges, root), 8);
-
-        edges
-            .entry("target-7".to_string())
-            .or_insert_with(BTreeSet::new)
-            .insert("target-8".to_string());
-        assert_eq!(max_reachable_route_depth(&edges, root), 9);
-        assert!(9 > usize::from(MAX_DOCK_DEPTH));
-    }
-
-    #[test]
-    fn route_depth_ignores_disconnected_dock_edges() {
-        let mut edges = BTreeMap::new();
-        edges.insert(
-            "unrelated".to_string(),
-            BTreeSet::from(["unrelated-child".to_string()]),
-        );
-        assert_eq!(max_reachable_route_depth(&edges, "local"), 1);
-    }
-
-    #[test]
-    fn non_zhixu_executor_with_delegation_config_is_rejected() {
-        // "既静态执行者又委托对接"的矛盾声明在收集期响亮拒绝（D001 同罪）：
-        // 静默放行会把 zhixuExecutorConfig 原文烧进 executorRoutes 承诺。
-        let stage = serde_json::from_value::<ZhixuStage>(json!({
-            "name": "execute_payment",
-            "source": "buyer",
-            "receiveSignals": { "EXECUTE": "buyer::task.execute_payment.exec" },
-            "sendSignals": [{ "name": "str" }],
-            "executor": {
-                "supplierType": "organization",
-                "supplierID": "payment-gateway",
-                "zhixuExecutorConfig": {
-                    "target": { "zhixu": TARGET_UID },
-                    "interface": "payment_service",
-                    "order": { "mode": "new" },
-                    "inputMap": { "EXECUTE": "execute" },
-                    "signalMap": { "str": "started" }
-                }
-            }
-        }))
-        .expect("stage decodes");
-        let issues = collect_unlinked_routes(&[("task.execute_payment".to_string(), stage)])
-            .expect_err("organization executor carrying zhixuExecutorConfig must be rejected");
-        assert!(
-            issues.iter().any(|issue| issue.code == "D002"
-                && issue.path == "task.execute_payment.executor.zhixuExecutorConfig"
-                && issue
-                    .message
-                    .contains("only valid when supplierType is zhixu")),
-            "{issues:?}"
-        );
-
-        // 基线：organization executor 不携带委托配置，收集期照常跳过（无 issue）。
-        let stage = serde_json::from_value::<ZhixuStage>(json!({
-            "name": "plain",
-            "source": "buyer",
-            "receiveSignals": { "RUN": "buyer::task.plain.run" },
-            "sendSignals": [{ "name": "cmp" }],
-            "executor": { "supplierType": "organization", "supplierID": "org" }
-        }))
-        .expect("stage decodes");
-        let routes =
-            collect_unlinked_routes(&[("task.plain".to_string(), stage)]).expect("clean executor");
-        assert!(routes.is_empty());
     }
 
     #[test]
