@@ -14,6 +14,8 @@ concurrency:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    # 无人值守面的挂死兜底；rust 面含冷启动 cargo 构建，预算高于常规门。
+    timeout-minutes: 60
     env:
       # 约束注册表单源在 uvp-protocol 仓，独立 checkout 的 CI 按环境变量取文件
       UVP_CONSTRAINTS_PATH: ${{ github.workspace }}/uvp-protocol/protocol/uvp-constraints.v1.json
@@ -40,6 +42,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # 无人值守面的挂死兜底。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
