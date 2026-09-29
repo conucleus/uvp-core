@@ -23,9 +23,6 @@ fn or_combination_keeps_earliest_anchor() {
 
 #[test]
 fn or_ready_winner_keeps_own_anchor_without_waiting_branch() {
-    // ready×wait 混合时，等待分支的陈旧锚点不得参与归约——就绪胜者
-    // 自带计时器（对齐 hook-dsl Expr::Or 与合约 _orValue）：归约结果
-    // 的 due 取就绪分支自身的计时，不取双分支 due 的较早者。
     let ready = EvalValue {
         value: true,
         wait: false,
@@ -51,7 +48,6 @@ fn or_ready_winner_keeps_own_anchor_without_waiting_branch() {
 
 #[test]
 fn rejects_unknown_instruction() {
-    // 未知指令一律 unsupported：求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY）。
     let instructions = vec![
         json!({"op": "SIGNAL", "signalKey": "0xaa"}),
         json!({"op": "SIGNAL", "signalKey": "0xbb"}),
@@ -70,9 +66,6 @@ fn rejects_unknown_instruction() {
 
 #[test]
 fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
-    // 负向 golden：手工 plan 携带指令集外的扇入指令时，回放整体以错误收场
-    // （envelope ok:false），不产出"部分观察 + mismatch"的软化报告——
-    // 与合约 commitPlan 注册边界的响亮拒绝同口径。
     let retired_op = concat!("MER", "GE");
     let events = vec![
         json!({
@@ -142,9 +135,6 @@ fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
 
 #[test]
 fn ready_status_changes_and_duplicates_are_absorbed() {
-    // 真实事件流：合约对 →Ready 先发 HookStatusChanged(ready) 再发
-    // HookReady；逐字重复的 wait 状态变更被吸收——两者都不得产生
-    // missing-observed 假阳性。
     let events = vec![
         json!({
             "eventName": "PlanRegistered",
@@ -246,8 +236,6 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
         },
     )
     .unwrap();
-    // ready 状态变更被裁剪、重复 wait 被吸收：expected 只剩 HookReady 与
-    // 首条 wait。
     let expected = result["expected"].as_array().unwrap();
     assert_eq!(expected.len(), 2, "expected: {expected:?}");
     assert_eq!(expected[0]["eventName"], "HookReady");
@@ -257,11 +245,6 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
 
 #[test]
 fn ordinary_signals_do_not_advance_order_trigger_hooks() {
-    // 镜像合约 _evaluateAffectedHooks 的 evaluateOrderTriggerHooks 出生
-    // 求值范围：order-trigger（mint/dock）hook 只在出生事务内求值。订单
-    // 由事实 K1 出生（首条信号 = 出生通道，H1 照常 Ready）；随后普通提
-    // 交另一出生线事实 K2——链上已不再对 H2 求值，oracle 若仍推 H2
-    // Ready 会产出凭空 observed（阶段也被错误物化）。
     let plan = json!({
         "planId": "0x01",
         "zhixuId": "demo",
@@ -308,7 +291,6 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
             "orderId": "order-x",
             "registeredAt": "2026-04-27T00:00:00.000Z"
         }),
-        // 出生事务：首条信号是出生事实，H1 求值照常（出生通道）。
         json!({
             "eventName": "SignalSubmitted",
             "blockNumber": 3,
@@ -335,8 +317,6 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
             "stageIdentifier": "birth.one",
             "hookName": "ENTER"
         }),
-        // 普通事务：K2 是另一条出生线的事实。链上跳过 H2，不发任何
-        // 观察——oracle 也不得推 H2。
         json!({
             "eventName": "SignalSubmitted",
             "blockNumber": 4,
@@ -374,11 +354,6 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
 
 #[test]
 fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
-    // 合约 _evaluateHook 对 wait→wait 仅 dueAt 变化也重复发
-    // HookStatusChanged（previousDueAt != nextDueAt 即发）：OR 最早到期
-    // 分支后到会把 due 前移。expected 吸收门只吸收"同 status 同 dueAt"
-    // 的重复，observed 在 dueAt 变化时照常重发——两条 wait 观察按到达
-    // 序配对，不得误报 semantic-mismatch。
     let plan = json!({
         "planId": "0x01",
         "zhixuId": "demo",
@@ -455,8 +430,6 @@ fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
             "status": "wait",
             "dueAt": "2026-04-27T00:00:30.000Z"
         }),
-        // 第二条事实在 00:00:10 到达：OR 最早到期前移到 00:00:15——
-        // 仅 dueAt 变化，合约重复发 wait 观察。
         json!({
             "eventName": "SignalSubmitted",
             "blockNumber": 5,
@@ -504,8 +477,6 @@ fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
 
 #[test]
 fn poke_before_due_or_not_waiting_is_skipped() {
-    // 对齐合约 pokeTimer：非 wait / 未到期的 poke 直接跳过，不产生
-    // unexpected-observed 假阳性；到期后重评照常发生。
     let events = vec![
         json!({
             "eventName": "PlanRegistered",
@@ -630,8 +601,6 @@ fn poke_before_due_or_not_waiting_is_skipped() {
     )
     .unwrap();
     let observed = result["observed"].as_array().unwrap();
-    // 首次观察是 wait（信号到达），未到期 poke 不产生任何观察，到期
-    // poke 产生 HookReady——共两条。
     assert_eq!(observed.len(), 2, "observed: {observed:?}");
     assert_eq!(observed[0]["eventName"], "HookStatusChanged");
     assert_eq!(observed[0]["status"], "wait");
@@ -817,8 +786,6 @@ fn emit_ready_is_independent_from_order_materialization() {
 
 #[test]
 fn stage_materialized_event_backfills_materialization() {
-    // StageMaterialized 事件被消费：链上物化事实回填 oracle 状态，后续
-    // 依赖该阶段的 watcher 求值据此放行。
     let events = vec![
         json!({
             "eventName": "PlanRegistered",
@@ -894,8 +861,6 @@ fn stage_materialized_event_backfills_materialization() {
 
 #[test]
 fn hooks_missing_required_v2_fields_are_rejected() {
-    // fail-closed：缺失 v2 必需字段（orderTriggerKind / emitReady）即
-    // 结构性错误，不做隐式回退。
     let mut order = OracleOrderState {
         zhixu_id: "demo".to_string(),
         order_id: "order-1".to_string(),
@@ -1012,8 +977,6 @@ fn replay_scopes_same_order_id_by_plan() {
 
 #[test]
 fn replay_options_rejects_unknown_fields() {
-    // options 与外层信封同口径拒绝未知字段：拼错的键不得被静默吞成
-    // 缺省语义。
     let output = replay_json(r#"{"events": [], "options": {"strick": false}}"#);
     let envelope: Value = serde_json::from_str(&output).expect("envelope");
     assert_eq!(envelope["ok"], json!(false), "{output}");
@@ -1026,7 +989,6 @@ fn replay_options_rejects_unknown_fields() {
     );
 }
 
-/// 单 mint trigger hook 的最小 plan（按需复用的探针基底）。
 fn single_hook_plan(hook_id: &str, instructions: Value) -> Value {
     json!({
         "planId": "0x01",
@@ -1046,9 +1008,6 @@ fn single_hook_plan(hook_id: &str, instructions: Value) -> Value {
 
 #[test]
 fn wait_due_at_compares_by_instant_not_rendering() {
-    // dueAt 归一化：链上观察携带无毫秒渲染（…:10Z），oracle 产出毫秒
-    // 渲染（…:10.000Z）——同一时刻不得误报 semantic-mismatch；时刻
-    // 不同（…:11Z）必须照常 mismatch。
     let plan = single_hook_plan(
         "flow.start#TIMEOUT",
         json!([
@@ -1056,8 +1015,6 @@ fn wait_due_at_compares_by_instant_not_rendering() {
             { "op": "DELAY", "delaySeconds": 10 }
         ]),
     );
-    // mint trigger 禁 DELAY（合约编码门）——把探针改成 none/emitReady
-    // 的 watcher 形态，避免把测试载体做成不可注册的 plan。
     let plan = {
         let mut plan = plan;
         plan["compiledHooks"][0]["orderTriggerKind"] = json!("none");
@@ -1133,7 +1090,6 @@ fn wait_due_at_compares_by_instant_not_rendering() {
         result["mismatches"]
     );
 
-    // 同一时刻的重复 wait 观察（不同渲染）被吸收：expected 只留一条。
     let mut events = base_events.clone();
     for due_at in ["2026-04-27T00:00:10Z", "2026-04-27T00:00:10.000Z"] {
         events.push(json!({
@@ -1159,7 +1115,6 @@ fn wait_due_at_compares_by_instant_not_rendering() {
     .unwrap();
     assert_eq!(result["expected"].as_array().map(Vec::len), Some(1));
 
-    // 时刻不同：照常 semantic-mismatch。
     let mut events = base_events;
     events.push(json!({
         "eventName": "HookStatusChanged",
@@ -1188,10 +1143,6 @@ fn wait_due_at_compares_by_instant_not_rendering() {
 
 #[test]
 fn observations_pair_per_hook_key_not_global_index() {
-    // 配对契约：expected/observed 按 (planId, orderId, hookId) 分桶配对。
-    // 两订单的 HookReady 到达序与 oracle 推导序相反（链上 order-2 的
-    // 就绪先落块）——全局下标配对会误报 2 条 semantic-mismatch，
-    // 分桶配对 0 条。
     let plan = single_hook_plan(
         "flow.start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -1229,7 +1180,6 @@ fn observations_pair_per_hook_key_not_global_index() {
             "submittedAt": "2026-04-27T00:00:00.000Z"
         }));
     }
-    // 链上 HookReady 与 oracle 推导序相反：order-2 的先到。
     for (index, order_id) in [(0, "order-2"), (1, "order-1")] {
         events.push(json!({
             "eventName": "HookReady",
@@ -1264,9 +1214,6 @@ fn observations_pair_per_hook_key_not_global_index() {
 
 #[test]
 fn case_distinct_hook_ids_stay_separate() {
-    // 编译器身份大小写敏感（Main/main 两个 stage 合法共存），回放侧
-    // 分桶与逐字段比较同口径字节精确：仅大小写不同的 hookId 是两个
-    // 独立实体，不得折叠进同一桶或互相配对。
     let upper = json!({
         "eventName": "HookReady",
         "planId": "0x01",
@@ -1289,9 +1236,6 @@ fn case_distinct_hook_ids_stay_separate() {
 
 #[test]
 fn init_status_changes_are_trimmed() {
-    // 合约不产出 HookStatusChanged(status=init)（Init 是隐含初值，
-    // 无观察语义）：携带该状态的输入事件被裁剪，不产生 expected、
-    // 不参与比对——原生入口可直接喂，无需适配层预裁。
     let plan = single_hook_plan(
         "flow.start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -1395,10 +1339,6 @@ fn init_status_changes_are_trimmed() {
 
 #[test]
 fn per_key_hook_ids_evaluate_triggers_before_watchers_in_stable_order() {
-    // 与合约 _evaluateAffectedHooks 的两遍扫描等值：同一事实键的
-    // hookIds 先按 index 序扫 order-trigger，再按 index 序扫普通
-    // watcher——stable 分区（W1, T, W2 → T, W1, W2），不是稳定排序
-    // 之外的任意重排。
     let plan = json!({
         "planId": "0x01",
         "zhixuId": "demo",
@@ -1470,9 +1410,6 @@ fn per_key_hook_ids_evaluate_triggers_before_watchers_in_stable_order() {
 
 #[test]
 fn order_link_birth_requires_structural_hook_fields() {
-    // mint 出生推导对 stageId/stageIdentifier/hookName 缺失响亮失败
-    // （与 evaluate_hook 对 stageId 的 ? 门口径一致）：unwrap_or_default
-    // 会把缺失吞成空串并物化 "" 键——畸形 plan 的链上断言被静默接受。
     let events = vec![
         json!({
             "eventName": "PlanRegistered",
@@ -1483,7 +1420,6 @@ fn order_link_birth_requires_structural_hook_fields() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    // stageId 缺失：其余结构字段在场，推导门必须报错。
                     "hookId": "linked.entry#BIRTH",
                     "stageIdentifier": "linked.entry",
                     "hookName": "BIRTH",
@@ -1530,7 +1466,6 @@ fn order_link_birth_requires_structural_hook_fields() {
         "missing stageId must fail loudly, got: {error}"
     );
 
-    // stageIdentifier 缺失同口径。
     let mut events = events;
     events[0]["plan"]["compiledHooks"][0]
         .as_object_mut()
@@ -1558,10 +1493,6 @@ fn order_link_birth_requires_structural_hook_fields() {
 
 #[test]
 fn order_trigger_hook_with_delay_is_a_structural_error() {
-    // 合约注册门镜像：order-trigger（mint/dock）hook 携 DELAY 在
-    // commitPlan 即 revert InvalidInstruction（出生事实与订单创建同笔
-    // 交易，Delay 必得 Wait，出生路径永久 InvalidTriggerHook）——链上
-    // 不可注册的 plan 形态在回放输入里即结构性错误，不产软化 mismatch。
     for kind in ["mint", "dock"] {
         let events = vec![json!({
             "eventName": "PlanRegistered",
@@ -1601,8 +1532,6 @@ fn order_trigger_hook_with_delay_is_a_structural_error() {
         );
     }
 
-    // 基线：同指令集在 watcher（none）上合法——门只镜像 order-trigger
-    // 的合约约束，不扩大到非 trigger hook。
     let events = vec![json!({
         "eventName": "PlanRegistered",
         "blockNumber": 1,
@@ -1638,9 +1567,6 @@ fn order_trigger_hook_with_delay_is_a_structural_error() {
 
 #[test]
 fn epoch_zero_submission_is_a_real_anchor_for_delay() {
-    // 显式 Option 锚点：epoch 0（1970-01-01T00:00:00Z）提交的事实是
-    // 真实锚点，DELAY 不再误报"结构性错误"，照常产出 wait 观察；
-    // 无锚伪就绪（NOT(缺席信号)）依旧被拒。
     let mut order = OracleOrderState::default();
     order.signals.insert(
         "0x50".to_string(),
@@ -1653,7 +1579,6 @@ fn epoch_zero_submission_is_a_real_anchor_for_delay() {
     assert!(delayed.wait);
     assert_eq!(delayed.due_at, Some(10));
 
-    // 无锚伪就绪 + DELAY：结构性错误照旧（哨兵区分不改变该拒绝面）。
     let not_ready = not_value(false_value());
     assert!(not_ready.value);
     assert_eq!(not_ready.anchor_at, None);
@@ -1678,9 +1603,6 @@ fn order_with_signals(signals: &[(&str, &str)]) -> OracleOrderState {
 
 #[test]
 fn or_winner_carries_its_own_expiry_verbatim() {
-    // 嵌套 Or 内 And 含衰减（唯一能携带有效期的合法 Or 形态）：获胜分支
-    // 的衰减有效期原样上浮，不跨分支取 min（合约 _orValue 的 leftWins
-    // 载荷选择同形）。
     let instructions = vec![
         json!({"op": "SIGNAL", "signalKey": "0x50"}),
         json!({"op": "SIGNAL", "signalKey": "0x51"}),
@@ -1715,10 +1637,6 @@ fn or_winner_carries_its_own_expiry_verbatim() {
 
 #[test]
 fn decaying_veto_positions_are_rejected_at_registration() {
-    // 位置规则镜像（合约 _validateHook 的 vetoTerm/vetoInside 双闸）：
-    // 否决位唯一合法位置是合取直接子项——根位、Or 子项、Delay 操作数
-    // 内（任意深度）一律拒绝；合法形态（And 直接子项、嵌套 Or 内 And
-    // 含衰减）注册放行。
     let veto_root = watcher_plan(
         "flow.pay#VETO_ROOT",
         json!([
@@ -1767,8 +1685,6 @@ fn decaying_veto_positions_are_rejected_at_registration() {
         "{error}"
     );
 
-    // Delay 操作数内（任意深度）：外层延时锚在已过期的否决上会静默
-    // 放行——衰减与成熟永久的语义冲突在注册边界封死。
     let veto_in_delay = watcher_plan(
         "flow.pay#VETO_DELAY",
         json!([
@@ -1795,8 +1711,6 @@ fn decaying_veto_positions_are_rejected_at_registration() {
         "{error}"
     );
 
-    // 双重否定：内层 NOT 消费掉 DELAY 产出后，外层 NOT 的操作数既非裸
-    // SIGNAL 也非 DELAY 产出——词表闸拒绝。
     let double_negation = watcher_plan(
         "flow.pay#VETO_NOT",
         json!([
@@ -1821,7 +1735,6 @@ fn decaying_veto_positions_are_rejected_at_registration() {
         "{error}"
     );
 
-    // 合法形态对照：And 直接子项（依赖索引逐点镜像）注册放行。
     let mut legal = watcher_plan(
         "flow.pay#VETO",
         json!([
@@ -1845,9 +1758,6 @@ fn decaying_veto_positions_are_rejected_at_registration() {
 
 #[test]
 fn non_positive_delay_seconds_is_rejected_at_replay_decode() {
-    // 回放解码镜像合约注册门（delaySeconds == 0 revert
-    // InvalidInstruction）与在线入口（uvp-hook-dsl 解码层 positive 门）：
-    // 手工 plan 的 0 值延时恒等、负值回拨锚点，都是确定性非法输入。
     let anchored = EvalValue {
         value: true,
         wait: false,
@@ -1864,8 +1774,6 @@ fn non_positive_delay_seconds_is_rejected_at_replay_decode() {
             "delaySeconds={delay_seconds}: {error}"
         );
     }
-    // 指令流入口同口径：SIGNAL + DELAY(0) 在 evaluate_instructions
-    // 响亮失败，不产出"恒等延时"的观察。
     let instructions = vec![
         json!({"op": "SIGNAL", "signalKey": "0x50"}),
         json!({"op": "DELAY", "delaySeconds": 0}),
@@ -1886,10 +1794,6 @@ fn non_positive_delay_seconds_is_rejected_at_replay_decode() {
 
 #[test]
 fn epoch_zero_due_is_persisted_and_poke_eligible() {
-    // due_at 的显式存在性口径：epoch 0 的等待期限必须照常渲染并让
-    // poke 资格闸放行——旧 0 哨兵把 due 折成 None，等待行永久脱离
-    // poke 认领。锚点取 1969-12-31T23:59:55Z + 5s 延时 → due 恰为
-    // epoch 0。
     let events = vec![
         json!({
             "eventName": "PlanRegistered",
@@ -1988,14 +1892,12 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
         "epoch-0 due must replay without mismatch: {}",
         result["mismatches"]
     );
-    // wait 观察携带渲染后的 epoch-0 dueAt（不是缺席）。
     let observed = result["observed"].as_array().unwrap();
     let wait = observed
         .iter()
         .find(|item| item["status"] == "wait")
         .expect("wait observation with the epoch-0 dueAt");
     assert_eq!(wait["dueAt"], "1970-01-01T00:00:00.000Z");
-    // epoch 0 的 poke 合资格：重评后就绪。
     assert!(
         observed.iter().any(|item| item["eventName"] == "HookReady"),
         "poke at epoch 0 must make the hook ready: {observed:?}"
@@ -2004,12 +1906,6 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
     assert_eq!(order["hookStatuses"]["flow.start#WAIT"]["status"], "ready");
 }
 
-// ------------------------------------------------------------------
-// 链上注册门镜像（30d 上限 / 根正锚 / NOT 裸操作数 / 深度 120）、
-// 重复 OrderRegistered 吸收、非整数 blockNumber、dueAt 渲染响亮失败。
-// ------------------------------------------------------------------
-
-/// 单 watcher 钩子的最小 plan（注册门探针基底：orderTriggerKind=none）。
 fn watcher_plan(hook_id: &str, instructions: Value) -> Value {
     json!({
         "planId": "0x01",
@@ -2039,9 +1935,6 @@ fn plan_registered_event(plan: Value) -> Value {
 
 #[test]
 fn delay_cap_30d_is_enforced_at_registration() {
-    // 合约 MAX_HOOK_DELAY_SECONDS = 30 days = 2592000s：超限在 commitPlan
-    // 即 revert HookDelayTooLong——"合约不可能的 plan"在回放注册门响亮
-    // 失败，不产出远期 wait 的软化观察。
     let over = watcher_plan(
         "flow.pay#TIMEOUT",
         json!([
@@ -2064,7 +1957,6 @@ fn delay_cap_30d_is_enforced_at_registration() {
         "{error}"
     );
 
-    // 边界值 2592000 恰在限内：注册放行。
     let at_limit = watcher_plan(
         "flow.pay#TIMEOUT",
         json!([
@@ -2084,8 +1976,6 @@ fn delay_cap_30d_is_enforced_at_registration() {
 
 #[test]
 fn root_without_positive_anchor_is_rejected_at_registration() {
-    // 纯否定条件（~A）：value=true 时 anchorAt 无源，合约注册边界按
-    // hasPosAnchor[0] 拒绝——镜像同口径。
     let plan = watcher_plan(
         "flow.pay#GUARD",
         json!([
@@ -2111,9 +2001,6 @@ fn root_without_positive_anchor_is_rejected_at_registration() {
 
 #[test]
 fn instruction_depth_cap_120_is_enforced_at_registration() {
-    // 深度闸镜像 MAX_PARSE_DEPTH=120 / Go MaxASTDepth=120：逐槽计数
-    // （SIGNAL=0，组合=操作数最大深度+1）。121 层嵌套超限拒绝，120 层
-    // 恰在限内。
     let nested_and_plan = |levels: usize| {
         let mut instructions = vec![json!({ "op": "SIGNAL", "signalKey": "0x50" })];
         for _ in 0..levels {
@@ -2148,11 +2035,6 @@ fn instruction_depth_cap_120_is_enforced_at_registration() {
 
 #[test]
 fn dependency_index_key_mismatch_is_rejected_at_registration() {
-    // 绕过形态：instructions 全合法（SIGNAL 原子可求值、根含正锚），但
-    // dependencyIndex 用不匹配的键挂该 hook。oracle 的求值范围由
-    // dependencyIndex 反查决定——指令轨与索引错位时事件流回放产出零观察，
-    // observed/mismatches 全 0 仍 ok:true（空洞假 PASS）。镜像合约
-    // HookDependencyKeyMismatch 门，注册期响亮失败。
     let mut wrong_key = watcher_plan(
         "flow.pay#TIMEOUT",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2177,8 +2059,6 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
         "{error}"
     );
 
-    // 反向错位：SIGNAL 原子不在索引内——该事实到达永不触发求值，hook
-    // 永久 Init 且零告警，同样必须响亮失败。
     let mut unindexed = watcher_plan(
         "flow.pay#TIMEOUT",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2203,8 +2083,6 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
         "{error}"
     );
 
-    // dependencyIndex 整体缺失：求值范围反查恒为空，一切信号零观察——
-    // "合约不可能的 plan"（注册必然写入索引），按结构错误拒绝。
     let mut missing_index = watcher_plan(
         "flow.pay#TIMEOUT",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2226,8 +2104,6 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
         "{error}"
     );
 
-    // 对照：指令原子键与索引逐点一致的 plan 照常注册（watcher_plan 基底
-    // 即该形态）。
     replay_chain_events(
         vec![plan_registered_event(watcher_plan(
             "flow.pay#TIMEOUT",
@@ -2243,10 +2119,6 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
 
 #[test]
 fn silent_order_trigger_is_rejected_at_registration() {
-    // 镜像合约 SilentOrderTriggerHook 门：order-trigger hook 必须携带
-    // emitReady。沉默 trigger 物化阶段但不发 HookReady——该形态会让
-    // oracle 的 expected 观察与链上事件流系统性分叉，注册边界拒绝，
-    // 不留到求值期。
     let mut silent = single_hook_plan(
         "flow.start#TRIGGER",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2271,8 +2143,6 @@ fn silent_order_trigger_is_rejected_at_registration() {
         "{error}"
     );
 
-    // 对照：非 trigger 的沉默 watcher（emitReady=false）合法——物化门由
-    // 阶段物化状态承担，不发 HookReady 是其正常形态。
     let mut silent_watcher = watcher_plan(
         "flow.pay#WATCH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2290,9 +2160,6 @@ fn silent_order_trigger_is_rejected_at_registration() {
 
 #[test]
 fn duplicate_order_registered_is_absorbed_without_resetting_state() {
-    // 合约对重复注册 revert OrderAlreadyRegistered：订单在链上恰注册一次，
-    // 事件流中的重复 OrderRegistered 是投影重放——吸收并保留已积累状态，
-    // 不得清空重放（清空会把已验证的出生事实吞成空洞）。
     let plan = single_hook_plan(
         "flow.start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2336,7 +2203,6 @@ fn duplicate_order_registered_is_absorbed_without_resetting_state() {
             "hookName": "START"
         }),
     ];
-    // 重发的 OrderRegistered（同键同身份）落在事实之后。
     events.push(json!({
         "eventName": "OrderRegistered",
         "blockNumber": 4,
@@ -2364,7 +2230,6 @@ fn duplicate_order_registered_is_absorbed_without_resetting_state() {
     );
     assert_eq!(order["hookStatuses"]["flow.start#BIRTH"]["status"], "ready");
 
-    // 同键不同 zhixu：身份矛盾的事件流，响亮失败。
     let plan = single_hook_plan(
         "flow.start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2408,8 +2273,6 @@ fn duplicate_order_registered_is_absorbed_without_resetting_state() {
 
 #[test]
 fn non_integer_block_number_fails_loudly_at_sorting() {
-    // 排序键非整数（字符串/浮点/缺失）不得折 0 静默重排：排序前响亮
-    // 报错，保住事件流的因果序判定。
     let plan = single_hook_plan(
         "flow.start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2433,7 +2296,6 @@ fn non_integer_block_number_fails_loudly_at_sorting() {
             "{error}"
         );
     }
-    // 缺失字段同口径（value_i64 对缺失报 must be an integer）。
     let mut event = plan_registered_event(plan);
     event.as_object_mut().unwrap().remove("blockNumber");
     let error = replay_chain_events(
@@ -2448,7 +2310,6 @@ fn non_integer_block_number_fails_loudly_at_sorting() {
         error.to_string().contains("blockNumber must be an integer"),
         "{error}"
     );
-    // sort=false 时不消费排序键，非整数不在此门（调用方自报因果序）。
     let plan = single_hook_plan(
         "flow.start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
@@ -2467,8 +2328,6 @@ fn non_integer_block_number_fails_loudly_at_sorting() {
 
 #[test]
 fn unrenderable_due_at_fails_loudly_instead_of_folding_to_permanent_wait() {
-    // 渲染失败折 None 会把等待行变成无期限永久 wait（poke 资格闸按存在性
-    // 判永不合资格）——确定性毒输入响亮失败。
     let error = render_due_at(8_210_866_176_000).unwrap_err();
     assert!(
         error
@@ -2476,22 +2335,11 @@ fn unrenderable_due_at_fails_loudly_instead_of_folding_to_permanent_wait() {
             .contains("refusing to fold to an undated permanent wait"),
         "{error}"
     );
-    // epoch 0 是真实期限，照常渲染（既有口径不回退）。
     assert_eq!(render_due_at(0).unwrap(), "1970-01-01T00:00:00.000Z");
 }
 
-// ------------------------------------------------------------------
-// Rust 编译产物（无指令轨）直连回放的空洞 PASS 断层。
-// ------------------------------------------------------------------
-
 #[test]
 fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
-    // Rust 编译产物（uvp-core hook_plan）不携带 instructions（指令轨归
-    // TS 编译器），dependencyIndex 的键也是 source::task.stage.signal 而
-    // 非链上 signalKey——直连回放时链上信号找不到可求值钩子，旧行为是
-    // observed=0/expected=0/mismatches=0 的空洞 PASS。注册门按合约
-    // InvalidHook 同口径要求每个钩子携带非空 instructions，断层在
-    // PlanRegistered 即响亮失败。
     let rust_shaped_plan = json!({
         "planId": "0x01",
         "zhixuId": "demo",
@@ -2548,7 +2396,6 @@ fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
         "{message}"
     );
 
-    // 空指令数组同罪（合约 InvalidHook：instructions.length == 0）。
     let empty_track = json!({
         "planId": "0x01",
         "zhixuId": "demo",
@@ -2577,12 +2424,6 @@ fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
     );
 }
 
-// ------------------------------------------------------------------
-// 适格面注册门镜像（_validateAdmission）：过滤档——无正锚、否决位
-// 位置放开；词表/时长/栈形态保留。
-// ------------------------------------------------------------------
-
-/// 带 admissions 数组的单 watcher plan（适格面注册门探针基底）。
 fn admission_plan(admissions: Value) -> Value {
     let mut plan = watcher_plan(
         "flow.pay#OBSERVE",
@@ -2605,9 +2446,6 @@ fn admission_entry(label: &str, instructions: Value) -> Value {
 
 #[test]
 fn admission_decaying_veto_positions_register_under_the_filter_gate() {
-    // 适格一拍求值、不参与调度：钩子档拒绝的三类否决位位置（根/Or 子项/
-    // Delay 操作数内）在适格面注册放行——镜像合约 _validateAdmission 对
-    // _validateHook 的差异面。
     let admissions = json!([
         admission_entry(
             "root_veto",
@@ -2658,8 +2496,6 @@ fn admission_decaying_veto_positions_register_under_the_filter_gate() {
 
 #[test]
 fn admission_not_vocabulary_and_delay_bounds_are_enforced_at_registration() {
-    // 保留闸：NOT 操作数仅裸 SIGNAL 或 DELAY 产出（组合否定拒绝）、
-    // DELAY 时长恒正且 ≤30d——两档同守的结构词表。
     let composite_not = admission_plan(json!([admission_entry(
         "cmp",
         json!([
@@ -2711,8 +2547,6 @@ fn admission_not_vocabulary_and_delay_bounds_are_enforced_at_registration() {
     }
 }
 
-// 注册门镜像补全：hookId 唯一性（合约 HookAlreadyRegistered）——重复
-// id 的投影片按"首个匹配"求值会让第二份成为静默死钩子，必须响亮失败。
 #[test]
 fn duplicate_hook_id_in_plan_is_a_structural_error() {
     let events = vec![json!({
@@ -2757,8 +2591,6 @@ fn duplicate_hook_id_in_plan_is_a_structural_error() {
     assert!(error.to_string().contains("duplicate hookId"), "{error}");
 }
 
-// 矛盾流检测：同键订单的第二次 OrderTriggered 携带不同事务哈希时响亮
-// 失败（合约一单恰发一次；静默覆盖会改写出生通道判别基準）。
 #[test]
 fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
     let base_events = |trigger_tx: &str| {
@@ -2803,7 +2635,6 @@ fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
             }),
         ]
     };
-    // 同哈希重放：同一事件被投递两次，吸收为 no-op。
     replay_chain_events(
         {
             let mut events = base_events("0x03");
@@ -2817,7 +2648,6 @@ fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
         },
     )
     .expect("same-tx duplicate OrderTriggered must be absorbed");
-    // 异哈希矛盾流：响亮失败。
     let error = replay_chain_events(
         {
             let mut events = base_events("0x03");

@@ -46,13 +46,6 @@ pub(crate) fn chain_event_to_expected_observation(event: &Value) -> Result<Value
     }
 }
 
-/// 观察配对契约：expected/observed 按 (planId, orderId, hookId) 分桶、桶内
-/// 按到达序配对。键内字段一律字节精确匹配——编译器身份是大小写敏感的
-/// （仅大小写不同的 stage/hook 是两个独立实体），折叠会错配或产生假
-/// mismatch。全局下标配对会把不同 hook/订单间合法的事件流交错误配成
-/// semantic-mismatch——交错是流布局，不是语义分叉。与合约
-/// `_evaluateAffectedHooks` 的 per-key hookIds 序一致：每个事实键的观察
-/// 序列只与该键自己的求值历史可比。
 pub(crate) fn compare_hook_observations(expected: &[Value], observed: &[Value]) -> Vec<Value> {
     let mut mismatches = Vec::new();
     let mut expected_queues: BTreeMap<String, std::collections::VecDeque<&Value>> = BTreeMap::new();
@@ -157,9 +150,6 @@ pub(crate) fn same_hook_observation(expected: &Value, observed: &Value) -> bool 
     }
 }
 
-/// dueAt 按时刻归一化比较：两侧都是合法 RFC3339 时刻时比时间点——毫秒
-/// 位数/时区偏移写法是渲染细节，逐字节强耦合会把同一时刻误报成 mismatch。
-/// 时刻不可解析（或一侧缺失）时按字面/缺席比较，不静默放行。
 pub(crate) fn same_due_at(left: Option<&str>, right: Option<&str>) -> bool {
     match (left, right) {
         (None, None) => true,

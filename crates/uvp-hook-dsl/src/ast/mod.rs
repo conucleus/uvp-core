@@ -9,10 +9,6 @@ use crate::{HookError, Profile, Result, CLOUD_AST_SCHEMA_VERSION, RETIRED_KEYWOR
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Signal(String),
-    /// 跨源订阅通道：`ANCHOR(@source::task.stage.signal)`。
-    /// 按类寻址（source 为 zhixu 局部因果身份类），逐事件投递并携带溯源，
-    /// 无表达式裁决。路由（按单 / 扇入）由接收方锚定状态决定，聚合判定
-    /// 归订阅方执行器；per-fact 代铸由阶段级 `mint` 声明表达，不属于 hook。
     Subscription {
         source: String,
         target: String,
@@ -55,10 +51,6 @@ pub enum HookMode {
     Subscription,
 }
 
-// Subscription operators are cross-source delivery channels, not
-// backend/executor input declarations. Backend/executor external inputs are
-// sent to UVP only when the executor explicitly chooses to do so; there is no
-// externalSignals declaration.
 pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
     match expr {
         Expr::Subscription { .. } => {
@@ -81,12 +73,6 @@ pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<
     }
 }
 
-/// 嵌套延时一律拒绝（正位与否决位同闸）：Delay 的操作数子树内不得再含
-/// 任何延时节点。链式延时对锚点是纯加法，合并为单一时长书写
-/// （`((A+5s)+10s)` 即 `(A+15s)`）——嵌套没有等价改写覆盖不了的表达力，
-/// 唯一换来的是单段 30d 上限被逐段叠加绕过（累计等待无总预算）与
-/// 调度面多段逐醒的复杂度。`~((A+5s)+10s)` 与 `((A+5s)+10s)` 都应写作
-/// `~(A+15s)` / `(A+15s)`。
 fn reject_nested_delay(expr: &Expr, inside_delay: bool) -> Result<()> {
     match expr {
         Expr::Delay { expr, .. } => {
@@ -129,23 +115,12 @@ pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
     Ok(())
 }
 
-/// 过滤档（发射适格面）校验：与钩子档并立、互不污染（不触碰
-/// validate_anchors）。过滤只在信号到达的一拍对已提交事实集求值、不参与
-/// 任何调度，因此无正锚要求、衰减否决位 `~(A+duration)` 在全部布尔位置
-/// （根/Or 子项/合取子项）合法；延时操作数内不放行——否决位自身是
-/// 延时节点，落入其中即被两档共用的嵌套延时禁令（reject_nested_delay）
-/// 先行拒绝。保留的闸只剩结构性词表：NOT 操作数仅裸 Signal 或 Delay
-/// 结果，duration 恒正（字面量语法与 30d 上限由解析器/解码层共用闸
-/// 把守）。
 pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
     reject_nested_delay(expr, false)?;
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
         Expr::Not(inner) => match inner.as_ref() {
             Expr::Signal(_) => Ok(()),
-            // 衰减否决位：位置在此不设闸（布尔位置一拍求值均良定义；
-            // 延时操作数内的形态已被嵌套延时禁令先行拒绝），时长正性
-            // 仍按 Delay 分支复核。
             Expr::Delay { .. } => validate_filter_hook(inner),
             _ => Err(HookError::Message(
                 "negation only supports direct signal references".to_string(),
@@ -170,12 +145,6 @@ pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
     }
 }
 
-/// `veto_slot`：当前节点是否是某个 And 的直接子项——这是衰减否决位
-/// `~(A + duration)` 的合法位置。`inside_delay_operand`：当前子树是否
-/// 位于某个 Delay 的操作数内——否决位的 Ready 会衰减，而 Delay 的成熟
-/// 是永久的，二者组合会让外层延时锚定在已过期的否决上静默放行，因此
-/// Delay 操作数内任何深度一律禁止。两闸合并：根位置、Or 子项、Not
-/// 操作数、Delay 操作数内出现的否决位全部拒绝。
 fn validate_anchors(expr: &Expr, veto_slot: bool, inside_delay_operand: bool) -> Result<bool> {
     match expr {
         Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
@@ -192,7 +161,6 @@ fn validate_anchors(expr: &Expr, veto_slot: bool, inside_delay_operand: bool) ->
                             .to_string(),
                     ));
                 }
-                // Delay 自身校验不因外层取反放松：正时长、操作数须有正锚。
                 if *duration_seconds <= 0 {
                     return Err(HookError::Message("delay must be positive".to_string()));
                 }
@@ -315,10 +283,6 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
         Expr::Subscription { source, target } => {
             format!("ANCHOR(@{source}::{target})")
         }
-        // 一元包裹（~ 与延时）的子表达式括号由递归调用的优先级闸统一
-        // 产生（And/Or 低优先级、Delay 在 parent>0 时各自成组），这里不得
-        // 再补一层——否则 Cloud 面产出 `~((A & B))` / `((A & B)) +5s` 的
-        // 双重括号，与 Tight 面外观系统性分叉。
         Expr::Not(inner) => format!("~{}", normalize_cloud(inner, precedence)),
         Expr::Delay {
             expr, raw_duration, ..
@@ -423,9 +387,6 @@ pub(crate) fn cloud_ast_for(hook: &HookExpr, _hook_name: &str, _profile: Profile
     match &hook.condition {
         Expr::Subscription { source, target } => Ok(json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
-            // 订阅钩子按事件逐次由状态机扇入或按对接记录路由投递；路由由接收
-            // 方锚定状态裁决，聚合判定归订阅方执行器，per-fact 代铸归阶段
-            // mint 声明。
             "source": "",
             "mode": HookMode::Subscription,
             "subscriptionTarget": {
@@ -468,10 +429,6 @@ fn expr_to_cloud_value(expr: &Expr) -> Value {
 }
 
 fn fold_cloud_terms(kind: &str, terms: &[Expr]) -> Value {
-    // 分治平衡折叠：扁平 n 项链若左斜折叠会得到深度 n-1 的 AST，请求 JSON
-    // 经 serde_json 反序列化时有 128 层递归上限。平衡树深度 O(log n)，
-    // 任意合法项数都远低于该限界（嵌套深度另由 MAX_PARSE_DEPTH=120 单一
-    // 上闸约束，"能解析就能求值"）。
     fn fold_balanced(kind: &str, terms: &[Expr]) -> Value {
         match terms.len() {
             0 => Value::Null,
@@ -504,18 +461,10 @@ pub(crate) fn is_strict_signal_ref(value: &str) -> bool {
     parts.len() == 3 && parts.iter().all(|part| !part.is_empty())
 }
 
-/// 信号身份的单一闸：三段式 task.stage.signal、每段 plain identifier、
-/// 全名 ≤100（individual_record.signal_name VARCHAR(100)）。解析期标识符
-/// 扫描、事实键校验（signal_map）与 cloud AST 解码共用，保证三处口径
-/// 收敛——任一入口放行的身份另两处必然接受。
-/// 三段式信号身份（task.stage.signal，每段 plain identifier，全长 ≤100）：
-/// 解码防御与重放走带共用的事实身份闸。
 pub fn valid_signal_identity(value: &str) -> bool {
     is_strict_signal_ref(value) && value.len() <= 100 && value.split('.').all(is_plain_identifier)
 }
 
-/// 普通标识符扫描规则：非空，且仅 ASCII 字母/数字/下划线/中划线。
-/// 订阅 target 的 source 类与 signal 各段均按此规则扫描。
 pub(crate) fn is_plain_identifier(value: &str) -> bool {
     !value.is_empty()
         && value

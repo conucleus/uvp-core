@@ -1,23 +1,4 @@
 //! UVP Core Lint v1 的 Layer 2：同 Stage Hook 关系 lint（PRD 109 §12–§14）。
-//!
-//! 放在 `uvp-compiler` 层的原因：`uvp-hook-dsl` 只理解单个 Hook
-//! expression；只有编译层拥有 Zhixu / Stage / receiveSignals / hook 集合，
-//! 跨 Hook 的关系分析必须在这里，而不是让 DSL 层反向理解完整 Zhixu。
-//!
-//! v1 只回答可局部证明的三种关系：
-//!
-//! ```text
-//! H1 ⇒ H2      （L021 implied-hook）
-//! H1 ≡ H2      （L020 duplicate-hook-condition，双向蕴含即可证等价）
-//! H1 ⊥ H2      （L022 mutually-exclusive-hooks，info 级）
-//! ```
-//!
-//! 不做通用 overlap detection（"Can H1 and H2 both be satisfied?" 很容易
-//! 演变为 satisfiability problem）；证不出一律不产生 diagnostic。
-//!
-//! lint 不改变 compile 语义（PRD §4.1 / §21）：本模块与 compile 产物完全
-//! 独立，`合法 DSL + lint error` 仍可编译，是否阻塞由调用方 deny policy
-//! 决定。
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -35,20 +16,11 @@ pub struct ZhixuLintReport {
 }
 
 #[derive(Debug, Deserialize)]
-// FFI/NAPI 请求信封：未知字段确定性拒绝（与 compile 入口同口径）。
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LintZhixuRequest {
     pub definition: Value,
 }
 
-/// Zhixu 层 lint（PRD §19）：
-///
-/// ```text
-/// semantic validation + single hook lint + same-stage relation lint
-/// ```
-///
-/// 语义验证失败（非合法 DSL）返回 `Err`——lint 只分析已通过 semantic
-/// validation 的正常 Hook（PRD §4.2），这不是 diagnostic。
 pub fn lint_zhixu(definition: &ZhixuDefinition) -> Result<ZhixuLintReport, LintError> {
     let issues = crate::validate::validate_zhixu_shape(definition);
     if !issues.is_empty() {
@@ -69,8 +41,6 @@ pub fn lint_zhixu(definition: &ZhixuDefinition) -> Result<ZhixuLintReport, LintE
                 raw_expression,
             )?;
             for mut diagnostic in linted.report.diagnostics {
-                // 单 Hook 诊断在 Zhixu 语境下按 hookId（stage#hook）定位，
-                // 与编译产物的命名空间一致。
                 diagnostic.hook_name = Some(hook_id.clone());
                 diagnostics.push(diagnostic);
             }
@@ -96,8 +66,6 @@ pub fn lint_zhixu(definition: &ZhixuDefinition) -> Result<ZhixuLintReport, LintE
     })
 }
 
-/// lint 的 JSON 入口（信封与 compile_json 同构）。diagnostics 永远在
-/// ok:true 的 value 里——lint 结论不是编译失败。
 pub fn lint_zhixu_json(input: &str) -> String {
     let result = serde_json::from_str::<LintZhixuRequest>(input)
         .map_err(|err| crate::CompilerError::Message(format!("invalid lint zhixu request: {err}")))
@@ -115,8 +83,6 @@ pub fn lint_zhixu_json(input: &str) -> String {
 
 struct StageHook {
     hook_id: String,
-    /// 事实 source 类。不同 source 的同名信号是不同事实：任何跨 source
-    /// 蕴含 / 等价 / 互斥都不可证，直接跳过（宁可漏报）。
     source: String,
     condition: Expr,
     normalized_expression: String,
@@ -124,8 +90,6 @@ struct StageHook {
 
 fn lint_stage_relations(hooks: &[StageHook], out: &mut Vec<LintDiagnostic>) {
     if hooks.len() > MAX_PAIRWISE_HOOKS {
-        // 资源上限（PRD §22）：超预算跳过两两关系 lint。lint 是旁路分析，
-        // 静默降级，不得成为新的资源攻击面。
         return;
     }
     for (index, left) in hooks.iter().enumerate() {
@@ -157,8 +121,6 @@ fn lint_stage_relations(hooks: &[StageHook], out: &mut Vec<LintDiagnostic>) {
     }
 }
 
-/// UVP-L020 duplicate-hook-condition：同 Stage 两个 Hook condition 完全
-/// 等价（指纹相同，或 ready implication 双向可证——如 `+60s` 与 `+1m`）。
 fn duplicate_hook_condition(left: &StageHook, right: &StageHook) -> LintDiagnostic {
     LintDiagnostic {
         code: "UVP-L020",
@@ -185,10 +147,6 @@ fn duplicate_hook_condition(left: &StageHook, right: &StageHook) -> LintDiagnost
     }
 }
 
-/// UVP-L021 implied-hook：`ready_implies(H1, H2)` 可证 ⇒ H1 就绪时 H2 必
-/// 就绪。不叫 shadowed-hook：UVP runtime 中 Hook 独立裁决、独立 delivery，
-/// 不存在 first-match switch 的 shadow 语义，这里提示的是确定的 co-ready
-/// 蕴含关系。
 fn implied_hook(premise: &StageHook, conclusion: &StageHook, rule: &'static str) -> LintDiagnostic {
     LintDiagnostic {
         code: "UVP-L021",
@@ -215,8 +173,6 @@ fn implied_hook(premise: &StageHook, conclusion: &StageHook, rule: &'static str)
     }
 }
 
-/// UVP-L022 mutually-exclusive-hooks：两个合法 Hook 可证无法同时 Ready。
-/// info 级：默认 CLI 可隐藏，主要供 Store / IDE / explain / AI 消费。
 fn mutually_exclusive_hooks(left: &StageHook, right: &StageHook, signal: &str) -> LintDiagnostic {
     LintDiagnostic {
         code: "UVP-L022",

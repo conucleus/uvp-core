@@ -4,10 +4,6 @@ use uvp_compiler::{compile_request, CompileRequest};
 use uvp_hook_dsl::SEMANTIC_VERSION;
 use uvp_ir::canonical_stringify;
 
-/// Profile-level compilation fixtures live in `fixtures/{zhixu,cloud,evm}` and
-/// share one declaration shape: name, semanticVersion,
-/// input, expected, portable. This harness discovers every `*.json` file in
-/// those directories, so adding a fixture never requires touching this test.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileFixture {
@@ -17,8 +13,6 @@ struct ProfileFixture {
     #[allow(dead_code)]
     portable: bool,
     input: Value,
-    /// 可选 dockTargets 注册表：含 zhixu executor 静态目标的
-    /// 可运行 fixture 必须内嵌被引用的 uid 条目。
     #[serde(default)]
     dock_targets: Option<Value>,
     expect: FixtureExpect,
@@ -27,23 +21,16 @@ struct ProfileFixture {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FixtureExpect {
-    /// When present the fixture must fail to compile with a message containing
-    /// this text.
     #[serde(default)]
     error_contains: Option<String>,
-    /// Assert `plan.platform` on hook_plan success.
     #[serde(default)]
     platform: Option<String>,
-    /// Assert the exact sorted set of `compiledHooks[].hookId`.
     #[serde(default)]
     hook_ids: Option<Vec<String>>,
-    /// Assert `compiledHooks[].dependencies.len()` per `stageIdentifier#hookName`.
     #[serde(default)]
     hook_dependency_counts: Option<BTreeMap<String, usize>>,
-    /// Assert `astJson.mode` per hookName on cloud-artifact success.
     #[serde(default)]
     cloud_hook_modes: Option<BTreeMap<String, String>>,
-    /// Assert `dockRoutes.len()` on hook_plan success.
     #[serde(default)]
     dock_route_count: Option<usize>,
 }

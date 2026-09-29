@@ -24,25 +24,15 @@ enum Command {
     Replay {
         request: String,
     },
-    /// Lint 一个 hook 表达式（PRD 109）。合法表达的 diagnostics 在
-    /// ok:true 的 value 里；lint 结论不是解析失败。
     LintHook {
-        /// hook 表达式原文（`source::condition`），或 `@file` 路径。
         hook: String,
-        /// `evm_strict`（默认）或 `cloud_compat`。
         #[arg(long, default_value = "evm_strict")]
         profile: String,
     },
-    /// Lint 一份 Zhixu 定义：semantic validation + 单 Hook 规则 + 同 Stage
-    /// 关系规则。lint 不改变 compile 语义；只有显式 --deny 才影响退出码。
     Lint {
-        /// Zhixu 定义文件路径（YAML 或 JSON）。
         path: String,
-        /// `text`（默认）或 `json`（信封 JSON，供 Store / IDE / CI 消费）。
         #[arg(long, default_value = "text")]
         format: String,
-        /// 阻塞策略，可重复：`error` / `warning` / `info`（按严重级）或
-        /// 具体 lint code（如 UVP-L002）。命中即以非零码退出。
         #[arg(long = "deny")]
         deny: Vec<String>,
     },
@@ -58,16 +48,11 @@ fn main() -> ExitCode {
         }
         Command::Lint { path, format, deny } => run_lint(&path, &format, &deny),
         command => {
-            // 有界失败：输入侧错误（@file 读不到、非法 --profile）输出
-            // ok:false 信封并以非零码退出，与 JSON 入口的信封退出码契约
-            // 同口径——panic 只服务编程错误，不服务调用方输入。
             let output = match run(command) {
                 Ok(output) => output,
                 Err(message) => failure_envelope(&message),
             };
             println!("{output}");
-            // JSON 入口以信封 ok 字段裁决退出码：fixture/CI 门禁消费退出码，
-            // 失败仍 exit 0 会让门禁静默放行（信封不可解析按失败处理）。
             if envelope_failed(&output) {
                 ExitCode::FAILURE
             } else {
@@ -77,8 +62,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// 调用方输入错误的信封形态：与库入口的失败信封同构（ok:false +
-/// diagnostics），message 经 serde 转义，不做裸字符串拼接。
 fn failure_envelope(message: &str) -> String {
     serde_json::to_string(&serde_json::json!({
         "ok": false,
@@ -96,16 +79,11 @@ fn run(command: Command) -> Result<String, String> {
         Command::Compile { request } => Ok(uvp_compiler::compile_json(&read_arg(&request)?)),
         Command::Replay { request } => Ok(uvp_replay::replay_json(&read_arg(&request)?)),
         Command::LintHook { hook, profile } => {
-            // profile 闭集预校验：裸 format! 内插既不转义（profile 携带引号
-            // 会拼出不可解析 JSON），也把非法值的报错推迟成信封内的 serde
-            // 报错——拼装前响亮拒绝，与 --deny token 的闭集校验同口径。
             if !matches!(profile.as_str(), "evm_strict" | "cloud_compat") {
                 return Err(format!(
                     "unknown --profile value {profile:?}: expected evm_strict|cloud_compat"
                 ));
             }
-            // 请求体经 serde_json 序列化拼装：hook 原文与 profile 都按 JSON
-            // 字符串转义，杜绝手写内插的转义缺口。
             let request = serde_json::to_string(&serde_json::json!({
                 "profile": profile,
                 "hookName": "LINT",
@@ -118,8 +96,6 @@ fn run(command: Command) -> Result<String, String> {
     }
 }
 
-/// lint 子命令：诊断永远不等于失败——除非调用方显式 --deny（PRD §4.1：
-/// lint 不隐式扩大或缩小协议接受集合，阻塞策略归调用方）。
 fn run_lint(path: &str, format: &str, deny: &[String]) -> ExitCode {
     let definition = match read_definition(path) {
         Ok(definition) => definition,
@@ -221,9 +197,6 @@ fn print_lint_text(report: &serde_json::Value) {
     );
 }
 
-/// deny 策略裁决：`error` / `warning` / `info` 按严重级精确匹配，其余按
-/// lint code 精确匹配。无法识别的 token 直接失败——拼错的策略名静默
-/// 放行会把 CI 门禁变成摆设。
 fn denied(envelope: &serde_json::Value, deny: &[String]) -> Result<bool, String> {
     if deny.is_empty() {
         return Ok(false);
@@ -276,8 +249,6 @@ fn envelope_failed(output: &str) -> bool {
         .is_none_or(|ok| !ok)
 }
 
-/// `@file` 形态的读取失败是调用方输入错误：向上传播为 ok:false 信封 +
-/// 非零退出（有界失败），不 panic。
 fn read_arg(value: &str) -> Result<String, String> {
     if let Some(path) = value.strip_prefix('@') {
         return fs::read_to_string(path).map_err(|err| format!("failed to read {path}: {err}"));

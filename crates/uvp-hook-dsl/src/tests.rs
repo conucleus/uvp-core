@@ -40,11 +40,6 @@ fn rejects_deeply_nested_expressions_instead_of_overflowing() {
 
 #[test]
 fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
-    // 单一深度闸契约：解析器上限必须给 serde_json 的 128 层请求反序列化
-    // 留足余量——最深的合法形态（括号嵌套延时链：入口开销 3 层 + 每层
-    // 括号 2 个解析深度、产出 1 层 delay 节点）在解析上限内编译、并以
-    // JSON 字符串形式过求值入口（不触 serde_json 递归上限）。再深一层
-    // 则解析期拒绝。
     let legal = format!(
         "buyer::{}task.main.cmp +1s{}",
         "(".repeat(58),
@@ -91,8 +86,6 @@ fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
 #[test]
 fn rejects_deeply_nested_cloud_ast() {
     let mut root = json!({ "type": "signal", "signal": "task.main.cmp" });
-    // Just past the guard threshold: deep enough to trip the depth cap,
-    // shallow enough that serde_json's recursive Drop stays safe.
     for _ in 0..300 {
         root = json!({ "type": "neg", "expr": root });
     }
@@ -161,9 +154,6 @@ fn cloud_ast_preserves_delay_operand_and_source() {
 
 #[test]
 fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
-    // subscriptionTarget 键闭集：拼错的键（如 singal）与多余字段必须
-    // 确定性拒绝，不得被静默忽略成"缺 source/signal"或缺省语义；
-    // 非对象形态同样响亮失败。
     let mut ast = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
@@ -208,9 +198,6 @@ fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
 
 #[test]
 fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
-    // 直接构造绕过编译期的毒 AST（不受信任输入的形态：超大秒数与
-    // 原始字面量自洽）。求值必须在解码期确定性拒绝并走有界失败路径，
-    // 而不是 panic 跨 FFI 边界 abort 进程。
     let poisoned = json!({
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "buyer",
@@ -282,10 +269,6 @@ fn compiled_hook_evaluation_rejects_unknown_node_fields() {
 
 #[test]
 fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
-    // 伪前缀形态（如 ::ANCHORX / ::OUTSIDER，及扇入标头加伪后缀）
-    // 不是退役关键字：空标头门禁按完整 token 边界匹配，直接以空标头
-    // 错误拒绝，而不是借 starts_with 前缀命中放行进解析器。
-    // 扇入词按字节拼装，保持全文检索零命中口径。
     let retired_word: String = ["M", "E", "R", "G", "E"].concat();
     for hook in [
         format!("::{retired_word}X@(seller::task.main.cmp)"),
@@ -304,7 +287,6 @@ fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
             "unexpected error for pseudo-prefix form: {err}"
         );
     }
-    // 真关键字仍然放行到解析器，命中精确的 retired 报错。
     let err = parse_hook(ParseHookRequest {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
@@ -317,8 +299,6 @@ fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
 
 #[test]
 fn signed_raw_duration_is_rejected_at_decode() {
-    // i64::from_str 接受前导 '+'：毒 AST 的 rawDuration "+5s" 与
-    // durationSeconds=5 自洽，必须在解码层按严格格式拒绝。
     let poisoned = json!({
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "buyer",
@@ -400,7 +380,6 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
             "unexpected error: {err}"
         );
     }
-    // 边界值（36/100 字节、三段式）照常放行。
     eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
@@ -413,8 +392,6 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
         now: "2026-04-27T00:00:00Z".to_string(),
     })
     .unwrap();
-    // 空 source 是合法的无归属事实：解码放行，但永不满足带 source 的
-    // hook（与语义语料的负例口径一致）。
     let unattributed = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
@@ -432,8 +409,6 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
 
 #[test]
 fn normal_ast_with_subscription_target_is_rejected_at_decode() {
-    // O18：normal 模式携带 subscriptionTarget 只能是手写毒 AST——
-    // 解析器只给订阅形态产出该字段。
     let poisoned = json!({
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "buyer",
@@ -458,8 +433,6 @@ fn normal_ast_with_subscription_target_is_rejected_at_decode() {
 
 #[test]
 fn unsupported_hook_modes_are_rejected_at_decode() {
-    // 编译产物 mode 白名单（normal/subscription）之外的取值在解码期
-    // 确定性拒绝，不做兼容解释。
     for mode in ["outside_spawn", "anchor", "bundle"] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
@@ -506,7 +479,6 @@ fn subscription_ast_without_target_is_rejected_at_decode() {
 
 #[test]
 fn mint_and_route_validation_matches_go_decode() {
-    // normal 模式携带 mint/route：对齐 Go DecodeCompiledHook 一律拒绝。
     for (field, value) in [("mint", "per-fact"), ("route", "order")] {
         let mut ast = json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
@@ -529,7 +501,6 @@ fn mint_and_route_validation_matches_go_decode() {
             "unexpected error for {field}: {err}"
         );
     }
-    // subscription 模式：合法组合放行，非法取值确定性拒绝。
     let legal = json!({
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
@@ -591,7 +562,6 @@ fn mint_and_route_validation_matches_go_decode() {
         "unexpected error: {err}"
     );
 
-    // 非字符串 mint/route 与 Go 的类型解码一致地拒绝。
     let poisoned_type = json!({
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
@@ -675,8 +645,6 @@ fn rejects_duration_overflow() {
 
 #[test]
 fn duration_with_multibyte_tail_fails_bounded_instead_of_panicking() {
-    // 毒输入纪律：多字节 UTF-8 结尾必须在非字符边界确定性报错而不是
-    // panic（毒 AST/毒输入必须有界失败，绝不 panic）。
     for raw in ["ü", "1ü", "10ü"] {
         let err = duration_to_seconds(raw).unwrap_err();
         assert!(
@@ -684,17 +652,13 @@ fn duration_with_multibyte_tail_fails_bounded_instead_of_panicking() {
             "unexpected error for {raw:?}: {err}"
         );
     }
-    // 非 ASCII 单位字母（非 s/m/h/d）同样是确定性错误。
     assert!(duration_to_seconds("10x").is_err());
-    // 正常单位不受影响。
     assert_eq!(duration_to_seconds("48h").unwrap(), 48 * 60 * 60);
     assert_eq!(duration_to_seconds("30d").unwrap(), 30 * 24 * 60 * 60);
 }
 
 #[test]
 fn signal_facts_with_unknown_keys_are_rejected() {
-    // 拼错的事实键（sourse）不得被静默吞成空 source 的无归属事实——
-    // 那会把"事实不匹配"伪装成 ok:true needs_more。serde 层确定性拒绝。
     let request = json!({
         "profile": "cloud_compat",
         "ast": {
@@ -716,7 +680,6 @@ fn signal_facts_with_unknown_keys_are_rejected() {
         "misspelled fact key must be rejected: {output}"
     );
 
-    // 缺失 source 仍是合法的无归属事实（needs_more，非错误）。
     let legal = json!({
         "profile": "cloud_compat",
         "ast": {
@@ -740,8 +703,6 @@ fn signal_facts_with_unknown_keys_are_rejected() {
 
 #[test]
 fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
-    // 解码层身份闸与解析期同口径：毒原子确定性拒绝，而不是解码成
-    // 永不匹配事实集的合法形态（那会把不匹配伪装成 ok:true needs_more）。
     let ast_with_root = |root: Value, source: &str| {
         json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
@@ -751,14 +712,12 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
         })
     };
     let poisoned_atoms = [
-        // signal 节点：两段式 / 内嵌空格 / 超 100 字节。
         ast_with_root(json!({ "type": "signal", "signal": "main.cmp" }), "buyer"),
         ast_with_root(json!({ "type": "signal", "signal": "ta sk.a.b" }), "buyer"),
         ast_with_root(
             json!({ "type": "signal", "signal": format!("{}.{}.{}", "a".repeat(40), "b".repeat(30), "c".repeat(31)) }),
             "buyer",
         ),
-        // 顶层 source：非法字符集 / 超 36 字节。
         ast_with_root(
             json!({ "type": "signal", "signal": "task.main.cmp" }),
             "has space",
@@ -785,7 +744,6 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
         );
     }
 
-    // subscription 节点：source 字符集 / source 长度 / signal 段数。
     let subscription_ast = |source: &str, signal: &str| {
         json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
@@ -819,9 +777,6 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
 
 #[test]
 fn top_level_source_identity_is_validated_on_the_raw_text() {
-    // 解码层身份闸吃原文（trim 只用于缺失判定）：与节点层
-    // expr_from_cloud_value 同口径。" buyer" 经 trim 洗白后通过身份闸，
-    // 是被架空的毒身份通道——两侧必须在同一原文上拒绝。
     let ast_with_root = |root: Value, source: Value| {
         json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
@@ -855,7 +810,6 @@ fn top_level_source_identity_is_validated_on_the_raw_text() {
             "poison source {source:?}: {message}"
         );
     }
-    // null 与缺席等同（Go 零值解码同口径）：normal 模式按缺失拒绝。
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
@@ -876,9 +830,6 @@ fn top_level_source_identity_is_validated_on_the_raw_text() {
 
 #[test]
 fn subscription_mode_rejects_non_string_and_whitespace_source() {
-    // 订阅模式标头恒空：非字符串 source 不得被 as_str 吞成 None 再折
-    // 成 "" 放行（毒 AST 的静默通道）；纯空白串也不是编译器产出的空
-    // source，按原文非空拒绝，不做 trim 归一。
     let subscription_ast = |source: Value| {
         json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
@@ -907,8 +858,6 @@ fn subscription_mode_rejects_non_string_and_whitespace_source() {
 
 #[test]
 fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
-    // subscriptionTarget.source/signal 与 root 订阅节点同口径按原文校验：
-    // 先 trim 再比对会让 " seller" 折叠成 "seller" 骗过一致性检查。
     let target_ast = |target: Value| {
         json!({
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
@@ -945,8 +894,6 @@ fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
 
 #[test]
 fn decaying_veto_expires_at_takes_the_and_minimum() {
-    // And 的有效期取成员最紧者：两个衰减项取较早成熟；无期限成员
-    // （缺席否决/正向项）不放宽有限期。
     let fact = |signal: &str, received_at: &str| SignalFact {
         source: "buyer".to_string(),
         signal_name: signal.to_string(),
@@ -990,8 +937,6 @@ fn decaying_veto_expires_at_takes_the_and_minimum() {
 
 #[test]
 fn decaying_veto_inside_an_or_winning_branch_floats_its_expiry() {
-    // Or：获胜分支的 expires_at 原样上浮，不跨分支取 min——另一分支
-    // 就绪且无衰减时，整体的 Ready 无有效期。
     let fact = |signal: &str, received_at: &str| SignalFact {
         source: "buyer".to_string(),
         signal_name: signal.to_string(),
@@ -1033,8 +978,6 @@ fn decaying_veto_inside_an_or_winning_branch_floats_its_expiry() {
 
 #[test]
 fn decaying_veto_over_a_composite_delay_operand() {
-    // 否定延时操作数可以是复合式：~((A|C)+5s) 的有效期 = 复合延时
-    // 的成熟时刻（C 缺席不阻塞 A 分支成熟）。
     let fact = |signal: &str, received_at: &str| SignalFact {
         source: "buyer".to_string(),
         signal_name: signal.to_string(),
@@ -1056,8 +999,6 @@ fn decaying_veto_over_a_composite_delay_operand() {
 
 #[test]
 fn decaying_veto_serializes_expires_at_across_the_json_boundary() {
-    // FFI/NAPI 序列化边界：有效期以 camelCase expiresAt 字段出场，
-    // 无期限时字段缺席（skip_serializing_if）。
     let fact = |signal: &str, received_at: &str| SignalFact {
         source: "buyer".to_string(),
         signal_name: signal.to_string(),
@@ -1114,14 +1055,8 @@ fn decaying_veto_serializes_expires_at_across_the_json_boundary() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 过滤档（gate=filter，发射适格面）：位置闸放开、词表闸保留。
-// ---------------------------------------------------------------------------
-
 #[test]
 fn gate_rides_the_json_boundary_and_defaults_to_hook() {
-    // FFI/NAPI 信封：gate 缺省 = hook（既有调用方语义不变），
-    // "gate":"filter" 才切换过滤档——裸衰减根在缺省档照旧拒绝。
     let request = |gate: Option<&str>| {
         let mut envelope = json!({
             "hookName": "ADMIT",
@@ -1143,8 +1078,6 @@ fn gate_rides_the_json_boundary_and_defaults_to_hook() {
         "gate=filter must admit the bare veto root: {filtered}"
     );
 
-    // 求值信封同形态：gate=filter 的解码防御放行过滤档合法形态，
-    // 缺省档同 AST 拒绝。
     let ast = serde_json::from_str::<Value>(&filtered).expect("envelope decodes")["value"]
         ["cloudAst"]
         .clone();

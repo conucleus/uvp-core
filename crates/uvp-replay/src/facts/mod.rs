@@ -11,11 +11,6 @@ use crate::{value_i64, value_str, ReplayError, Result};
 pub(crate) struct OracleState {
     pub(crate) plans: BTreeMap<String, Value>,
     pub(crate) orders: BTreeMap<String, OracleOrderState>,
-    /// OrderTriggered 事务哈希（order_key → tx）：出生事务标记。outside
-    /// 出生（`triggerOrderFromOutsideFor`）的 OrderTriggered 与出生事实
-    /// `_recordSignal` 同事务；order-link 出生
-    /// （`triggerOrderFromSignalFromModule`）只发 OrderTriggered +
-    /// HookReady、不 `_recordSignal`——本表是两者在事件流上的判别面。
     pub(crate) order_trigger_tx: BTreeMap<String, String>,
 }
 
@@ -83,41 +78,10 @@ impl HookRuntime {
     }
 }
 
-/// 合约延时上限镜像：UVPStateMachine.MAX_HOOK_DELAY_SECONDS = 30 days
-/// （2592000s）。链上注册边界对超限 revert HookDelayTooLong，Go 解码层
-/// （hookdsl validateNode）同值拒绝——oracle 的注册门同口径，超限 plan
-/// 是"合约不可能的 plan"，回放响亮失败而不是产出荒谬的远期 wait。
 pub(crate) const MAX_DELAY_SECONDS: i64 = 30 * 24 * 60 * 60;
 
-/// 指令嵌套深度上限：镜像 uvp-hook-dsl MAX_PARSE_DEPTH=120（解析/求值
-/// 单一深度闸）与 Go hookdsl.MaxASTDepth=120——合法编译产物不可能更深，
-/// 超深指令流是毒输入，注册门拒绝（同时兜住手工 plan 的无界嵌套）。
 pub(crate) const MAX_INSTRUCTION_DEPTH: usize = 120;
 
-/// 合约注册门镜像（UVPPlanRegistration._validateHook）：回放输入里的
-/// plan 必须是链上可注册的形态，否则"合约不可能的 plan"会被 oracle 以
-/// 空洞观察软化成假 PASS/假 mismatch——一律结构性响亮失败：
-/// - 每个钩子必须携带非空 instructions（合约 InvalidHook；也封死
-///   "Rust 编译产物（无指令轨）直连回放"的空洞 PASS 断层）；
-/// - order-trigger（mint/dock）hook 禁 DELAY（出生事实与订单创建同笔
-///   交易，anchorAt=now，Delay(SIGNAL) 必得 Wait，出生路径永久
-///   InvalidTriggerHook）；
-/// - DELAY 时长 ∈ (0, 30d]（合约对 0 revert InvalidInstruction、超 30d
-///   revert HookDelayTooLong）；
-/// - DELAY 操作数须含正向信号锚点（hasPosAnchor 栈标志）；
-/// - NOT 操作数必须裸 SIGNAL（组合否定的取消/锚点语义与编译器产物形态
-///   分叉，合约注册边界拒绝）；
-/// - AND/OR arity ≥ 2、栈深充足；AND 取任一正锚、OR 需每分支都有；
-/// - 指令嵌套深度 ≤ 120（逐槽计数：SIGNAL=0，一元/二元组合=操作数最大
-///   深度+1）；
-/// - 结束时栈上恰一个值，且根含正向锚点（纯否定条件的 anchorAt 无源）；
-/// - 每 hook 的 SIGNAL 原子键集合与 dependencyIndex 反查该 hook 的键集合
-///   逐点一致（合约 reverts HookDependencyKeyMismatch）：oracle 的求值
-///   范围由 dependencyIndex 反查决定，指令轨合法而索引错位的 plan 会让
-///   observed/mismatches 全 0 仍 ok:true——空洞假 PASS 在注册期对拍拒绝；
-/// - order-trigger（mint/dock）hook 必须携带 emitReady（合约 reverts
-///   SilentOrderTriggerHook）：沉默 trigger 物化阶段但不发 HookReady，
-///   链上链下的发出口径会分叉。
 pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
     let hooks = plan
         .get("compiledHooks")
@@ -125,9 +89,6 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
         .ok_or_else(|| {
             ReplayError::Message("chain oracle plan missing compiledHooks".to_string())
         })?;
-    // dependencyIndex 是合约注册的必然产物（_registerPlanHook 逐键写入），
-    // 缺失即"合约不可能的 plan"：求值范围反查会恒为空，一切信号都产生
-    // 零观察——按结构错误响亮失败，不做"缺失视为空索引"的静默回退。
     let dependency_index = plan
         .get("dependencyIndex")
         .and_then(Value::as_object)
@@ -138,9 +99,6 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
         validate_hook_registration_shape(hook)?;
         validate_hook_dependency_index_mirror(hook, dependency_index)?;
     }
-    // hookId 唯一性镜像（合约 HookAlreadyRegistered）：注册门按 hookId
-    // 逐键建档，重复 id 在链上 revert——投影片携带重复 hookId 时按"首个
-    // 匹配"求值会让第二份成为静默死钩子，本应暴露的流异常被吞。
     let mut seen_hook_ids = std::collections::BTreeSet::new();
     for hook in hooks {
         let hook_id = hook.get("hookId").and_then(Value::as_str).ok_or_else(|| {
@@ -152,8 +110,6 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
             )));
         }
     }
-    // 适格面注册门镜像（_validateAdmission）：admissions 是可选键——
-    // 无适格声明的 plan 与既有形态完全一致；携带时逐条按过滤档校验。
     if let Some(admissions) = plan.get("admissions") {
         let admissions = admissions.as_array().ok_or_else(|| {
             ReplayError::Message("chain oracle plan admissions must be an array".to_string())
@@ -165,14 +121,6 @@ pub(crate) fn validate_plan_registration_gates(plan: &Value) -> Result<()> {
     Ok(())
 }
 
-/// 合约 `_validateAdmission` 的注册门镜像（_validateHook 的过滤档兄弟，
-/// 链轨 uvp-protocol 侧同构）：适格面只在外部提交的一拍对 pre-state 求值、
-/// 不参与任何调度——无正锚要求、衰减否决位位置全放开（根/Or 子项/延时
-/// 操作数内均合法）。保留的结构闸与钩子档同源：NOT 操作数词表（裸
-/// SIGNAL 或 DELAY 产出，组合否定拒绝）、DELAY 时长 ∈ (0, 30d]、
-/// AND/OR arity ≥ 2、栈深充足、嵌套深度 ≤ 120、结束恰一值。自引用/
-/// 出生锚/订阅原子是编译期拒绝（uvp-compiler D028-D030），注册门不重复
-/// ——链上注册看到的只有指令形态。
 fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
     let label = admission
         .get("admissionId")
@@ -204,8 +152,6 @@ fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
             "malformed instruction plan: admission {label} carries no instructions (contract commitPlan reverts InvalidHook)"
         )));
     }
-    // 过滤档的槽分析只需词表/时长/栈形态：bare_signal 与 delay_result
-    // 服务 NOT 操作数词表（正锚与否决位位置不设闸）。
     struct AdmissionSlot {
         bare_signal: bool,
         delay_result: bool,
@@ -309,11 +255,6 @@ fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
     Ok(())
 }
 
-/// 镜像合约 _validateHook 的 HookDependencyKeyMismatch 门：hook 指令集的
-/// SIGNAL 原子键集合与 dependencyIndex 反查该 hook 的键集合必须逐点一致。
-/// 索引侧多出的键只是死索引；指令侧多出的键不进索引——该事实到达永不
-/// 触发求值，hook 永久 Init 且零告警。两种错位在回放里都表现为零观察的
-/// 空洞 PASS，注册期对拍拒绝。
 fn validate_hook_dependency_index_mirror(
     hook: &Value,
     dependency_index: &Map<String, Value>,
@@ -360,9 +301,6 @@ fn validate_hook_dependency_index_mirror(
     Ok(())
 }
 
-/// 栈槽的注册期分析标志：_validateHook 的
-/// bareSignal/delayResult/vetoTerm/vetoInside/hasPosAnchor 数组在 oracle
-/// 侧的等价物，外加逐槽嵌套深度（深度闸）。
 struct InstructionSlot {
     bare_signal: bool,
     delay_result: bool,
@@ -388,10 +326,6 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
         )));
     }
     let order_trigger = hook_is_order_trigger(hook)?;
-    // 镜像合约 SilentOrderTriggerHook 门：order-trigger hook 必须携带
-    // EMIT_READY——沉默 trigger 物化阶段但不发 HookReady，该形态的观察
-    // 口径在链上链下会分叉，注册边界直接拒绝（编译器产物恒为
-    // trigger|EMIT_READY，这里是"合约不可能的 plan"的防御面）。
     if order_trigger {
         match hook.get("emitReady") {
             Some(Value::Bool(true)) => {}
@@ -422,11 +356,6 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                             .to_string(),
                     ));
                 };
-                // NOT 操作数词表：裸 SIGNAL（现状）或 DELAY 产出（衰减
-                // 否决位 ~(signal+duration) 的内层）。~(A&B) 一类组合否定
-                // 的取消/锚点语义与编译器产物形态分叉，注册边界拒绝；否决
-                // 位自身的合法位置（合取直接子项）由 veto_term 位交给消费
-                // 方校验。
                 if !slot.bare_signal && !slot.delay_result {
                     return Err(ReplayError::Message(format!(
                         "malformed instruction plan: hook {hook_id} applies NOT to a non-bare-SIGNAL operand (composite negation diverges from compiler-produced shapes; contract _validateHook reverts InvalidInstruction)"
@@ -471,16 +400,11 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                             .to_string(),
                     ));
                 }
-                // Delay 操作数内禁含否决位（任意深度）：否决位的 Ready 会
-                // 衰减，Delay 成熟是永久的——外层延时锚在已过期的否决上
-                // 会静默放行（合约 _validateHook 的 vetoInside 检查镜像）。
                 if slot.veto_term || slot.veto_inside {
                     return Err(ReplayError::Message(format!(
                         "malformed instruction plan: hook {hook_id} applies DELAY to an operand containing a decaying veto (a veto's readiness decays while delay maturity is permanent; an outer delay anchored on an expired veto would silently pass; contract _validateHook reverts InvalidInstruction)"
                     )));
                 }
-                // Delay 结果的锚点口径 = 操作数口径（成熟时刻成为新锚点，
-                // 正负性随操作数）。
                 stack.push(InstructionSlot {
                     bare_signal: false,
                     delay_result: true,
@@ -494,7 +418,6 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                 let op_name = value_str(instruction, "op")?;
                 let is_and = op_name == "AND";
                 let arity = value_i64(instruction, "arity")?;
-                // 合约编码门（_validateHook）：AND/OR 的 arity ≥ 2。
                 if arity < 2 {
                     return Err(ReplayError::Message(format!(
                         "malformed instruction plan: {op_name} arity must be at least 2"
@@ -508,16 +431,11 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                     )));
                 }
                 let terms = stack.split_off(stack.len() - arity);
-                // 否决位唯一合法位置是合取直接子项：Or 分支位一律拒绝
-                // （合约 _validateHook 对 vetoTerm 的 Or 检查镜像；And 消费
-                // 否决位是其唯一合法去处）。
                 if !is_and && terms.iter().any(|term| term.veto_term) {
                     return Err(ReplayError::Message(format!(
                         "malformed instruction plan: hook {hook_id} places a decaying veto under an OR branch (a veto is only legal as a direct conjunction operand; contract _validateHook reverts InvalidInstruction)"
                     )));
                 }
-                // And 取任一正锚，Or 需每一分支都有（Or 的缺席分支可单独
-                // 就绪且锚点无源）——与 _anyPosAnchor/_allPosAnchor 同口径。
                 let anchored = if is_and {
                     terms.iter().any(|term| term.has_pos_anchor)
                 } else {
@@ -534,9 +452,6 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                     depth,
                 });
             }
-            // 求值器只认冻结指令集（SIGNAL/NOT/AND/OR/DELAY）；注册门与
-            // 求值同口径拒绝词表外操作码（合约侧编码校验同样不为其发放
-            // 合法生产者）。
             other => {
                 return Err(ReplayError::Message(format!(
                     "unsupported chain-mode instruction {other}"
@@ -558,9 +473,6 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
             stack.len()
         )));
     }
-    // 根位的否决位拒绝（否决位必须由合取父项消费；根否决位同时缺正
-    // 锚，两条闸都会拒绝——显式判定让拒绝面可读，合约 _validateHook
-    // 的 vetoTerm[0] 检查镜像）。
     if stack[0].veto_term {
         return Err(ReplayError::Message(format!(
             "malformed instruction plan: hook {hook_id} places a decaying veto at the root (a veto is only legal as a direct conjunction operand; contract _validateHook reverts InvalidInstruction)"
@@ -592,9 +504,6 @@ pub(crate) fn find_hook(plan: &Value, hook_id: &str) -> Result<Value> {
         .ok_or_else(|| ReplayError::Message(format!("chain oracle missing hook {hook_id}")))
 }
 
-/// Plan identity is part of the chain order address. Keeping the canonical
-/// `(planId, orderId)` pair in the serialized key prevents two plans for the
-/// same Zhixu from overwriting or sharing signals when they reuse an order id.
 pub(crate) fn order_key(plan_id: &str, order_id: &str) -> String {
     format!("{plan_id}::{order_id}")
 }

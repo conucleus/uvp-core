@@ -38,14 +38,10 @@ pub struct ParseHookOutput {
 }
 
 #[derive(Debug, Deserialize)]
-// FFI/NAPI 最外层请求信封：未知字段确定性拒绝（拼错的调用方输入不得
-// 被静默忽略成零值语义）。
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ParseHookRequest {
     #[serde(default)]
     pub profile: Profile,
-    /// 校验档（默认 hook）：既有调用方不携带该字段时语义不变（与
-    /// profile 字段同先例）。gate=filter 走过滤档校验（发射适格面）。
     #[serde(default)]
     pub gate: Gate,
     #[serde(default)]
@@ -57,8 +53,6 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     let profile = req.profile;
     let hook_name = req.hook_name;
     validate_hook_name(&hook_name)?;
-    // 解析行为与 profile/gate 无关（二者只影响校验与归一化输出），
-    // 因此 parse_hook_expr 不接收 profile/gate。
     let (hook, _spans) = parse_hook_expr_with_spans(&req.hook)?;
     match req.gate {
         Gate::Hook => validate_hook(&hook.condition)?,
@@ -107,17 +101,8 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     })
 }
 
-/// 深度上限单一闸：解析器（递归下降）与求值器（cloud AST 解码）共用同一
-/// 常量，且必须低于 serde_json 对请求 JSON 的 128 层递归反序列化上限——
-/// 合法表达式编译出的 cloud AST 连同求值信封序列化后深度约 ≤ 该值 + 常数，
-/// 保证"能解析就能求值"，不会在求值入口被 serde_json 以另一口径拒绝。
 pub(crate) const MAX_PARSE_DEPTH: usize = 120;
 
-/// hook 通道名闸（parse 与 lint 共用同一口径）：长度对齐 DDL 列宽
-/// （hook_name VARCHAR(36)），'.' / '#' 分别是 canonical 信号名与 hookId
-/// 的命名空间分隔符，携带即拒绝；空白字符（含首尾空格）同样拒绝——
-/// 通道名进 hookId（stage#hook_name），两侧必须逐字节一致，含空白的
-/// 名字是全仓响亮拒绝纪律下的确定性非法输入，不做 trim 归一。
 pub(crate) fn validate_hook_name(hook_name: &str) -> Result<()> {
     if hook_name.trim().is_empty() || hook_name.len() > 36 {
         return Err(HookError::Message(
@@ -137,11 +122,6 @@ pub(crate) fn validate_hook_name(hook_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// 解析 hook 原文并返回条件 AST 与 span 侧表（lint / diagnostics 工具的
-/// 低层入口）。侧表按"节点创建次序"推入——递归下降先完成全部操作数再
-/// 包装父节点，该次序恰等于最终 AST 的后序遍历次序，lint 侧
-/// `SpannedExpr::build` 按同一后序配对还原。span 只服务于 diagnostics，
-/// 不改变 runtime AST 的形态与语义，也不进入 Cloud protocol artifact。
 pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
     let (source, condition_raw) = raw
         .trim()
@@ -160,10 +140,6 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
         ));
     }
     if !source.is_empty() {
-        // 标头 source 类是路由键：解析期钉死长度与字符集（编译期 ≤36 上限
-        // 严于落库列宽 source_zhixu_id VARCHAR(64)）。订阅形态
-        // （::ANCHOR(@…)）标头恒为空，不受此限——订阅目标
-        // source 在解析 ANCHOR 目标时按同值（≤36 + plain identifier）校验。
         if source.len() > 36 {
             return Err(HookError::Message(format!(
                 "hook source class exceeds the maximum length of 36 characters: {source}"
@@ -197,11 +173,6 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
 }
 
 fn starts_cross_source(value: &str) -> bool {
-    // 不受支持的关键字仍放行进解析器，以便命中精确的 unsupported 报错
-    // 而非笼统的空标头报错。匹配必须落到完整 token 边界：关键字后随
-    // 标识符字符（如 ::ANCHORX 伪前缀）不是关键字形态，
-    // 不得绕过空标头门禁。扇入类标头不在词表内：
-    // 其字面按通用语法错误（空标头门禁）拒绝，没有退役清单条目。
     ["ANCHOR", "OUTSIDE", "OUTSOURCE"].iter().any(|keyword| {
         let Some(rest) = value.strip_prefix(keyword) else {
             return false;
@@ -230,14 +201,9 @@ struct Parser<'a> {
     input: &'a str,
     index: usize,
     depth: usize,
-    /// 节点 span 侧表：每个 AST 节点在创建时推入自己的源码区间，
-    /// 推入次序 == 最终树的后序遍历次序（见 parse_hook_expr_with_spans）。
     spans: Vec<Span>,
 }
 
-/// 递归下降深度上限。hook 表达式来自外部可填写的模板定义，无界嵌套
-/// （深层括号或连续 `~`）会打满调用栈直接 abort 宿主进程——栈溢出不可被
-/// catch_unwind 捕获，必须在解析期以普通错误拒绝。
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
         Self {
@@ -248,9 +214,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 当前 token 末尾（剥掉尾部空白）：group / 一元 / 延时节点的 span
-    /// 终点。失败的前瞻 consume 会吞掉尾随空白，直接取 index 会让 span
-    /// 无谓地覆盖行尾空白。
     fn span_end_here(&self) -> usize {
         let mut end = self.index.min(self.input.len());
         while end > 0 {
@@ -384,8 +347,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 订阅通道：`ANCHOR(@source::task.stage.signal)`。`ANCHOR@`（无括号
-    /// 裸标头）写法不受支持；目标必须携带 @ 前缀的 source 类名空间。
     fn parse_subscription(&mut self, anchor_start: usize) -> Result<Expr> {
         self.skip_ws();
         if self.peek() == '@' {
@@ -410,13 +371,6 @@ impl<'a> Parser<'a> {
                 "subscription target must be @source::task.stage.signal: {target_raw:?}"
             ))
         })?;
-        // source 类命名空间复用普通标识符扫描规则：字符集 [A-Za-z0-9_-]，
-        // 拒绝空格、括号、额外 :: 分隔与非 ASCII 字符。这里故意不 trim：
-        // `ANCHOR` 的目标是一个严格 token，内部空格不能被规范化后放行，
-        // 否则不同运行时可能对同一份原文产生不同的 signal key。
-        // 长度与标头 source 同值：≤36 是编译期钉死的上限，严于落库列
-        // hook_dependency.source_zhixu_id VARCHAR(64)——超长在解析期拒绝
-        // 而不是拖到落库报 value too long。
         if !is_plain_identifier(source) {
             return Err(HookError::Message(format!(
                 "subscription source must be a plain identifier: {source:?}"
@@ -427,7 +381,6 @@ impl<'a> Parser<'a> {
                 "subscription source exceeds the maximum length of 36 characters: {source:?}"
             )));
         }
-        // signal 全名落 signal_name 列（VARCHAR(100)），与普通标识符扫描同限。
         if signal.len() > 100 {
             return Err(HookError::Message(format!(
                 "subscription target signal exceeds the maximum length of 100 characters: {signal:?}"
@@ -502,7 +455,6 @@ impl<'a> Parser<'a> {
             )));
         }
         let ident = &self.input[start..self.index];
-        // 标识符整体落 signal_name 列（task.stage.signal 全名，VARCHAR(100)）。
         if ident.len() > 100 {
             return Err(HookError::Message(format!(
                 "identifier exceeds the maximum length of 100 characters: {}…",
@@ -542,24 +494,16 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// 延时操作数上限：30 天。超限在编译期直接拒绝，防止毒定义持久化。
 const MAX_DELAY_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 pub(crate) fn duration_to_seconds(duration: &str) -> Result<i64> {
     if duration.len() < 2 {
         return Err(HookError::Message(format!("invalid duration: {duration}")));
     }
-    // 末位单位必须按字符边界截取：毒 AST/毒输入可能携带多字节 UTF-8 结尾
-    // （如 "1ü"，编译 cloud AST 时 rawDuration 来自外部 JSON），按字节
-    // split_at 会在非边界处 panic——这里取最后一个 char，非 ASCII 单位字母
-    // 一律返回确定性错误（有界失败，绝不 panic）。
     let (num, unit) = match duration.char_indices().next_back() {
         Some((index, unit)) if unit.is_ascii() => (&duration[..index], unit),
         _ => return Err(HookError::Message(format!("invalid duration: {duration}"))),
     };
-    // 数值段必须是纯 ASCII 数字：Rust 的 i64::from_str 接受前导 '+'（毒
-    // AST 的 rawDuration 可携带 "+5s"），解析器产出的 duration 永不带符号，
-    // 解码侧按严格格式拒绝，两侧输入在同一口径下收敛。
     if num.is_empty() || !num.chars().all(|ch| ch.is_ascii_digit()) {
         return Err(HookError::Message(format!("invalid duration: {duration}")));
     }

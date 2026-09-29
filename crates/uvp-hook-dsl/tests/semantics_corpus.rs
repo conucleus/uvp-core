@@ -21,8 +21,6 @@ struct Corpus {
 struct ParseCase {
     name: String,
     profile: String,
-    /// 校验档（缺省 hook）：发射适格面（filter）用例走过滤档——与
-    /// ParseHookRequest.gate 同先例，缺省保持既有钩子档语义。
     #[serde(default)]
     gate: Option<String>,
     hook_name: String,
@@ -77,8 +75,6 @@ struct InvalidCase {
 
 fn load_corpus() -> Corpus {
     let corpus: Corpus = serde_json::from_str(CORPUS).expect("semantic corpus should decode");
-    // 语料格式版本钉住：v2 迁移时这里必须先响亮失败，消费面不得静默按旧
-    // 口径解读新文件（replay/TS/Go 消费测试同款断言）。
     assert_eq!(
         corpus.schema_version, "uvp.hookSemanticsCorpus.v1",
         "corpus schemaVersion drifted; migrate every consumer before shipping the new file"
@@ -165,8 +161,6 @@ fn evaluates_semantic_corpus() {
                 case.name
             );
         }
-        // 衰减维度对每个 eval 用例整体钉死（缺席 = 无期限），不做
-        // "写了才比对"：否则带否决位的用例漏写 expiresAt 会被静默放过。
         assert_eq!(
             output.expires_at, case.expect.expires_at,
             "expiresAt mismatch: {}",
