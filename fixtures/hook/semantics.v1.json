@@ -1453,6 +1453,13 @@
       "hookName": "ADMIT",
       "hook": "buyer::(task.ship.cmp & ~(task.cancel.cmp +14d)) +5s",
       "messageContains": "no nested delays"
+    },
+    {
+      "name": "channel name containing whitespace is rejected",
+      "profile": "evm_strict",
+      "hookName": "hook name",
+      "hook": "buyer::task.main.cmp",
+      "messageContains": "hook_name must not contain whitespace"
     }
   ],
   "replayCases": [

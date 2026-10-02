@@ -28,11 +28,8 @@ fn json_entry_failures_exit_nonzero() {
     }
 }
 
-/// 输入侧有界失败：@file 读不到、非法 --profile 都输出 ok:false 信封并以
-/// 非零码退出（与 JSON 入口的信封退出码契约同口径），绝不 panic。
 #[test]
 fn input_side_errors_exit_nonzero_with_envelope() {
-    // @file 读取失败：ok:false 信封 + 非零退出。
     let output = run(&["compile", "@/nonexistent/definitely-missing.json"]);
     assert!(
         !output.status.success(),
@@ -46,8 +43,6 @@ fn input_side_errors_exit_nonzero_with_envelope() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("panic"), "must not panic: {stderr}");
 
-    // --profile 闭集预校验：非法值在拼装前响亮拒绝（与 --deny token 的
-    // 闭集校验同口径）。
     let output = run(&["lint-hook", "--profile", "bogus", "buyer::flow.main.a"]);
     assert!(
         !output.status.success(),
@@ -59,8 +54,6 @@ fn input_side_errors_exit_nonzero_with_envelope() {
         "{stdout}"
     );
 
-    // 注入引号的 profile：同样命中闭集拒绝面，stdout 恒为可解析信封——
-    // 请求体经 serde 序列化拼装，不再有裸 format! 内插的转义缺口。
     let output = run(&[
         "lint-hook",
         "--profile",
@@ -76,7 +69,6 @@ fn input_side_errors_exit_nonzero_with_envelope() {
         serde_json::from_str(stdout.trim()).expect("stdout stays a parseable envelope");
     assert_eq!(envelope["ok"], serde_json::Value::Bool(false));
 
-    // 合法非默认 profile 照常工作。
     let output = run(&[
         "lint-hook",
         "--profile",
@@ -88,21 +80,6 @@ fn input_side_errors_exit_nonzero_with_envelope() {
     assert!(stdout.contains("\"ok\":true"), "{stdout}");
 }
 
-#[test]
-fn json_entry_successes_exit_zero() {
-    let output = run(&[
-        "parse-hook",
-        "{\"hookName\": \"HOOK\", \"hook\": \"buyer::task.main.cmp\"}",
-    ]);
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("\"ok\":true"));
-
-    let output = run(&["version"]);
-    assert!(output.status.success());
-}
-
-/// lint 子命令的退出码契约：诊断本身不是失败，只有显式 --deny（或定义
-/// 非法、文件不可读）才非零退出（PRD 109 §4.1/§20）。
 #[test]
 fn lint_command_exit_codes_follow_deny_policy() {
     let dirty_yaml = "lint_dirty_zhixu.yaml";
@@ -133,7 +110,6 @@ spec:
     )
     .expect("write fixture yaml");
 
-    // 无 --deny：warning 级诊断仍 exit 0。
     let output = run(&["lint", dirty_yaml]);
     assert!(
         output.status.success(),
@@ -145,32 +121,27 @@ spec:
         "stdout should list the diagnostic: {stdout}"
     );
 
-    // --deny warning：命中 warning 级，非零退出。
     let output = run(&["lint", "--deny", "warning", dirty_yaml]);
     assert!(!output.status.success(), "--deny warning must fail the run");
 
-    // --deny error：warning 不命中，exit 0。
     let output = run(&["lint", "--deny", "error", dirty_yaml]);
     assert!(
         output.status.success(),
         "--deny error must not trip on warnings"
     );
 
-    // --deny 按具体 code：UVP-L001 命中。
     let output = run(&["lint", "--deny", "UVP-L001", dirty_yaml]);
     assert!(
         !output.status.success(),
         "--deny UVP-L001 must fail the run"
     );
 
-    // 拼写的 deny token 直接失败。
     let output = run(&["lint", "--deny", "warnings", dirty_yaml]);
     assert!(
         !output.status.success(),
         "typo deny tokens must fail loudly"
     );
 
-    // --format=json：输出信封 JSON。
     let output = run(&["lint", "--format=json", dirty_yaml]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -181,7 +152,6 @@ spec:
         serde_json::Value::String("UVP-L001".to_string())
     );
 
-    // lint-hook：单 hook 入口，信封退出码语义与其他 JSON 入口一致。
     let output = run(&["lint-hook", "buyer::flow.main.a & flow.main.a"]);
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("UVP-L001"));

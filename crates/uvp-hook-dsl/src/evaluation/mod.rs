@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use crate::ast::{
     contains_nested_subscription, is_plain_identifier, normalize_tight, valid_signal_identity,
-    validate_filter_hook, validate_hook, Expr,
+    validate_filter_hook, validate_hook, Expr, HookMode,
 };
 use crate::parser::{duration_to_seconds, MAX_PARSE_DEPTH};
 use crate::{
@@ -44,8 +44,6 @@ pub enum EvalState {
 pub struct EvalCompiledHookRequest {
     #[serde(default)]
     pub profile: Profile,
-    /// 校验档（默认 hook，与 ParseHookRequest.gate 同先例）：解码防御按
-    /// 档运行对应校验——过滤档（发射适格面）放行其合法化的形态。
     #[serde(default)]
     pub gate: Gate,
     pub ast: Value,
@@ -55,9 +53,6 @@ pub struct EvalCompiledHookRequest {
 }
 
 #[derive(Debug, Deserialize)]
-// 事实键未知字段确定性拒绝：拼错的 source（如 sourse）不得被静默吞成
-// 空 source 的"无归属事实"（那会把不匹配伪装成 ok:true needs_more）。
-// 缺失 source 仍合法——空 source 是语义语料钉住的负例形态。
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SignalFact {
     #[serde(default)]
@@ -66,9 +61,48 @@ pub struct SignalFact {
     pub received_at: String,
 }
 
-pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHookOutput> {
-    let ast_object = req
-        .ast
+#[derive(Debug, Clone)]
+pub struct DecodedCompiledHook {
+    pub mode: HookMode,
+    pub source: String,
+    pub expr: Expr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HookEval {
+    pub state: EvalState,
+    pub ready_at: Option<DateTime<Utc>>,
+}
+
+impl DecodedCompiledHook {
+    pub fn eval(
+        &self,
+        signals: &BTreeMap<String, DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> Result<HookEval> {
+        let entries = signals
+            .iter()
+            .map(|(name, received_at)| {
+                (
+                    signal_key(&self.source, name),
+                    SignalEntry {
+                        source: self.source.clone(),
+                        signal_name: name.clone(),
+                        received_at: *received_at,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let evaluated = eval_expr(&self.expr, &self.source, &entries, now)?;
+        Ok(HookEval {
+            state: evaluated.state,
+            ready_at: evaluated.ready_at,
+        })
+    }
+}
+
+pub fn decode_compiled_hook(ast: &Value, gate: Gate) -> Result<DecodedCompiledHook> {
+    let ast_object = ast
         .as_object()
         .ok_or_else(|| HookError::Message("compiled hook AST must be an object".to_string()))?;
     reject_unknown_keys(
@@ -84,8 +118,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         ],
         "compiled hook AST",
     )?;
-    let schema_version = req
-        .ast
+    let schema_version = ast
         .get("schemaVersion")
         .and_then(Value::as_str)
         .ok_or_else(|| {
@@ -96,8 +129,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             "unsupported compiled hook AST schemaVersion: {schema_version}"
         )));
     }
-    let mode = req
-        .ast
+    let mode = ast
         .get("mode")
         .and_then(Value::as_str)
         .ok_or_else(|| HookError::Message("compiled hook AST is missing mode".to_string()))?;
@@ -106,9 +138,6 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             "unsupported compiled hook AST mode: {mode}"
         )));
     }
-    // mint/route 是云侧编译器注入订阅 AST 的铸单/路由标注；对齐 Go
-    // DecodeCompiledHook：仅 subscription 模式允许携带，mint 仅 per-fact，
-    // route 仅 order/fanin（空值视为未携带）。
     let mint = optional_ast_str(ast_object, "mint")?;
     let route = optional_ast_str(ast_object, "route")?;
     match mode {
@@ -133,10 +162,7 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         }
     }
     let (target_source, target_signal) = if mode == "subscription" {
-        // normal 模式不得携带 subscriptionTarget：解析器只为订阅形态产出
-        // 该字段，normal 产物上出现只能是手写毒 AST。
-        let target = req
-            .ast
+        let target = ast
             .get("subscriptionTarget")
             .ok_or_else(|| {
                 HookError::Message(
@@ -147,8 +173,6 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         let target_object = target.as_object().ok_or_else(|| {
             HookError::Message("compiled subscriptionTarget must be an object".to_string())
         })?;
-        // 键闭集与其他子对象闸口同口径：拼错的字段（如 singal）不得被
-        // 静默忽略成缺省语义（Go DecodeCompiledHook 同款拒绝）。
         reject_unknown_keys(
             target_object,
             &["source", "signal"],
@@ -170,10 +194,6 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                         .to_string(),
                 )),
             };
-        // 与 root 订阅节点（expr_from_cloud_value）同口径按原文校验：
-        // trim 只用于"缺失"判定，身份闸吃原文——先 trim 再校验会把
-        // " seller" 洗白成 "seller"，架空身份闸并骗过下方与 root 的
-        // 一致性比对（毒身份经归一后放行）。
         if !is_plain_identifier(source) || source.len() > 36 {
             return Err(HookError::Message(format!(
                     "compiled subscriptionTarget source must be a plain identifier of at most 36 characters: {source:?}"
@@ -193,17 +213,9 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         }
         (String::new(), String::new())
     };
-    let now = parse_time(&req.now, req.profile)?;
-    // 订阅钩子标头恒为空：投递目标由阶段静态执行器决定，路由由接收方锚定
-    // 状态与对接记录裁决，因此仅 subscription 模式允许空 source。字段类型
-    // 与 mint/route 同走 optional_ast_str 纪律：在场且非字符串（含布尔/
-    // 数字/对象）确定性报错，None/null 视为空——订阅模式下非字符串 source
-    // 被 `and_then(as_str)` 吞成 None 再折成 "" 放行，是毒 AST 的静默通道。
     let raw_source = optional_ast_str(ast_object, "source")?;
     let source = match mode {
         "subscription" => {
-            // 按原文判空：纯空白串不是编译器产出的空 source，而是毒值，
-            // 不做 trim 归一后放行。
             if !raw_source.is_empty() {
                 return Err(HookError::Message(
                     "compiled subscription hook AST source must be empty".to_string(),
@@ -218,11 +230,6 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
                 ));
             }
             let source = raw_source.to_string();
-            // 与解析期标头校验同口径（plain identifier ≤36，编译期上限严于
-            // 落库列宽 source_zhixu_id VARCHAR(64)），且与节点层身份闸同样
-            // 吃原文（trim 只用于缺失判定）：毒 source（" buyer"）解码期
-            // 确定性拒绝，而不是被 trim 洗白放行、或成为永不匹配任何事实
-            // 键的 source 维度。
             if !is_plain_identifier(&source) || source.len() > 36 {
                 return Err(HookError::Message(format!(
                     "compiled hook AST source must be a plain identifier of at most 36 characters: {source:?}"
@@ -231,15 +238,10 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
             source
         }
     };
-    let root = req
-        .ast
+    let root = ast
         .get("root")
         .ok_or_else(|| HookError::Message("compiled hook AST root is missing".to_string()))?;
     let expr = expr_from_cloud_value(root)?;
-    // 求值器是解码层最后一道防线：root 形态必须与 mode 一致，布尔树内部
-    // 不得再嵌套订阅节点——两者都只能由手写毒 AST 构造，解析器产不出
-    // （解析期位置约束见 validate_subscription_position）。订阅模式下顶层
-    // subscriptionTarget 还必须与 root 订阅节点指向同一 @source::signal。
     match mode {
         "subscription" => {
             let Expr::Subscription {
@@ -265,16 +267,26 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
         }
         _ => {}
     }
-    // Defense in depth: a hand-crafted compiled AST must satisfy the same
-    // invariants as a parsed expression before it may drive state
-    // transitions — per gate (hook: positive-anchor invariant; filter:
-    // admission vocabulary).
-    match req.gate {
+    match gate {
         Gate::Hook => validate_hook(&expr)?,
         Gate::Filter => validate_filter_hook(&expr)?,
     }
+    Ok(DecodedCompiledHook {
+        mode: if mode == "subscription" {
+            HookMode::Subscription
+        } else {
+            HookMode::Normal
+        },
+        source,
+        expr,
+    })
+}
+
+pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHookOutput> {
+    let decoded = decode_compiled_hook(&req.ast, req.gate)?;
+    let now = parse_time(&req.now, req.profile)?;
     let signals = signal_map(req.signals, req.profile)?;
-    let result = eval_expr(&expr, &source, &signals, now)?;
+    let result = eval_expr(&decoded.expr, &decoded.source, &signals, now)?;
 
     Ok(EvalCompiledHookOutput {
         uvp_core_version: CORE_VERSION,
@@ -294,13 +306,6 @@ pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHo
 fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<String, SignalEntry>> {
     let mut result = BTreeMap::new();
     for signal in signals {
-        // 解码层最后一道防线：事实身份必须与解析器对 hook 侧身份的口径
-        // 一致——source 是 plain identifier 且 ≤36（编译期钉死的键上限，
-        // 严于落库列 hook_dependency.source_zhixu_id VARCHAR(64)），signal_name 是三段式
-        // task.stage.signal、每段 plain identifier、全名 ≤100
-        // （individual_record.signal_name VARCHAR(100)）。空 source 是
-        // 合法的"无归属事实"（语义语料的负例形态，永不匹配非空 hook
-        // source），不是畸形身份。
         if !signal.source.is_empty()
             && (!is_plain_identifier(&signal.source) || signal.source.len() > 36)
         {
@@ -316,9 +321,6 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
             )));
         }
         let received_at = parse_time(&signal.received_at, profile)?;
-        // 同一事实键（source::signalName）的重复事实取 received_at 最早者
-        // 获胜：归约结果与输入数组顺序无关，求值语义是事实集的纯函数。
-        // 键的存在性单调——一旦在场永不移除，仅锚点时间戳可前移。
         result
             .entry(signal_key(&signal.source, &signal.signal_name))
             .and_modify(|existing: &mut SignalEntry| {
@@ -366,9 +368,6 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                 .ok_or_else(|| {
                     HookError::Message("compiled signal AST node is missing signal".to_string())
                 })?;
-            // 解码层身份闸与解析期 read_identifier + task.stage.signal 同口径：
-            // 毒原子（拼错段数、超长、内嵌空格）确定性拒绝，而不是解码成
-            // 永不匹配事实集的 Signal（那会把不匹配伪装成 ok:true needs_more）。
             if !valid_signal_identity(signal) {
                 return Err(HookError::Message(format!(
                     "compiled signal AST node must use task.stage.signal and be at most 100 characters: {signal:?}"
@@ -404,8 +403,6 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                         "compiled subscription AST node is missing signal".to_string(),
                     )
                 })?;
-            // 与解析期 parse_subscription 的目标校验同口径（source：plain
-            // identifier ≤36；signal：三段式、每段 plain identifier、≤100）。
             if !is_plain_identifier(source) || source.len() > 36 {
                 return Err(HookError::Message(format!(
                     "compiled subscription AST node source must be a plain identifier of at most 36 characters: {source:?}"
@@ -528,8 +525,6 @@ fn reject_unknown_keys(
     Ok(())
 }
 
-/// 顶层可选字符串字段：缺失或 null 视为空（对齐 Go 的零值解码语义），
-/// 其余非字符串类型在解码期确定性拒绝（Go 侧由 JSON 类型解码拒绝）。
 fn optional_ast_str<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Result<&'a str> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(""),
@@ -553,9 +548,6 @@ struct InternalEval {
     state: EvalState,
     anchors: Vec<DateTime<Utc>>,
     ready_at: Option<DateTime<Utc>>,
-    /// 本 Ready 的有效期至（None = 无限期）。仅 Ready 态可携带，来自衰减
-    /// 否决位 `~(A+duration)` 的内层成熟时刻。它是纯输出元数据：任何
-    /// 调度不得依赖它——poke 只为"变真"设闹钟，衰减永不为"变假"唤醒。
     expires_at: Option<DateTime<Utc>>,
     reason: Option<String>,
 }
@@ -591,11 +583,6 @@ fn eval_expr(
                         normalize_tight(inner)
                     )),
                 }),
-                // 衰减否决位（合取直接子项上的 `~(A+duration)`，校验期
-                // 位置闸保证唯一合法形态）：内层在案未熟 → 本项此刻
-                // Ready，有效期至内层成熟时刻——此后内层翻 Ready、本项翻
-                // Impossible（A 缺席/被否决的分支永不到达成熟，走下方
-                // 无限期臂）。
                 EvalState::Wait => Ok(InternalEval {
                     state: EvalState::Ready,
                     anchors: Vec::new(),
@@ -620,9 +607,6 @@ fn eval_expr(
             let evaluated = eval_expr(expr, source, signals, now)?;
             match evaluated.state {
                 EvalState::Impossible | EvalState::NeedsMore => Ok(evaluated),
-                // 操作数子树不含延时（语法面两档拒绝嵌套延时），而 Wait 只能
-                // 由延时节点产生——此臂对语法合法输入不可达。防御性响亮失败：
-                // 静默上浮操作数 due 会把嵌套语义重新引入求值面。
                 EvalState::Wait => Err(HookError::Message(
                     "delay operand is in a wait state: nested delays are rejected by the grammar, this state must be unreachable"
                         .to_string(),
@@ -637,8 +621,6 @@ fn eval_expr(
                             reason: None,
                         });
                     };
-                    // 溢出必须走错误返回而不是 panic：panic 跨 extern "C" 边界会 abort
-                    // 整个宿主进程（statemachine），毒 hook 会杀死所有在途信号处理。
                     let delta =
                         chrono::Duration::try_seconds(*duration_seconds).ok_or_else(|| {
                             HookError::Message(format!(
@@ -651,7 +633,6 @@ fn eval_expr(
                         ))
                     })?;
                     if now >= ready_at {
-                        // 成熟是永久的：延时 Ready 不携带有效期。
                         Ok(InternalEval {
                             state: EvalState::Ready,
                             anchors: vec![ready_at],
@@ -687,10 +668,6 @@ fn eval_expr(
                         }
                     }
                     EvalState::Ready => {
-                        // 防御语义（按构造不可达，求值器自洽）：衰减项的
-                        // expires_at 只应指向未来（Not 构造时内层 Wait 保证
-                        // 严格晚于 now）。若已到期，按 Impossible 处理
-                        // （fail-closed），不得把过期否决当作仍然成立放行。
                         if evaluated
                             .expires_at
                             .is_some_and(|expires_at| expires_at <= now)
@@ -707,8 +684,6 @@ fn eval_expr(
                             });
                         }
                         anchors.extend(evaluated.anchors);
-                        // And 的 Ready 有效期取成员最紧者（None = 无限，
-                        // 不放宽任何有限期）：任一成员到期即整体不再成立。
                         min_expires = [min_expires, evaluated.expires_at]
                             .into_iter()
                             .flatten()
@@ -751,16 +726,6 @@ fn eval_expr(
                 let evaluated = eval_expr(term, source, signals, now)?;
                 match evaluated.state {
                     EvalState::Ready => {
-                        // Maturity causality（OR 复合分支延时锚点裁决）：OR 取
-                        // "最早成熟"的分支——分支成熟时刻 = 纯信号接收时刻、
-                        // AND 分支内部取 max（最新锚点）、嵌套 OR 取其获胜分支
-                        // 的成熟时刻。获胜分支原样上浮：其 anchors 的 max 就是
-                        // 成熟时刻，外层 Delay 用获胜分支的成熟时刻计时（与
-                        // 合约 _orValue / 回放 oracle 的 or_value 逐字节一致）。
-                        // 无锚点的 Ready 分支（如 Not 就绪）永不获胜——链上其
-                        // anchorAt=0，_minAnchor 同样让位于任何带锚分支。
-                        // 获胜分支的 expires_at 原样上浮（衰减只收紧获胜
-                        // 分支自身的有效期，不跨分支取 min）。
                         let better = ready.as_ref().is_none_or(|current| {
                             match (branch_maturity(&evaluated), branch_maturity(current)) {
                                 (Some(candidate), Some(incumbent)) => candidate < incumbent,
@@ -821,14 +786,6 @@ fn eval_expr(
     }
 }
 
-/// Maturity moment of an evaluated READY branch — the moment its causal
-/// anchor settled: a pure signal matures at its receive time, an AND branch
-/// at its latest anchor (max), a matured delay at its advanced due date.
-/// The winner selection for OR branches and the outer `Delay` anchor share
-/// this definition (both take `max(anchors)`), removing the previous
-/// min-anchor / max-anchor split that diverged from the chain's `_orValue`.
-/// `None` marks an anchor-less Ready branch (chain anchorAt == 0): it never
-/// competes for the OR anchor.
 fn branch_maturity(evaluated: &InternalEval) -> Option<DateTime<Utc>> {
     evaluated.anchors.iter().copied().max()
 }

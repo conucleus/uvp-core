@@ -1,7 +1,9 @@
-//! uvp-replay：链上事件流对 hook 状态机的回放 oracle。crate 根保留
-//! 入口（replay_json/replay_chain_events）、请求信封、跨模块共享的
-//! JSON/时间读取辅助与公共导出；生产逻辑见 `facts/`、`transition/`、
-//! `snapshot/`。
+//! uvp-replay：重放 oracle 家族。链轨（`facts/`、`transition/`、
+//! `snapshot/`）以链上事件流重演求值做观察级 diff；云轨（`cloud/`）以
+//! DB 事实日志逐点求值复现在线裁决时间线，产出 hook_state 口径的期望
+//! 状态。crate 根保留入口（replay_json/replay_chain_events/
+//! replay_compiled_hook_json）、请求信封、跨模块共享的 JSON/时间读取
+//! 辅助与公共导出。
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
@@ -9,9 +11,15 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+pub mod cloud;
 mod facts;
 mod snapshot;
 mod transition;
+
+pub use cloud::{
+    replay_compiled_hook, CloudReplayFact, CloudReplayOutcome, CloudReplayRequest, STATUS_CXL,
+    STATUS_INIT, STATUS_READY, STATUS_WAIT,
+};
 
 use facts::{order_key, validate_plan_registration_gates, OracleOrderState, OracleState};
 use snapshot::compare_hook_observations;
@@ -21,7 +29,6 @@ use transition::{absorb_chain_observation, evaluate_timer_hook, record_signal_an
 mod tests;
 
 #[cfg(test)]
-// 模块内测试直引求值内核与观察配对的内部构件（见 tests.rs）。
 use snapshot::{hook_observation_key, same_hook_observation};
 #[cfg(test)]
 use transition::{
@@ -38,8 +45,6 @@ pub enum ReplayError {
 type Result<T> = std::result::Result<T, ReplayError>;
 
 #[derive(Debug, Deserialize)]
-// FFI/NAPI 最外层请求信封（对象形态）：未知字段确定性拒绝（拼错的调用方
-// 输入不得被静默忽略成零值语义）。裸事件数组形态不经此结构。
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ReplayRequest {
     #[serde(default)]
@@ -49,8 +54,6 @@ struct ReplayRequest {
 }
 
 #[derive(Debug, Default, Deserialize)]
-// options 与外层信封同口径拒绝未知字段：拼错的键（如 strick）不得被
-// 静默忽略成缺省语义。
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReplayOptions {
     #[serde(default)]
@@ -81,10 +84,16 @@ pub fn replay_json(input: &str) -> String {
     envelope_json(result)
 }
 
+pub fn replay_compiled_hook_json(input: &str) -> String {
+    let result = serde_json::from_str::<cloud::CloudReplayRequest>(input)
+        .map_err(|err| ReplayError::Message(format!("invalid cloud replay request: {err}")))
+        .and_then(replay_compiled_hook)
+        .map(|outcome| json!({ "status": outcome.status }));
+    envelope_json(result)
+}
+
 pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> Result<Value> {
     if options.sort.unwrap_or(true) {
-        // blockNumber/logIndex 是排序键：非整数（或缺失）折 0 会把事件流
-        // 静默重排成错误因果序——排序前响亮校验，不做默认值兜底。
         for event in &events {
             for key in ["blockNumber", "logIndex"] {
                 value_i64(event, key).map_err(|err| {
@@ -123,12 +132,6 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                 let zhixu_id = value_str(event, "zhixuId")?.to_string();
                 let order_id = value_str(event, "orderId")?.to_string();
                 let key = order_key(&plan_id, &order_id);
-                // 合约对重复注册 revert OrderAlreadyRegistered——订单在链上
-                // 恰注册一次，事件流中的重复 OrderRegistered 只能是投影
-                // 重放/重发。吸收（保留已积累的信号与钩子状态），不按
-                // "重新注册"清空状态：第二次注册从未在链上发生，重置会把
-                // 已验证的事实吞成空洞。同键不同 zhixu 的身份矛盾是损坏
-                // 的事件流，响亮失败。
                 if let Some(existing) = state.orders.get(&key) {
                     if existing.zhixu_id != zhixu_id {
                         return Err(ReplayError::Message(format!(
@@ -165,9 +168,6 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                     event,
                 )?;
             }
-            // StageMaterialized 被 oracle 消费：链上物化事实回填本地状态，
-            // 与 oracle 自推导的物化路径（trigger / emit-ready hook Ready）
-            // 互为补充，后续依赖该阶段的 watcher 求值据此放行。
             "StageMaterialized" => {
                 let plan_id = value_str(event, "planId")?;
                 let order_id = value_str(event, "orderId")?;
@@ -182,11 +182,6 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                     })?;
                 order.materialized_stages.insert(stage_id.to_string(), true);
             }
-            // OrderTriggered 被记录为出生事务标记（outside 出生事实与其同
-            // 事务；order-link 出生不 _recordSignal，见 record_signal_and_evaluate
-            // 的出生通道判别）。合约一单恰发一次 OrderTriggered：同键再次
-            // 到达且事务哈希不同是损坏的事件流——静默覆盖会改写出生通道
-            // 判别基準，响亮失败（与 OrderRegistered 的矛盾流检测同形）。
             "OrderTriggered" => {
                 let order_key =
                     order_key(value_str(event, "planId")?, value_str(event, "orderId")?);
@@ -251,8 +246,6 @@ fn seconds_from_iso(value: &str) -> Result<i64> {
 }
 
 fn iso_from_seconds(value: i64) -> Option<String> {
-    // "无 due"由 EvalValue::due_at 的显式 Option 区分，epoch 0 不是哨兵：
-    // epoch 0 的等待期限照常渲染，poke 资格闸按存在性判断。
     Some(
         Utc.timestamp_opt(value, 0)
             .single()?
@@ -260,9 +253,6 @@ fn iso_from_seconds(value: i64) -> Option<String> {
     )
 }
 
-/// dueAt 渲染失败要响亮失败：把不可渲染的期限折成 None 会让等待行变成
-/// 无期限的永久 wait（poke 资格闸按存在性判永不合资格）——静默吞掉一个
-/// 确定性的毒输入，不如报错让事件流的问题暴露。
 fn render_due_at(seconds: i64) -> Result<String> {
     iso_from_seconds(seconds).ok_or_else(|| {
         ReplayError::Message(format!(

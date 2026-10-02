@@ -23,7 +23,6 @@ pub use artifact::{CLOUD_ARTIFACT_SCHEMA_VERSION, HOOK_PLAN_SCHEMA_VERSION};
 mod tests;
 
 #[cfg(test)]
-// 模块内测试直引 serde_json::Map（见 tests.rs）。
 use serde_json::Map;
 
 #[derive(Debug, Error)]
@@ -34,9 +33,6 @@ pub enum CompilerError {
     Issues(String),
 }
 
-/// 编译错误串上限：issues 的条数与单条长度都随 plan 输入无界
-/// 增长（毒定义可造出数百条 issue × 长路径），错误串经 FFI/NAPI 信封
-/// 外发——在拼装边界截断并标注被省略的条数，保留头部诊断。
 pub(crate) const MAX_ISSUES_STRING_BYTES: usize = 16 * 1024;
 
 pub(crate) fn join_issues_bounded(issues: &[String]) -> String {
@@ -64,17 +60,11 @@ pub(crate) fn join_issues_bounded(issues: &[String]) -> String {
 type Result<T> = std::result::Result<T, CompilerError>;
 
 #[derive(Debug, Deserialize)]
-// FFI/NAPI 最外层请求信封：未知字段确定性拒绝（拼错的调用方输入不得
-// 被静默忽略成零值语义）。
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompileRequest {
     #[serde(default = "default_target")]
     pub target: String,
     pub definition: Value,
-    /// Dock 目标注册表：编译入口按引用 uid 从权威存储直读后注入；
-    /// 静态目标 route 缺注册目标的可运行编译返回
-    /// `UNRESOLVED_DOCK_TARGET`（`target: null` 的动态选择 route 走
-    /// 未解析声明面）。
     #[serde(default)]
     pub dock_targets: Option<Value>,
 }
@@ -95,11 +85,7 @@ pub fn compile_request(req: &CompileRequest) -> Result<Value> {
     match req.target.as_str() {
         "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, dock_targets, false),
         "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, dock_targets, false),
-        // parse-only：允许 unresolved route。
         "parse" => compile_zhixu_hook_plan(&req.definition, dock_targets, true),
-        // 不存在 dock link 编译 target（uvp.dock-link v1 产物面）：
-        // link 校验由 hook_plan/cloud/parse 在 dockTargets
-        // 在场时同一链路承担，无独立产物面。
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"
         ))),

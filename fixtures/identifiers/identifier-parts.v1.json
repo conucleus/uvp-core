@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "uvp.identifierParts.v1",
+  "note": "标识符严格语法的跨语言钉死语料：Rust（uvp-compiler 的 valid_identifier_part，经 sendSignals 严格语法闸）与 Go（uvp-utils api/core/v0 的 ValidateIdentifierPart）两侧测试对同一份文件做逐条判定比对。任一侧放宽或收紧首字符/字符集规则都会让至少一侧的测试报警。改本文件必须同改两侧实现。",
+  "valid": ["a", "A", "cmp", "Task1", "task_stage", "order-id", "lead-", "x_9-Z"],
+  "invalid": ["", "1task", "-order", "_private", "task stage", " task", "task.stage", "task#stage", "任务"]
+}

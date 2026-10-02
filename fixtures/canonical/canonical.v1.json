@@ -54,6 +54,16 @@
       "name": "large scientific float nested deep in an object is rejected",
       "input": { "a": { "b": [1e300] } },
       "expectReject": "float-form JSON number"
+    },
+    {
+      "name": "integer literal beyond the 64-bit range parses as an f64 payload and is rejected",
+      "input": { "a": 18446744073709551616 },
+      "expectReject": "float-form JSON number"
+    },
+    {
+      "name": "the first offending float is reported deterministically in sorted-key order",
+      "input": { "b": 0.5, "a": 0.25 },
+      "expectReject": "0.25"
     }
   ]
 }

@@ -21,10 +21,8 @@ struct Corpus {
 struct Case {
     name: String,
     input: Value,
-    /// 互斥：存在即本用例必须以包含该子串的错误响亮失败。
     #[serde(default)]
     expect_reject: Option<String>,
-    /// 互斥：存在即本用例必须产出该 canonical 串。
     #[serde(default)]
     expect_canonical: Option<String>,
 }
@@ -32,9 +30,6 @@ struct Case {
 #[test]
 fn canonical_stringify_matches_the_pinned_vectors() {
     let corpus: Corpus = serde_json::from_str(CORPUS).expect("canonical corpus should decode");
-    // 语料格式版本钉住：文件升版（改用例结构/判别键）时这里必须先响亮
-    // 失败，消费面不得静默按旧口径解读新文件（semantics/closed-sets 消费
-    // 面同款纪律）。
     assert_eq!(
         corpus.schema_version, "uvp.canonicalJsonCorpus.v1",
         "canonical corpus schemaVersion drifted; migrate this consumer before trusting the file"

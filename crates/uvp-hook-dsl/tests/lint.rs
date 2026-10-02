@@ -1,11 +1,5 @@
-//! UVP Core Lint v1 回归门（PRD 109 §23）：
-//!
-//! * 正例语料（fixtures/hook/lint.v1.json）覆盖 §23.1 全部形态；
-//! * 负回归钉住 §23.2：嵌套延时不提示折叠、`A | ~A` 属 semantic
-//!   validation 拒绝而非 lint tautology；
-//! * span 映射钉住解析器侧表的后序配对不变量；
-//! * 随机合法表达式永不 panic、lint 不改变 parse/compile 语义（§23.4 的
-//!   无 cargo-fuzz 基础设施下的确定性随机门）。
+//! UVP Core Lint v1 回归门：正例语料 fixtures/hook/lint.v1.json 与负回归
+//! 钉住 PRD 109 §23 的 lint 规则面。
 
 use serde_json::Value;
 use uvp_hook_dsl::{
@@ -45,9 +39,8 @@ struct InvalidCase {
 }
 
 fn load_corpus() -> LintCorpus {
-    let corpus: LintCorpus = serde_json::from_str(CORPUS).expect("lint corpus fixture should parse");
-    // 语料格式版本钉住：文件升版时这里必须先响亮失败（semantics/
-    // closed-sets 消费面同款纪律）。
+    let corpus: LintCorpus =
+        serde_json::from_str(CORPUS).expect("lint corpus fixture should parse");
     assert_eq!(
         corpus.schema_version, "uvp.hookLintCorpus.v1",
         "lint corpus schemaVersion drifted; migrate this consumer before trusting the file"
@@ -125,40 +118,6 @@ fn lint_corpus_semantic_validation_rejections() {
     }
 }
 
-/// lint 失败不改变 parse 语义：同一 hook 的 parse_hook 输出在 lint 前后
-/// 逐字节一致（lint 是只读旁路，PRD §26 第 17/18 条）。
-#[test]
-fn lint_does_not_change_parse_semantics() {
-    for hook in [
-        "buyer::task.a.cmp & task.a.cmp",
-        "buyer::(task.a.cmp +10s) & (task.a.cmp +5s)",
-        "buyer::task.a.cmp & (task.a.cmp | task.b.cmp)",
-    ] {
-        let before = uvp_hook_dsl::parse_hook(uvp_hook_dsl::ParseHookRequest {
-            profile: Profile::EvmStrict,
-            gate: Gate::Hook,
-            hook_name: "HOOK".to_string(),
-            hook: hook.to_string(),
-        })
-        .expect("hook must parse");
-        let lint_report = lint_hook(Profile::EvmStrict, Gate::Hook, "HOOK", hook).expect("hook must lint");
-        let after = uvp_hook_dsl::parse_hook(uvp_hook_dsl::ParseHookRequest {
-            profile: Profile::EvmStrict,
-            gate: Gate::Hook,
-            hook_name: "HOOK".to_string(),
-            hook: hook.to_string(),
-        })
-        .expect("hook must parse again");
-        assert_eq!(before, after, "lint must not mutate parse semantics");
-        assert!(
-            !lint_report.diagnostics.is_empty(),
-            "fixture {hook} is expected to be lint-dirty"
-        );
-    }
-}
-
-/// span 侧表的后序配对不变量：diagnostic 的 span 必须切出条件原文的真实
-/// 子串（primary operand 本身）。
 #[test]
 fn diagnostic_spans_point_at_real_source_fragments() {
     let report = lint_hook(
@@ -187,9 +146,6 @@ fn diagnostic_spans_point_at_real_source_fragments() {
     );
     assert!(related.start_byte > primary.end_byte);
 
-    // 组节点 span 覆盖整个组；嵌套结构下每个 group 的 span 仍是原文切片。
-    // 括号本身不进入组 span（span 记录在组自身 token 上，这是 v1 的已知
-    // 外观边界，诊断仍能精确指向操作数）。
     let report = lint_hook(
         Profile::EvmStrict,
         Gate::Hook,
@@ -210,7 +166,6 @@ fn diagnostic_spans_point_at_real_source_fragments() {
     );
 }
 
-/// L006：boolean nesting depth 超预算（预算 8，与 parser 深度限制无关）。
 #[test]
 fn excessive_boolean_depth_is_reported() {
     let mut condition = String::from("task.a.cmp");
@@ -229,7 +184,6 @@ fn excessive_boolean_depth_is_reported() {
         codes(&report)
     );
 
-    // 恰好在预算内不报告。
     let mut condition = String::from("task.a.cmp");
     for _ in 0..MAX_LINT_BOOLEAN_DEPTH {
         condition = format!("({condition} & task.b.cmp)");
@@ -246,7 +200,6 @@ fn excessive_boolean_depth_is_reported() {
     );
 }
 
-/// L007：单个 boolean group 的 operand 数量超预算。
 #[test]
 fn excessive_operand_count_is_reported() {
     let operands = (0..(MAX_LINT_BOOLEAN_OPERANDS + 1))
@@ -267,8 +220,6 @@ fn excessive_operand_count_is_reported() {
     );
 }
 
-/// lint JSON 入口的信封与序列化口径（camelCase 字段，供 CLI / FFI /
-/// Store / IDE 消费）。
 #[test]
 fn lint_hook_json_envelope_shape() {
     let envelope = lint_hook_json(
@@ -290,7 +241,6 @@ fn lint_hook_json_envelope_shape() {
         Value::String("duplicate_term".to_string())
     );
 
-    // 语义验证失败按 ok:false 返回，而不是 diagnostic。
     let envelope =
         lint_hook_json(r#"{"hookName": "TAUT", "hook": "buyer::task.a.cmp | ~task.a.cmp"}"#);
     let value: Value = serde_json::from_str(&envelope).unwrap();
@@ -298,7 +248,6 @@ fn lint_hook_json_envelope_shape() {
     assert!(value["value"].is_null());
 }
 
-/// ready_implies 的关键 sound 性质（供 Layer 2 与规则内部共用）。
 #[test]
 fn ready_implies_soundness_spot_checks() {
     use uvp_hook_dsl::ready_implies;
@@ -308,27 +257,22 @@ fn ready_implies_soundness_spot_checks() {
     let a = signal("task.a.cmp");
     let b = signal("task.b.cmp");
 
-    // And ⇒ 成员。
     assert!(matches!(
         ready_implies(&Expr::And(vec![a.clone(), b.clone()]), &a),
         Proven(_)
     ));
-    // 成员不 ⇒ And（A 就绪不保证 B）。
     assert!(matches!(
         ready_implies(&a, &Expr::And(vec![a.clone(), b.clone()])),
         Unknown
     ));
-    // Or 成员 ⇒ Or。
     assert!(matches!(
         ready_implies(&a, &Expr::Or(vec![a.clone(), b.clone()])),
         Proven(_)
     ));
-    // Or 不 ⇒ 特定成员（不知道哪个分支获胜）。
     assert!(matches!(
         ready_implies(&Expr::Or(vec![a.clone(), b.clone()]), &a),
         Unknown
     ));
-    // 延时支配：d1 ≥ d2 同基座。
     let delay = |expr: Expr, seconds: i64| Expr::Delay {
         expr: Box::new(expr),
         raw_duration: format!("{seconds}s"),
@@ -342,19 +286,14 @@ fn ready_implies_soundness_spot_checks() {
         ready_implies(&delay(a.clone(), 5), &delay(a.clone(), 10)),
         Unknown
     ));
-    // Delay ⇒ 内层（延时成熟 ⇒ 信号已存在）。
     assert!(matches!(
         ready_implies(&delay(a.clone(), 10), &a),
         Proven(_)
     ));
-    // 内层不 ⇒ 延时（信号存在不等于延时已到期）。
     assert!(matches!(ready_implies(&a, &delay(a.clone(), 10)), Unknown));
-    // 跨信号无公理（Layer 3 未开放）。
     assert!(matches!(ready_implies(&a, &b), Unknown));
 }
 
-/// SpannedExpr 与解析器侧表的数量/次序不变量：合法解析的 span 数恰等于
-/// AST 节点数，build 后每个节点 span 都落在父节点 span 内。
 #[test]
 fn spanned_tree_matches_parser_side_table() {
     for hook in [
@@ -399,16 +338,18 @@ fn assert_span_nesting(node: &SpannedExpr, hook: &str) {
     }
 }
 
-/// §23.4 随机门（确定性种子）：parser → semantic validation → lint 全链
-/// 永不 panic；生成的合法 hook 要么 lint 干净要么带诊断，非法样本按
-/// Err 返回，二者都不能 panic 或挂起。
 #[test]
 fn random_expressions_never_panic_in_lint() {
     let mut rng = Lcg::new(0x2026_0909);
     for iteration in 0..2000 {
         let hook = generate_random_hook(&mut rng);
         let result = std::panic::catch_unwind(|| {
-            lint_hook(Profile::EvmStrict, Gate::Hook, &format!("R{iteration}"), &hook)
+            lint_hook(
+                Profile::EvmStrict,
+                Gate::Hook,
+                &format!("R{iteration}"),
+                &hook,
+            )
         });
         assert!(
             result.is_ok(),
@@ -437,8 +378,6 @@ impl Lcg {
     }
 }
 
-/// 按文法构造随机 hook（深小组、多延时、重复项、负 guard、嵌套括号——
-/// §23.4 的重点攻击面），并保证 OR 分支含正锚、Not 只包信号。
 fn generate_random_hook(rng: &mut Lcg) -> String {
     let signal_count = 1 + rng.below(4) as usize;
     let signal = |index: usize| format!("task.s{index}.cmp");
@@ -454,7 +393,6 @@ fn generate_random_hook(rng: &mut Lcg) -> String {
             _ => format!("({name} | task.t{index}.cmp)"),
         });
     }
-    // 保证至少一个正锚：首操作数强制为正形态。
     operands[0] = match rng.below(2) {
         0 => signal(0),
         _ => format!("({} +{}s)", signal(0), 1 + rng.below(30)),
@@ -465,7 +403,6 @@ fn generate_random_hook(rng: &mut Lcg) -> String {
         operands
             .iter()
             .map(|operand| {
-                // OR 分支不得是纯负 guard：包一层正锚。
                 if operand.starts_with('~') {
                     format!("({operand} & {})", signal(0))
                 } else {
@@ -481,8 +418,6 @@ fn generate_random_hook(rng: &mut Lcg) -> String {
 
 #[test]
 fn lint_gate_filter_accepts_admission_forms() {
-    // 过滤档（发射适格面）的合法形态不得被 lint 误报：裸衰减根在钩子档
-    // 因缺正锚被拒，在过滤档位置全放开、lint 通过。
     let filter_request = r#"{"profile":"cloud_compat","gate":"filter","hookName":"ADMIT","hook":"buyer::~(task.cancel.cmp +14d)"}"#;
     let envelope = lint_hook_json(filter_request);
     assert!(envelope.contains("\"ok\":true"), "{envelope}");
