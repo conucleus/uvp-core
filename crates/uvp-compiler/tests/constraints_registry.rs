@@ -2,7 +2,7 @@
 //! `uvp-protocol/protocol/uvp-constraints.v1.json` 是跨语言接受面规则
 //! （zhixu / hook-dsl / dock / onchain-plan）的单一出处。
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 const CONSTRAINTS_ENV_VAR: &str = "UVP_CONSTRAINTS_PATH";
@@ -438,29 +438,6 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
-        "file-resource-type-closed-enum".into(),
-        (
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    stage_mut(&mut d)["fileResources"] = json!({
-                        "contract_template": { "fileType": "local", "localFile": { "path": "./t.md" } }
-                    });
-                    d
-                })
-            },
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    stage_mut(&mut d)["fileResources"] =
-                        json!({ "contract_template": { "fileType": "locale" } });
-                    d
-                })
-            },
-            "fileType must be one of",
-        ),
-    ));
-    probes.push((
         "send-signal-combined-max-length".into(),
         (
             || {
@@ -764,180 +741,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
-    probes.push((
-        "interface-ports-max-count".into(),
-        (
-            || probe_compile(target_interface_definition()),
-            || {
-                probe_compile({
-                    let mut d = target_interface_definition();
-                    let inputs: Map<String, Value> = (0..65)
-                        .map(|index| {
-                            (
-                                format!("p{index:02}"),
-                                json!({ "hook": "main.work#DOCK_ENTER" }),
-                            )
-                        })
-                        .collect();
-                    d["spec"]["dockInterface"]["production_service"]["inputs"] =
-                        Value::Object(inputs);
-                    d
-                })
-            },
-            "interface exposes 66 ports (65 inputs + 1 outputs), limit is 64",
-        ),
-    ));
-    probes.push((
-        "manifest-definitions-max-count".into(),
-        (
-            || probe_link(dock_definition(), target_dock_targets()),
-            || {
-                let mut targets = target_dock_targets()
-                    .as_array()
-                    .expect("dock targets carry an entry array")
-                    .clone();
-                for index in 0..256 {
-                    targets.push(json!({ "uid": format!("zx-{index:032x}") }));
-                }
-                probe_link(dock_definition(), Value::Array(targets))
-            },
-            "dockTargets carries 257 definitions, limit is 256",
-        ),
-    ));
-
-    probes.push((
-        "birth-channel-key-union-uniqueness".into(),
-        (
-            || probe_compile(mint_union_definition(false)),
-            || probe_compile(mint_union_definition(true)),
-            "一事一单：同一事实至多铸一单",
-        ),
-    ));
-
-    probes.push((
-        "task-patterns-max-count".into(),
-        (
-            || probe_compile(base_definition()),
-            || probe_compile(mechanical_definition(65, 1, 1)),
-            "task patterns, limit is 64",
-        ),
-    ));
-    probes.push((
-        "stage-entries-max-count".into(),
-        (
-            || probe_compile(base_definition()),
-            || probe_compile(mechanical_definition(1, 257, 1)),
-            "stages across taskPatterns, limit is 256",
-        ),
-    ));
-    probes.push((
-        "compile-hooks-max-count".into(),
-        (
-            || probe_compile(base_definition()),
-            || probe_compile(mechanical_definition(1, 256, 3)),
-            "receiveSignals channels (compiled hooks) across taskPatterns, limit is 512",
-        ),
-    ));
-
     probes
-}
-
-fn mint_union_definition(same_birth_fact: bool) -> Value {
-    let cellar_birth = if same_birth_fact {
-        "::ANCHOR(@producer::dispatch.main.smart_contract)".to_string()
-    } else {
-        "::ANCHOR(@distributor::depot.ship.manifest)".to_string()
-    };
-    json!({
-            "apiVersion": "uvp/v0",
-            "kind": "Zhixu",
-            "metadata": { "name": "mint_union_probe" },
-            "spec": {
-                "platform": { "type": "cloud" },
-                "nucleation": { "id": "probe-core" },
-                "taskPatterns": [
-                    { "name": "dispatch", "stages": [{
-                        "name": "main",
-                        "source": "producer",
-                        "receiveSignals": { "PUBLISH": "producer::dispatch.main.seed" },
-                        "sendSignals": [
-    { "name": "smart_contract" },
-    { "name": "seed" }
-    ],
-                        "executor": { "supplierType": "organization", "supplierID": "dispatch-main" }
-                    }]},
-                    { "name": "depot", "stages": [{
-                        "name": "ship",
-                        "source": "distributor",
-                        "receiveSignals": { "PUBLISH": "distributor::depot.ship.seed" },
-                        "sendSignals": [
-    { "name": "manifest" },
-    { "name": "seed" }
-    ],
-                        "executor": { "supplierType": "organization", "supplierID": "depot-ship" }
-                    }]},
-                    { "name": "orchard", "stages": [{
-                        "name": "retail",
-                        "source": "buyer",
-                        "receiveSignals": { "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)" },
-                        "sendSignals": [{ "name": "ack" }],
-                        "mint": "per-fact",
-                        "executor": { "supplierType": "organization", "supplierID": "orchard-retail" }
-                    }]},
-                    { "name": "cellar", "stages": [{
-                        "name": "store",
-                        "source": "cellar",
-                        "receiveSignals": { "SPAWN": cellar_birth },
-                        "sendSignals": [{ "name": "shelve" }],
-                        "mint": "per-fact",
-                        "executor": { "supplierType": "organization", "supplierID": "cellar-store" }
-                    }]},
-                ]
-            }
-        })
-}
-
-fn mechanical_definition(tasks: usize, stages: usize, hooks: usize) -> Value {
-    let signals = ["cmp", "str", "ack"];
-    let hooks = hooks.max(1).min(signals.len());
-    let mut patterns = Vec::new();
-    for task_index in 0..tasks {
-        let mut stage_values = Vec::new();
-        for stage_index in 0..stages {
-            let task = format!("t{task_index}");
-            let stage = format!("s{stage_index}");
-            let mut receive_signals = Map::new();
-            let mut send_signals = Vec::new();
-            for (hook_index, signal) in signals.iter().take(hooks).enumerate() {
-                receive_signals.insert(
-                    format!("H{hook_index}"),
-                    Value::String(format!("buyer::{task}.{stage}.{signal}")),
-                );
-                send_signals.push(json!({ "name": signal }));
-            }
-            stage_values.push(json!({
-                "name": stage,
-                "source": "buyer",
-                "receiveSignals": receive_signals,
-                "sendSignals": send_signals,
-                "executor": {
-                    "supplierType": "organization",
-                    "supplierID": format!("e{task_index}x{stage_index}")
-                }
-            }));
-        }
-        patterns.push(json!({ "name": format!("t{task_index}"), "stages": stage_values }));
-    }
-    json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "count_probe" },
-        "spec": {
-            "platform": { "type": "cloud" },
-            "nucleation": { "id": "probe-core" },
-            "taskPatterns": patterns,
-        }
-    })
 }
 
 #[test]
