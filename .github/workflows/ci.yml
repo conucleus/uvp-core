@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: uvp-core-ci-.github
   cancel-in-progress: false
@@ -11,8 +14,8 @@ concurrency:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
-      # 约束注册表单源在 uvp-protocol 仓，独立 checkout 的 CI 按环境变量取文件
       UVP_CONSTRAINTS_PATH: ${{ github.workspace }}/uvp-protocol/protocol/uvp-constraints.v1.json
     steps:
       - uses: actions/checkout@v4
@@ -21,8 +24,6 @@ jobs:
         with:
           repository: conucleus/uvp-protocol
           path: uvp-protocol
-          # 协议联动 PR 用同名分支验证真实组合；非 PR 检默认分支
-          #（协议仓无 pin 载体，默认分支即其发布面）。
           ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,11 +38,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - uses: dtolnay/rust-toolchain@stable
       - name: Build native package
         working-directory: crates/uvp-node

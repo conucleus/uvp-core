@@ -116,8 +116,6 @@ pub(crate) fn build_executor_routes(entries: &[StageEntry]) -> Value {
     let mut routes = Map::new();
     for entry in entries {
         if is_zhixu_executor_stage(entry) {
-            // zhixu 委托 route 不进静态 executor route：权威形态是
-            // dockRoutes 中的 resolved DockRoute（dockRoutes 是权威形态）。
             continue;
         }
         if entry.stage.executor.is_some() {
@@ -128,8 +126,6 @@ pub(crate) fn build_executor_routes(entries: &[StageEntry]) -> Value {
 }
 
 pub(crate) fn is_zhixu_executor_stage(entry: &StageEntry) -> bool {
-    // 精确比较：带空白的变体已在 validate_zhixu_shape 按闭集外拒绝，
-    // 下游不再保留 trim 容忍（单一口径，杜绝"校验侧拒绝、比较侧放行"）。
     entry
         .stage
         .executor
@@ -143,7 +139,6 @@ pub(crate) fn compile_stage_hooks(
 ) -> Result<Vec<Value>> {
     let mut hooks = Vec::new();
     let is_mint_stage = entry.stage.mint.is_some();
-    // entrance 端口引用的目标侧 hook 是 dock 出生入口。
     let entrance_hook_ids = dock_entrance_hook_ids(dock_state);
     let is_zhixu_stage = is_zhixu_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
@@ -155,8 +150,6 @@ pub(crate) fn compile_stage_hooks(
         } else {
             "none"
         };
-        // emitReady：出生/委托入口必发；有执行者的 stage 的 receive hook
-        // 是 executor dispatch 边（触发/派发拆分）。
         let emit_ready = order_trigger_kind != "none" || entry.stage.executor.is_some();
         let route = if is_zhixu_stage {
             None

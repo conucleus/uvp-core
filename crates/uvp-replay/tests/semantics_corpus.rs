@@ -22,13 +22,10 @@ struct ReplayCase {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReplayExpect {
-    // 计数对 error-only 条目无意义（回放在断言前响亮失败），给默认 0。
     #[serde(default)]
     observed_count: usize,
     #[serde(default)]
     mismatch_count: usize,
-    // 事实探针是可选的：mismatch/error 条目的事件流可以不落任何信号，
-    // 强制字段会把"无事实"伪装成必填断言。
     #[serde(default)]
     order_key: Option<String>,
     #[serde(default)]
@@ -37,25 +34,17 @@ struct ReplayExpect {
     sender_id: Option<String>,
     #[serde(default)]
     event_id: Option<String>,
-    /// Assert the eventName sequence of every observed oracle emission.
     #[serde(default)]
     observed_events: Option<Vec<String>>,
-    /// Assert the dueAt carried by the single wait observation, if any.
     #[serde(default)]
     wait_due_at: Option<String>,
-    /// Assert terminal hook statuses: {orderKey -> {hookId -> status}}.
     #[serde(default)]
     final_hook_statuses:
         Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
-    /// Assert these order keys exist in the replayed state (lineage/multi-order facts).
     #[serde(default)]
     state_order_keys: Option<Vec<String>>,
-    /// Assert the exact mismatch set (reason + hook + occurrence): replay must
-    /// not only count a broken stream's mismatches but report them at the
-    /// right hook observation.
     #[serde(default)]
     mismatch_details: Option<Vec<MismatchDetail>>,
-    /// Assert the replay fails loudly with a message containing this text.
     #[serde(default)]
     error_contains: Option<String>,
 }
@@ -71,8 +60,6 @@ struct MismatchDetail {
 #[test]
 fn replays_semantic_corpus() {
     let corpus: Corpus = serde_json::from_str(CORPUS).expect("semantic corpus should decode");
-    // 语料格式版本钉住：v2 迁移时这里必须先响亮失败，消费面不得静默按旧
-    // 口径解读新文件（TS/Go 消费测试同款断言）。
     assert_eq!(
         corpus.schema_version, "uvp.hookSemanticsCorpus.v1",
         "corpus schemaVersion drifted; migrate every consumer before shipping the new file"

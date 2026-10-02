@@ -9,6 +9,12 @@ char* uvp_compile_json(const char* request_json);
 char* uvp_parse_hook_json(const char* request_json);
 char* uvp_eval_compiled_hook_json(const char* request_json);
 char* uvp_replay_json(const char* request_json);
+/* 云轨重放走带：请求为 {"ast": <cloudAst.v1>, "facts": [{"signalName":
+ * "...", "arrivedAt": "<RFC3339>"}...按受理序], "now": "<RFC3339>"}，
+ * value 为 {"status": "ready|wait|cxl|init"}（hook_state 词表）——把事实
+ * 日志逐点喂给 kernel 复现在线裁决时间线（先到先成立 + 终态吸收 +
+ * wait 成熟决策点），供对账方与库内状态 diff。 */
+char* uvp_replay_compiled_hook_json(const char* request_json);
 /* UVP Core Lint（PRD 109）：lint 不改变语言合法性——语义验证失败按
  * ok:false 信封返回，合法表达的 diagnostics 在 ok:true 的 value 里，
  * 是否阻塞由宿主侧 deny policy 决定。lint_hook 请求形态与

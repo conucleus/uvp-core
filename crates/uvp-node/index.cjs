@@ -53,6 +53,10 @@ exports.replay = function replay(request) {
   return unwrap(native.replayJson(JSON.stringify(request)));
 };
 
+exports.replayCompiledHook = function replayCompiledHook(request) {
+  return unwrap(native.replayCompiledHookJson(JSON.stringify(request)));
+};
+
 exports.lintHook = function lintHook(request) {
   return unwrap(native.lintHookJson(JSON.stringify(request)));
 };

@@ -4,6 +4,7 @@ export const compile = core.compile;
 export const parseHook = core.parseHook;
 export const evaluateHook = core.evaluateHook;
 export const replay = core.replay;
+export const replayCompiledHook = core.replayCompiledHook;
 export const lintHook = core.lintHook;
 export const lintZhixu = core.lintZhixu;
 export const version = core.version;
