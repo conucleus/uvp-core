@@ -1320,7 +1320,7 @@ fn cloud_artifact_uses_resolved_routes() {
         false,
     )
     .expect("cloud artifact compiles with dock targets");
-    assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v4");
+    assert_eq!(artifact["schemaVersion"], "uvp.cloudArtifact.v5");
     let hooks = artifact["hooks"].as_array().unwrap();
     assert!(hooks
         .iter()
@@ -2042,7 +2042,7 @@ const SETTLE_ADMISSION: &str = "payment::payment_flow.init.str & ~(payment_flow.
 fn admissions_compile_into_both_targets() {
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
-        json!(SETTLE_ADMISSION);
+        json!([SETTLE_ADMISSION]);
     let plan = compile_zhixu_hook_plan(&definition, None, true)
         .expect("gated sendSignal compiles for hook_plan");
     let admissions = plan["admissions"].as_array().unwrap();
@@ -2054,7 +2054,7 @@ fn admissions_compile_into_both_targets() {
     let admission = &admissions[0];
     assert_eq!(admission["stageIdentifier"], json!("payment_flow.settle"));
     assert_eq!(admission["signalName"], json!("payment_flow.settle.cmp"));
-    assert_eq!(admission["rawExpression"], json!(SETTLE_ADMISSION));
+    assert_eq!(admission["rawExpression"], json!([SETTLE_ADMISSION]));
     assert_eq!(
         admission["normalizedExpression"],
         json!("payment::payment_flow.init.str&~(payment_flow.control.cxl+14d)")
@@ -2101,7 +2101,7 @@ fn admission_self_reference_is_rejected_in_both_targets() {
         for header in ["payment", "seller"] {
             let mut definition = target_payment_definition();
             definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] = json!(
-                format!("{header}::payment_flow.settle.cmp & payment_flow.init.str")
+                [format!("{header}::payment_flow.settle.cmp & payment_flow.init.str")]
             );
             let result = if target == "hook_plan" {
                 compile_zhixu_hook_plan(&definition, None, true)
@@ -2111,7 +2111,7 @@ fn admission_self_reference_is_rejected_in_both_targets() {
             let error = result.expect_err("self-referencing validWhen must fail");
             assert!(
                 error.to_string().contains(
-                    "D028 payment_flow.settle.sendSignals[cmp].validWhen: expression addresses the declaring signal itself (payment_flow.settle.cmp)"
+                    "D028 payment_flow.settle.sendSignals[cmp].validWhen[0]: expression addresses the declaring signal itself (payment_flow.settle.cmp)"
                 ),
                 "{target}/{header}: {error}"
             );
@@ -2120,13 +2120,13 @@ fn admission_self_reference_is_rejected_in_both_targets() {
 
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
-        json!("seller::payment_flow.settle.cmp & payment_flow.init.str");
+        json!(["seller::payment_flow.settle.cmp & payment_flow.init.str"]);
     let error = compile_zhixu_hook_plan(&definition, None, true)
         .expect_err("a same-named fact under another source class still addresses the declaring signal's fact key");
     assert!(
         error
             .to_string()
-            .contains("D028 payment_flow.settle.sendSignals[cmp].validWhen"),
+            .contains("D028 payment_flow.settle.sendSignals[cmp].validWhen[0]"),
         "{error}"
     );
 }
@@ -2153,7 +2153,7 @@ fn admission_dangling_references_are_rejected() {
         for target in ["hook_plan", "cloud"] {
             let mut definition = target_payment_definition();
             definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
-                json!(expression);
+                json!([expression]);
             let result = if target == "hook_plan" {
                 compile_zhixu_hook_plan(&definition, None, true)
             } else {
@@ -2161,7 +2161,7 @@ fn admission_dangling_references_are_rejected() {
             };
             let error = result.expect_err(&format!("{label} ({target}) must be rejected"));
             assert!(
-                error.to_string().contains(".sendSignals[cmp].validWhen"),
+                error.to_string().contains(".sendSignals[cmp].validWhen[0]"),
                 "{label} ({target}): {error}"
             );
             assert!(
@@ -2176,7 +2176,7 @@ fn admission_dangling_references_are_rejected() {
 fn admission_on_birth_anchors_is_rejected() {
     let mut minted = target_payment_definition();
     minted["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] =
-        json!(SETTLE_ADMISSION);
+        json!([SETTLE_ADMISSION]);
     minted["spec"]["taskPatterns"]
         .as_array_mut()
         .unwrap()
@@ -2203,7 +2203,7 @@ fn admission_on_birth_anchors_is_rejected() {
     dock_anchored["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
-        .push(json!({ "name": "execute", "validWhen": SETTLE_ADMISSION }));
+        .push(json!({ "name": "execute", "validWhen": [SETTLE_ADMISSION] }));
     let error = compile_cloud_artifact(&dock_anchored, None, true)
         .expect_err("validWhen on a dock birth-anchor input must fail");
     assert!(
@@ -2223,7 +2223,7 @@ fn admission_on_birth_anchors_is_rejected() {
                 "name": "watch",
                 "source": "auditor",
                 "receiveSignals": { "SPAWN": "::ANCHOR(@payment::payment_flow.init.str)" },
-                "sendSignals": [{ "name": "seen", "validWhen": SETTLE_ADMISSION }],
+                "sendSignals": [{ "name": "seen", "validWhen": [SETTLE_ADMISSION] }],
                 "executor": { "supplierType": "organization", "supplierID": "audit-watcher" }
             }]
         }));
@@ -2258,7 +2258,7 @@ fn admission_on_birth_anchors_is_rejected() {
 fn admission_on_signal_map_relay_targets_is_rejected() {
     let mut parent = parent_settlement_definition(TARGET_UID);
     parent["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"][0]["validWhen"] =
-        json!("buyer::checkout.confirm.cmp");
+        json!(["buyer::checkout.confirm.cmp"]);
     for target in ["hook_plan", "cloud"] {
         let result = if target == "hook_plan" {
             compile_zhixu_hook_plan(&parent, None, true)
@@ -2276,7 +2276,7 @@ fn admission_on_signal_map_relay_targets_is_rejected() {
 
     let mut plain = parent_settlement_definition(TARGET_UID);
     plain["spec"]["taskPatterns"][1]["stages"][0]["sendSignals"][3]["validWhen"] =
-        json!("buyer::checkout.confirm.cmp");
+        json!(["buyer::checkout.confirm.cmp"]);
     let plan = compile_zhixu_hook_plan(&plain, None, true)
         .expect("validWhen on a signal outside signalMap stays legal");
     assert_eq!(plan["admissions"].as_array().map(Vec::len), Some(1));
@@ -2286,7 +2286,7 @@ fn admission_on_signal_map_relay_targets_is_rejected() {
 fn admission_subscription_atom_is_rejected() {
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
-        json!("::ANCHOR(@payment::payment_flow.init.str)");
+        json!(["::ANCHOR(@payment::payment_flow.init.str)"]);
     for target in ["hook_plan", "cloud"] {
         let result = if target == "hook_plan" {
             compile_zhixu_hook_plan(&definition, None, true)
@@ -2296,7 +2296,7 @@ fn admission_subscription_atom_is_rejected() {
         let error = result.expect_err("subscription atoms must not ride the admission face");
         assert!(
             error.to_string().contains(
-                "D030 payment_flow.settle.sendSignals[cmp].validWhen: admission is a per-order state judgment and must not contain subscription atoms"
+                "D030 payment_flow.settle.sendSignals[cmp].validWhen[0]: admission is a per-order state judgment and must not contain subscription atoms"
             ),
             "{target}: {error}"
         );
@@ -2320,12 +2320,23 @@ fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
     );
 
     let mut blank = target_payment_definition();
-    blank["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] = json!("   ");
+    blank["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] = json!(["   "]);
     let error =
-        compile_cloud_artifact(&blank, None, true).expect_err("a blank validWhen must fail loudly");
+        compile_cloud_artifact(&blank, None, true).expect_err("a blank validWhen item must fail loudly");
     assert!(
         error.to_string().contains(
-            "D027 payment_flow.init.sendSignals[str].validWhen: must be a non-blank expression"
+            "D027 payment_flow.init.sendSignals[str].validWhen[0]: must be a non-blank item"
+        ),
+        "{error}"
+    );
+
+    let mut empty_array = target_payment_definition();
+    empty_array["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] = json!([]);
+    let error = compile_cloud_artifact(&empty_array, None, true)
+        .expect_err("an empty validWhen array must fail loudly (drop the key instead)");
+    assert!(
+        error.to_string().contains(
+            "D027 payment_flow.init.sendSignals[str].validWhen: must be a non-empty array; drop the key to declare unconditional admission"
         ),
         "{error}"
     );
@@ -2359,14 +2370,149 @@ fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
 fn admission_invalid_expression_reports_the_declaring_signal() {
     let mut definition = target_payment_definition();
     definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
-        json!("payment::settle.cmp");
+        json!(["payment::settle.cmp"]);
     let error = compile_zhixu_hook_plan(&definition, None, true)
         .expect_err("a two-part signal name inside validWhen must fail");
     assert!(
         error
             .to_string()
-            .contains("payment_flow.settle.sendSignals[cmp].validWhen is invalid")
+            .contains("payment_flow.settle.sendSignals[cmp].validWhen[0] is invalid")
             && error.to_string().contains("task.stage.signal"),
+        "{error}"
+    );
+}
+
+#[test]
+fn multi_item_admission_composes_one_and_root_and_unions_dependencies() {
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] = json!([
+        "payment::payment_flow.init.str",
+        "payment::~(payment_flow.control.cxl +14d)",
+    ]);
+    let cloud = compile_cloud_artifact(&definition, None, true)
+        .expect("a two-item validWhen compiles into one admission");
+    let admissions = cloud["admissions"].as_array().unwrap();
+    assert_eq!(admissions.len(), 1, "N items still produce one admission row");
+    let admission = &admissions[0];
+    assert_eq!(
+        admission["rawExpression"],
+        json!(["payment::payment_flow.init.str", "payment::~(payment_flow.control.cxl +14d)"])
+    );
+    assert_eq!(
+        admission["cloudAst"]["root"],
+        json!({
+            "type": "and",
+            "left": { "type": "signal", "signal": "payment_flow.init.str" },
+            "right": {
+                "type": "neg",
+                "expr": {
+                    "type": "delay",
+                    "expr": { "type": "signal", "signal": "payment_flow.control.cxl" },
+                    "rawDuration": "14d",
+                    "durationSeconds": 14 * 24 * 60 * 60
+                }
+            }
+        }),
+        "the item roots fold under one and-root: {admission}"
+    );
+    assert_eq!(
+        admission["dependencies"],
+        json!([
+            { "signalName": "payment_flow.init.str", "dependencyKind": "positive" },
+            { "signalName": "payment_flow.control.cxl", "dependencyKind": "negative" },
+        ]),
+        "dependencies are the union across items in first-seen order: {admission}"
+    );
+
+    let plan = compile_zhixu_hook_plan(&definition, None, true)
+        .expect("hook_plan composes the same items");
+    let plan_admission = &plan["admissions"][0];
+    assert_eq!(
+        plan_admission["normalizedExpression"],
+        json!("payment::payment_flow.init.str&~(payment_flow.control.cxl+14d)")
+    );
+    assert_eq!(
+        plan_admission["ast"]["condition"]["kind"],
+        json!("and"),
+        "the hook_plan AST carries an and-condition over the item conditions"
+    );
+}
+
+#[test]
+fn multi_item_admission_requires_every_item_ready() {
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] = json!([
+        "payment::payment_flow.init.str",
+        "payment::payment_flow.control.cxl",
+    ]);
+    let cloud = compile_cloud_artifact(&definition, None, true).unwrap();
+    let ast = cloud["admissions"][0]["cloudAst"].clone();
+
+    let evaluate = |facts: &[&str]| {
+        let request = json!({
+            "profile": "cloud_compat",
+            "gate": "filter",
+            "ast": ast,
+            "now": "2026-01-01T00:00:00Z",
+            "signals": facts
+                .iter()
+                .map(|signal| {
+                    json!({
+                        "source": "payment",
+                        "signalName": signal,
+                        "receivedAt": "2025-12-01T00:00:00Z",
+                    })
+                })
+                .collect::<Vec<_>>(),
+        });
+        let output = uvp_hook_dsl::eval_compiled_hook_json(&request.to_string());
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        parsed["value"]["state"].clone()
+    };
+
+    assert_eq!(
+        evaluate(&["payment_flow.init.str", "payment_flow.control.cxl"]),
+        json!("ready"),
+        "admission passes only when every item is ready"
+    );
+    assert_eq!(
+        evaluate(&["payment_flow.init.str"]),
+        json!("needs_more"),
+        "one unsatisfied item holds the whole admission back (no per-item voting)"
+    );
+    assert_eq!(
+        evaluate(&["payment_flow.control.cxl"]),
+        json!("needs_more"),
+        "the other single-item subset must not pass as ready either"
+    );
+}
+
+#[test]
+fn admission_items_must_share_one_header_source() {
+    let mut definition = target_payment_definition();
+    definition["spec"]["taskPatterns"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "evidence",
+            "stages": [{
+                "name": "receipts",
+                "source": "seller",
+                "receiveSignals": { "NOTE": "seller::evidence.receipts.mark" },
+                "sendSignals": [{ "name": "mark" }],
+                "executor": { "supplierType": "organization", "supplierID": "receipt-writer" }
+            }]
+        }));
+    definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] = json!([
+        "payment::payment_flow.init.str",
+        "seller::evidence.receipts.mark",
+    ]);
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("items addressing different header sources must fail");
+    assert!(
+        error.to_string().contains(
+            "D032 payment_flow.settle.sendSignals[cmp].validWhen: every item must address the same header source (payment); item 1 addresses seller"
+        ),
         "{error}"
     );
 }

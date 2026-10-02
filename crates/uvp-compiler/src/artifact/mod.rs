@@ -20,7 +20,7 @@ use crate::validate::{
 use crate::{join_issues_bounded, CompilerError, Result};
 
 pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v4";
-pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v4";
+pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v5";
 
 pub fn compile_zhixu_hook_plan(
     definition_value: &Value,
@@ -391,9 +391,9 @@ fn build_signal_admissions(
             let Some(valid_when) = &declared.valid_when else {
                 continue;
             };
-            if valid_when.trim().is_empty() {
+            if valid_when.is_empty() {
                 return Err(CompilerError::Issues(format!(
-                    "D027 {}.sendSignals[{}].validWhen: must be a non-blank expression; drop the key to declare unconditional admission",
+                    "D027 {}.sendSignals[{}].validWhen: must be a non-empty array; drop the key to declare unconditional admission",
                     entry.stage_identifier, declared.name
                 )));
             }
@@ -420,44 +420,69 @@ fn build_signal_admissions(
                     entry.stage_identifier, declared.name, full_name
                 )));
             }
-            let parsed = parse_hook(ParseHookRequest {
-                profile,
-                gate: Gate::Filter,
-                hook_name: "ADMIT".to_string(),
-                hook: valid_when.clone(),
-            })
-            .map_err(|err| {
-                CompilerError::Issues(format!(
-                    "{}.sendSignals[{}].validWhen is invalid: {err}",
-                    entry.stage_identifier, declared.name
-                ))
-            })?;
-            if parsed.mode == HookMode::Subscription {
-                return Err(CompilerError::Issues(format!(
-                    "D030 {}.sendSignals[{}].validWhen: admission is a per-order state judgment and must not contain subscription atoms (ANCHOR(@…))",
-                    entry.stage_identifier, declared.name
-                )));
+            let mut parsed_items = Vec::with_capacity(valid_when.len());
+            for (index, item) in valid_when.iter().enumerate() {
+                if item.trim().is_empty() {
+                    return Err(CompilerError::Issues(format!(
+                        "D027 {}.sendSignals[{}].validWhen[{index}]: must be a non-blank item; drop the key to declare unconditional admission",
+                        entry.stage_identifier, declared.name
+                    )));
+                }
+                let parsed = parse_hook(ParseHookRequest {
+                    profile,
+                    gate: Gate::Filter,
+                    hook_name: "ADMIT".to_string(),
+                    hook: item.clone(),
+                })
+                .map_err(|err| {
+                    CompilerError::Issues(format!(
+                        "{}.sendSignals[{}].validWhen[{index}] is invalid: {err}",
+                        entry.stage_identifier, declared.name
+                    ))
+                })?;
+                if parsed.mode == HookMode::Subscription {
+                    return Err(CompilerError::Issues(format!(
+                        "D030 {}.sendSignals[{}].validWhen[{index}]: admission is a per-order state judgment and must not contain subscription atoms (ANCHOR(@…))",
+                        entry.stage_identifier, declared.name
+                    )));
+                }
+                if parsed
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.signal_name == full_name)
+                {
+                    return Err(CompilerError::Issues(format!(
+                        "D028 {}.sendSignals[{}].validWhen[{index}]: expression addresses the declaring signal itself ({}); admission judges the pre-state, which never contains the emission being judged",
+                        entry.stage_identifier, declared.name, full_name
+                    )));
+                }
+                let admission_issues = crate::validate::validate_signal_references(
+                    &parsed,
+                    &format!(
+                        "{}.sendSignals[{}].validWhen[{index}]",
+                        entry.stage_identifier, declared.name
+                    ),
+                    entries,
+                );
+                if !admission_issues.is_empty() {
+                    return Err(CompilerError::Issues(admission_issues.join("; ")));
+                }
+                parsed_items.push(parsed);
             }
-            if parsed
-                .dependencies
+            let header = parsed_items[0].source.clone();
+            if let Some((index, divergent)) = parsed_items
                 .iter()
-                .any(|dependency| dependency.signal_name == full_name)
+                .enumerate()
+                .skip(1)
+                .find_map(|(index, parsed)| {
+                    (parsed.source != header)
+                        .then(|| (index, parsed.source.clone()))
+                })
             {
                 return Err(CompilerError::Issues(format!(
-                    "D028 {}.sendSignals[{}].validWhen: expression addresses the declaring signal itself ({}); admission judges the pre-state, which never contains the emission being judged",
-                    entry.stage_identifier, declared.name, full_name
-                )));
-            }
-            let admission_issues = crate::validate::validate_signal_references(
-                &parsed,
-                &format!(
-                    "{}.sendSignals[{}].validWhen",
+                    "D032 {}.sendSignals[{}].validWhen: every item must address the same header source ({header}); item {index} addresses {divergent} (the admission artifact carries a single source tag)",
                     entry.stage_identifier, declared.name
-                ),
-                entries,
-            );
-            if !admission_issues.is_empty() {
-                return Err(CompilerError::Issues(admission_issues.join("; ")));
+                )));
             }
             let mut admission = Map::new();
             admission.insert(
@@ -467,32 +492,65 @@ fn build_signal_admissions(
             admission.insert("signalName".to_string(), Value::String(full_name));
             admission.insert(
                 "rawExpression".to_string(),
-                Value::String(valid_when.clone()),
+                Value::Array(
+                    valid_when
+                        .iter()
+                        .map(|item| Value::String(item.clone()))
+                        .collect(),
+                ),
             );
             if profile == Profile::CloudCompat {
-                let dependencies: Vec<Value> = parsed
-                    .dependencies
-                    .iter()
-                    .filter(|dependency| dependency.kind != DependencyKind::Timer)
-                    .map(|dependency| {
-                        json!({
+                let mut dependencies = Vec::new();
+                let mut seen: BTreeSet<(String, DependencyKind)> = BTreeSet::new();
+                for parsed in &parsed_items {
+                    for dependency in &parsed.dependencies {
+                        if dependency.kind == DependencyKind::Timer {
+                            continue;
+                        }
+                        if !seen.insert((dependency.signal_name.clone(), dependency.kind)) {
+                            continue;
+                        }
+                        dependencies.push(json!({
                             "signalName": dependency.signal_name,
                             "dependencyKind": dependency.kind,
-                        })
-                    })
-                    .collect();
-                admission.insert("cloudAst".to_string(), parsed.cloud_ast.clone());
+                        }));
+                    }
+                }
+                admission.insert(
+                    "cloudAst".to_string(),
+                    compose_cloud_admission_ast(&parsed_items),
+                );
                 admission.insert("dependencies".to_string(), Value::Array(dependencies));
             } else {
+                let mut dependencies = Vec::new();
+                let mut seen: BTreeSet<(String, String, DependencyKind, Option<i64>)> =
+                    BTreeSet::new();
+                for parsed in &parsed_items {
+                    for dependency in &parsed.dependencies {
+                        if !seen.insert((
+                            dependency.source.clone(),
+                            dependency.signal_name.clone(),
+                            dependency.kind,
+                            dependency.delay_seconds,
+                        )) {
+                            continue;
+                        }
+                        dependencies.push(serde_json::to_value(dependency).map_err(|err| {
+                            CompilerError::Message(err.to_string())
+                        })?);
+                    }
+                }
                 admission.insert(
                     "normalizedExpression".to_string(),
-                    Value::String(parsed.normalized_expression.clone()),
+                    Value::String(compose_normalized_admission(&parsed_items)),
                 );
-                admission.insert("ast".to_string(), parsed.ast.clone());
+                admission.insert(
+                    "ast".to_string(),
+                    compose_ast_admission(&parsed_items, valid_when),
+                );
                 admission.insert(
                     "dependencies".to_string(),
-                    serde_json::to_value(&parsed.dependencies)
-                        .map_err(|err| CompilerError::Message(err.to_string()))?,
+                    Value::Array(dependencies),
                 );
             }
             admissions.push(Value::Object(admission));
@@ -504,6 +562,86 @@ fn build_signal_admissions(
             .then(value_str(left, "signalName").cmp(value_str(right, "signalName")))
     });
     Ok(admissions)
+}
+
+fn compose_cloud_admission_ast(parsed_items: &[uvp_hook_dsl::ParseHookOutput]) -> Value {
+    let roots: Vec<Value> = parsed_items
+        .iter()
+        .map(|parsed| parsed.cloud_ast["root"].clone())
+        .collect();
+    json!({
+        "schemaVersion": parsed_items[0].cloud_ast["schemaVersion"],
+        "source": parsed_items[0].source,
+        "mode": HookMode::Normal,
+        "root": fold_admission_roots(&roots),
+    })
+}
+
+fn fold_admission_roots(roots: &[Value]) -> Value {
+    match roots.len() {
+        1 => roots[0].clone(),
+        len => {
+            let mid = len / 2;
+            json!({
+                "type": "and",
+                "left": fold_admission_roots(&roots[..mid]),
+                "right": fold_admission_roots(&roots[mid..]),
+            })
+        }
+    }
+}
+
+fn compose_normalized_admission(parsed_items: &[uvp_hook_dsl::ParseHookOutput]) -> String {
+    if parsed_items.len() == 1 {
+        return parsed_items[0].normalized_expression.clone();
+    }
+    let conditions: Vec<String> = parsed_items
+        .iter()
+        .map(|parsed| {
+            let condition = parsed
+                .normalized_expression
+                .split_once("::")
+                .map(|(_, condition)| condition)
+                .unwrap_or(parsed.normalized_expression.as_str());
+            if has_top_level_or(condition) {
+                format!("({condition})")
+            } else {
+                condition.to_string()
+            }
+        })
+        .collect();
+    format!("{}::{}", parsed_items[0].source, conditions.join("&"))
+}
+
+fn has_top_level_or(condition: &str) -> bool {
+    let mut depth = 0i32;
+    for character in condition.chars() {
+        match character {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '|' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn compose_ast_admission(
+    parsed_items: &[uvp_hook_dsl::ParseHookOutput],
+    raw_items: &[String],
+) -> Value {
+    if parsed_items.len() == 1 {
+        return parsed_items[0].ast.clone();
+    }
+    let terms: Vec<Value> = parsed_items
+        .iter()
+        .map(|parsed| parsed.ast["condition"].clone())
+        .collect();
+    json!({
+        "raw": raw_items.join(" & "),
+        "source": parsed_items[0].source,
+        "condition": {"kind": "and", "terms": terms},
+    })
 }
 
 fn collect_birth_anchor_signals(

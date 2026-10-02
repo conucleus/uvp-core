@@ -87,7 +87,7 @@ pub struct ZhixuStage {
 pub struct ZhixuSendSignal {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_when: Option<String>,
+    pub valid_when: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
