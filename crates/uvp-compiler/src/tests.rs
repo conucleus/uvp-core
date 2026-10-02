@@ -2100,9 +2100,10 @@ fn admission_self_reference_is_rejected_in_both_targets() {
     for target in ["hook_plan", "cloud"] {
         for header in ["payment", "seller"] {
             let mut definition = target_payment_definition();
-            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] = json!(
-                [format!("{header}::payment_flow.settle.cmp & payment_flow.init.str")]
-            );
+            definition["spec"]["taskPatterns"][0]["stages"][2]["sendSignals"][0]["validWhen"] =
+                json!([format!(
+                    "{header}::payment_flow.settle.cmp & payment_flow.init.str"
+                )]);
             let result = if target == "hook_plan" {
                 compile_zhixu_hook_plan(&definition, None, true)
             } else {
@@ -2321,8 +2322,8 @@ fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
 
     let mut blank = target_payment_definition();
     blank["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"][0]["validWhen"] = json!(["   "]);
-    let error =
-        compile_cloud_artifact(&blank, None, true).expect_err("a blank validWhen item must fail loudly");
+    let error = compile_cloud_artifact(&blank, None, true)
+        .expect_err("a blank validWhen item must fail loudly");
     assert!(
         error.to_string().contains(
             "D027 payment_flow.init.sendSignals[str].validWhen[0]: must be a non-blank item"
@@ -2392,11 +2393,18 @@ fn multi_item_admission_composes_one_and_root_and_unions_dependencies() {
     let cloud = compile_cloud_artifact(&definition, None, true)
         .expect("a two-item validWhen compiles into one admission");
     let admissions = cloud["admissions"].as_array().unwrap();
-    assert_eq!(admissions.len(), 1, "N items still produce one admission row");
+    assert_eq!(
+        admissions.len(),
+        1,
+        "N items still produce one admission row"
+    );
     let admission = &admissions[0];
     assert_eq!(
         admission["rawExpression"],
-        json!(["payment::payment_flow.init.str", "payment::~(payment_flow.control.cxl +14d)"])
+        json!([
+            "payment::payment_flow.init.str",
+            "payment::~(payment_flow.control.cxl +14d)"
+        ])
     );
     assert_eq!(
         admission["cloudAst"]["root"],

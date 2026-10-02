@@ -470,14 +470,14 @@ fn build_signal_admissions(
                 parsed_items.push(parsed);
             }
             let header = parsed_items[0].source.clone();
-            if let Some((index, divergent)) = parsed_items
-                .iter()
-                .enumerate()
-                .skip(1)
-                .find_map(|(index, parsed)| {
-                    (parsed.source != header)
-                        .then(|| (index, parsed.source.clone()))
-                })
+            if let Some((index, divergent)) =
+                parsed_items
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .find_map(|(index, parsed)| {
+                        (parsed.source != header).then(|| (index, parsed.source.clone()))
+                    })
             {
                 return Err(CompilerError::Issues(format!(
                     "D032 {}.sendSignals[{}].validWhen: every item must address the same header source ({header}); item {index} addresses {divergent} (the admission artifact carries a single source tag)",
@@ -535,9 +535,10 @@ fn build_signal_admissions(
                         )) {
                             continue;
                         }
-                        dependencies.push(serde_json::to_value(dependency).map_err(|err| {
-                            CompilerError::Message(err.to_string())
-                        })?);
+                        dependencies.push(
+                            serde_json::to_value(dependency)
+                                .map_err(|err| CompilerError::Message(err.to_string()))?,
+                        );
                     }
                 }
                 admission.insert(
@@ -548,10 +549,7 @@ fn build_signal_admissions(
                     "ast".to_string(),
                     compose_ast_admission(&parsed_items, valid_when),
                 );
-                admission.insert(
-                    "dependencies".to_string(),
-                    Value::Array(dependencies),
-                );
+                admission.insert("dependencies".to_string(), Value::Array(dependencies));
             }
             admissions.push(Value::Object(admission));
         }
