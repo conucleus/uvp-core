@@ -220,7 +220,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
         }
         "cloud" | "cloud_db" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.cloudArtifact.v4",
+                value["schemaVersion"], "uvp.cloudArtifact.v5",
                 "{}",
                 fixture.name
             );
