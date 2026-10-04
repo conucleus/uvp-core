@@ -2808,3 +2808,31 @@ fn rejects_signal_map_key_exceeding_26_bytes() {
         "unexpected cloud error: {error}"
     );
 }
+
+#[test]
+fn rejects_executor_supplier_id_over_uuid_length() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "supplier_id_too_long" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [ { "name": "init", "stages": [
+                { "name": "main", "source": "buyer", "executor": { "supplierType": "organization", "supplierID": "a".repeat(37) } }
+            ]}]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("executor supplierID over 36 bytes must fail");
+    assert!(
+        error.to_string().contains("exceeds 36 bytes"),
+        "unexpected error: {error}"
+    );
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("cloud target must enforce the same requirement");
+    assert!(
+        error.to_string().contains("exceeds 36 bytes"),
+        "unexpected cloud error: {error}"
+    );
+}

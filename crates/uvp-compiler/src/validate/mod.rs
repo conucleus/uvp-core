@@ -10,6 +10,7 @@ use uvp_model::{ZhixuDefinition, ZhixuExecutor, ZhixuStage};
 use crate::lower::{is_zhixu_executor_stage, parse_hook_for_compiler, value_str, StageEntry};
 
 const MAX_STAGE_SOURCE_BYTES: usize = 36;
+const MAX_SUPPLIER_ID_BYTES: usize = 36;
 const MAX_IDENTIFIER_BYTES: usize = 100;
 const MAX_SIGNAL_NAME_BYTES: usize = 100;
 const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
@@ -281,14 +282,16 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
         if executor.supplier_type == "zhixu" {
             continue;
         }
-        if executor
-            .supplier_id
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
-        {
+        let supplier_id = executor.supplier_id.as_deref().unwrap_or("");
+        if supplier_id.trim().is_empty() {
             issues.push(format!(
                 "{}.executor.supplierID is required when supplierType is {:?}",
                 entry.stage_identifier, executor.supplier_type
+            ));
+        } else if supplier_id.len() > MAX_SUPPLIER_ID_BYTES {
+            issues.push(format!(
+                "{}.executor.supplierID {supplier_id:?} exceeds 36 bytes (uuid-length executor identity)",
+                entry.stage_identifier
             ));
         }
     }
