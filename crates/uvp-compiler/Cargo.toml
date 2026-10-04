@@ -13,7 +13,5 @@ uvp-hook-dsl.workspace = true
 uvp-model.workspace = true
 
 [dev-dependencies]
-# uvp-constraints.v1 一致性 harness 的 sha256 摘要钉。
-sha2 = "0.11"
 # profile fixture 确定性重编译比对用 canonical 串。
 uvp-ir.workspace = true
