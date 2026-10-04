@@ -24,7 +24,7 @@ jobs:
         with:
           repository: conucleus/uvp-protocol
           path: uvp-protocol
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
+          ref: main
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
