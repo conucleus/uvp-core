@@ -1,0 +1,468 @@
+{
+  "version": "uvp.error-taxonomy.v1",
+  "description": "UVP unified error taxonomy: one source of truth for retry/terminal/benign classification semantics across the three producers (Go cloud engine, chain-services, executor-kit). Base fields record the currently-unified lane semantics; where producers still diverge, the divergence is recorded under producer_overrides and listed as needs-ruling in the conformance reports. Consumers pin version + sha256 and run completeness/consistency suites against this file.",
+  "field_semantics": {
+    "code": "Unified snake_case identifier for a cross-repo error condition.",
+    "condition": "Human-readable trigger condition for the classification.",
+    "layer": "One of: chain (on-chain / contract revert / receipt), transport (RPC/network), db (PostgreSQL server-side), application (business/validation/config), messaging (downstream message delivery), infra (process-local infrastructure).",
+    "producers": "Repos that classify this condition: go-cloud-engine | chain-services | executor-kit.",
+    "retryable": "True when a later attempt with unchanged inputs can succeed (transient, operator-recoverable, or self-healing).",
+    "backoff": "Retry scheduling: exponential (capped), fixed (constant window), sweep (bounded in-process retries then durable queue replay), reconcile_poll (periodic re-probe), none.",
+    "dead_letter": "True when the failure is terminal for the submission/job path and must be parked for human triage instead of retried.",
+    "benign_scan_outcome": "True when the condition classifies a scan skip, not a run failure: a chain-once scan that only met these must exit 0 (executor-kit chainPollExecutionFailed semantics).",
+    "internal_names": "Producer-local identifiers (error codes, kinds, PG codes, sentinel strings) that map onto this unified code.",
+    "producer_overrides": "Per-producer attribute patches recording still-diverging semantics; every override must appear in the needs-ruling list of the producing conformance report."
+  },
+  "errors": [
+    {
+      "code": "insufficient_funds",
+      "condition": "Gas payer balance cannot cover the broadcast (insufficient funds / insufficient balance at tx signing or eth_sendRawTransaction).",
+      "layer": "chain",
+      "producers": ["chain-services", "executor-kit"],
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["relayer_insufficient_funds"],
+        "executor-kit": ["insufficient_funds"]
+      },
+      "notes": "Route-4 unification: funding the gas payer is operator-recoverable and no txHash exists, so the same signed payload may be retried after top-up. Aligned in relayer (classifyRelaySubmitterError), submissions broadcast-adapter, and executor-kit errors.ts MESSAGE_PATTERNS."
+    },
+    {
+      "code": "duplicate_signal",
+      "condition": "The chain's own dedupe fact: SignalAlreadyExists() revert (decoded name, plain sentence, or raw selector 0xa2e92828) proves the exact signal already exists on chain.",
+      "layer": "chain",
+      "producers": ["chain-services", "executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["signal_already_exists"],
+        "executor-kit": ["duplicate_signal", "DUPLICATE_SIGNAL"]
+      },
+      "producer_overrides": {
+        "executor-kit": {
+          "dead_letter": false,
+          "benign_scan_outcome": true,
+          "notes": "Executor-kit treats the dedupe fact as benign: the signal is counted delivered, the job lands in `ignored`, and a scan that only met duplicate_signal must exit 0 (BENIGN_SCAN_OUTCOME_ERROR_KINDS). Chain-services relayer/submissions instead dead-letter the submission ledger entry. Needs-ruling: unified disposition for the same on-chain fact."
+        }
+      },
+      "notes": "Retryable=false everywhere (re-submitting cannot change chain state). Terminal disposition diverges: dead_letter=true in chain-services vs benign ignored in executor-kit (see producer_overrides)."
+    },
+    {
+      "code": "nonce_conflict",
+      "condition": "Tx-pool / nonce race texts: nonce too low, nonce has already been used, replacement transaction underpriced, already known, same hash was already imported.",
+      "layer": "chain",
+      "producers": ["chain-services", "executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["duplicate_transaction"],
+        "executor-kit": ["nonce_conflict"]
+      },
+      "producer_overrides": {
+        "executor-kit": {
+          "retryable": true,
+          "backoff": "exponential",
+          "dead_letter": false,
+          "notes": "Executor-kit recomputes the account nonce on every attempt (fresh wallet.writeContract), so a nonce race is transient and retryable. Needs-ruling vs chain-services relayer."
+        }
+      },
+      "notes": "Divergent dispositions (needs-ruling): chain-services relayer classifies as duplicate_transaction — non-retryable, dead-letter, BUT first probes candidate txHashes (error-carried + previously recorded) for an on-chain receipt; a success receipt resolves the submission as submitted with the nonce consumed. chain-services submissions adapter has no nonce pattern, so these texts fall to state_machine_broadcast_failed (retryable=true fallback). executor-kit nonce_conflict retryable=true."
+    },
+    {
+      "code": "rpc_network",
+      "condition": "Transport/RPC faults before the request was accepted: timeouts, ETIMEDOUT/ECONNRESET/ECONNREFUSED/AbortError, HTTP 429 rate limit, 502/503/504 gateway failures, fetch failed, socket hang up.",
+      "layer": "transport",
+      "producers": ["chain-services", "executor-kit"],
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["rpc_unavailable", "rpc_timeout"],
+        "executor-kit": ["rpc_network", "RPC_NETWORK"]
+      },
+      "notes": "Verdict aligned (retryable=true, capped exponential). Detection breadth differs: relayer (rpc_unavailable) and executor-kit (rpc_network) also match 429/rate-limit/network keywords; submissions and stage-patch adapters (rpc_timeout) match only timeout/socket keywords — a 429 there falls to the generic retryable fallback, same verdict. relayer rpc_unavailable also covers ECONNREFUSED."
+    },
+    {
+      "code": "transaction_reverted",
+      "condition": "Transaction definitively reverted: receipt status reverted/failed, or a generic execution-reverted error that is not UnknownOrder.",
+      "layer": "chain",
+      "producers": ["chain-services", "executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["transaction_reverted"],
+        "executor-kit": ["SubmitSignalReceiptError (receipt status reverted; classified through the conservative non-retryable fallback)"]
+      },
+      "notes": "Relayer must test UnknownOrder before the generic reverted rule (viem composite text contains both). Reconcile treats receipt status reverted/failed as terminal failed/non-retryable. Executor-kit never rebroadcasts after a reverted receipt; the txHash stays on the job audit trail."
+    },
+    {
+      "code": "transaction_receipt_unknown",
+      "condition": "Broadcast happened but the outcome is not yet known or not authoritative: receipt missing, receipt status unknown/omitted, or receipt-wait transport failure with the txHash preserved.",
+      "layer": "chain",
+      "producers": ["chain-services", "executor-kit"],
+      "retryable": true,
+      "backoff": "reconcile_poll",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["transaction_receipt_unknown", "tx_reconcile_timeout"],
+        "executor-kit": ["SubmitSignalReceiptError (receipt wait failed; cause-classified, e.g. rpc_network, txHash kept)"]
+      },
+      "notes": "An unknown receipt must never be classified as a revert: it stays in the reconcile/retry lane until the chain decides. Reconcile verdicts: pending (no txHash, missing receipt, unknown status) retryable=true; stale_pending (tx_reconcile_timeout) retryable=true; receipt success but projection missing -> indexing, terminal non-retryable; projection present -> confirmed. Executor-kit keeps the broadcast txHash on the job and only rebroadcasts after the receipt proves absence."
+    },
+    {
+      "code": "unknown_order",
+      "condition": "Contract revert UnknownOrder(): the order is not (yet) registered on the state machine.",
+      "layer": "chain",
+      "producers": ["chain-services"],
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["unknown_order"]
+      },
+      "notes": "Typical transient: order registration may still be propagating. The UnknownOrder check must precede the generic reverted rule in both relayer and submissions adapters (same composite-text hazard)."
+    },
+    {
+      "code": "unauthorized",
+      "condition": "Authorization/signature rejections: unauthorized submitter or selector, invalid business/signal/stage-patch signature, verified-signer mismatch, missing verified signer, relayer key reused as participant signer.",
+      "layer": "chain",
+      "producers": ["chain-services", "executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["unauthorized_signal_submitter", "selector_not_authorized", "invalid_business_signature", "invalid_signal_signature", "invalid_stage_executor_patch_signature", "invalid_stage_resource_patch_signature", "verified_signer_mismatch", "missing_verified_signer", "relayer_business_signer_reuse"],
+        "executor-kit": ["unauthorized", "UNAUTHORIZED"]
+      },
+      "notes": "Executor-kit also matches AccessControlUnauthorizedAccount / OwnableUnauthorizedAccount revert names and generic 'unauthorized' text."
+    },
+    {
+      "code": "payload_signature_expired",
+      "condition": "Signature deadline has expired (preflight deadline check or on-chain ExpiredSignalSignature revert).",
+      "layer": "chain",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["expired_payload_deadline", "expired_signal_signature"]
+      },
+      "notes": "Relayer expired_payload_deadline and submissions expired_signal_signature (both the preflight check and the on-chain revert)."
+    },
+    {
+      "code": "prepared_payload_expired",
+      "condition": "A prepared submission/stage patch aged past its validity window before broadcast (local expiry, no chain contact).",
+      "layer": "application",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["submission_expired", "stage_executor_patch_expired", "stage_resource_patch_expired"]
+      },
+      "notes": "Terminal-expired status (not_retryable) but deliberately NOT dead-lettered: the payload simply ages out; a fresh prepare produces a new submission."
+    },
+    {
+      "code": "chain_id_mismatch",
+      "condition": "Configured chainId does not match the RPC endpoint's reported chain (preflight getChainId or error text).",
+      "layer": "transport",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["chain_id_mismatch"]
+      },
+      "notes": "Configuration defect; retry cannot fix it, operator must fix config."
+    },
+    {
+      "code": "broadcast_in_flight_limit",
+      "condition": "Local concurrency guard: another broadcast for the same order/submitter is already in flight.",
+      "layer": "application",
+      "producers": ["chain-services"],
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["order_relay_in_flight", "broadcast_rate_limited"]
+      },
+      "notes": "Self-healing contention (TOCTOU-safe in-flight counters); retry after the backoff window."
+    },
+    {
+      "code": "duplicate_signer_nonce",
+      "condition": "Replay/nonce-reuse dedupe on the submission path: the signer nonce is already reserved, the submission nonce was already used, or a stage-patch nonce is stale (already used on chain).",
+      "layer": "application",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["duplicate_signer_nonce", "duplicate_submit", "stale_stage_executor_patch_nonce", "stale_stage_resource_patch_nonce", "duplicate_stage_executor_patch_nonce", "duplicate_stage_resource_patch_nonce"]
+      },
+      "notes": "Lane nuances: submissions duplicate_submit answers HTTP 409 instead of dead-lettering; the stage-patch lane does not model dead_letter on its failed results, and its duplicate_/stale_stage_*_patch_nonce 409s are pre-broadcast service-layer checks of the same replay-dedupe condition. Core verdict shared: a replayed nonce is deterministic, never retried."
+    },
+    {
+      "code": "duplicate_tx_hash",
+      "condition": "Broadcast returned a txHash already recorded for another submission (cross-submission collision).",
+      "layer": "chain",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["duplicate_tx_hash"]
+      },
+      "notes": "safe-broadcast-adapter txHash ownership dedupe (in-memory + durable claimTxHash)."
+    },
+    {
+      "code": "retry_budget_exhausted",
+      "condition": "Retry budget for the submission is spent (maxRetryAttempts exceeded) or the last failure was non-retryable so further broadcast attempts are blocked.",
+      "layer": "application",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["broadcast_retry_exhausted", "broadcast_retry_blocked"]
+      },
+      "notes": "relayer (RelayService retry budget) and safe-broadcast-adapter share the errorCode broadcast_retry_exhausted; broadcast_retry_blocked is the safe-broadcast variant when the stored last failure was non-retryable."
+    },
+    {
+      "code": "persist_failed_after_broadcast",
+      "condition": "The broadcast succeeded (txHash exists) but persisting the submission/ledger record failed; the nonce is consumed and the receipt is unknown.",
+      "layer": "application",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["persist_failed"]
+      },
+      "notes": "Irreversible-from-service: a txHash-bearing terminal fallback is recorded and the nonce stays reserved; blind rebroadcast would risk a second on-chain transaction."
+    },
+    {
+      "code": "evidence_bind_failed",
+      "condition": "The chain broadcast already succeeded (submission carries a txHash) but the server-side evidence binding (uploaded→bound with on-chain location) failed after the submit; the submission itself is unaffected.",
+      "layer": "application",
+      "producers": ["chain-services"],
+      "retryable": true,
+      "backoff": "reconcile_poll",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["evidence_bind_failed"]
+      },
+      "notes": "Retryable because the on-chain commit is done and binding is a service-side state transition: the failed bind is audited, the evidence references stay persisted on the submission record, and the reconcile worker's evidence-bind sweep retries the binding from those references each poll until the proof reports bound."
+    },
+    {
+      "code": "malformed_payload",
+      "condition": "Deterministic caller-input defect: payload fails validation before any side effect (missing/oversized/illegal fields, unsigned/malformed envelope, prepared submission without planId).",
+      "layer": "application",
+      "producers": ["go-cloud-engine", "chain-services", "executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["statemachine.PermanentError (signal validation paths: 缺少 order_id、空白 parent_order_ids、dock 保留命名空间、超宽字段、引用不存在的阶段)", "dbops.ValidationError", "compiler zhixu_handler ValidationError (超宽标识 22001 双保险)"],
+        "chain-services": ["malformed_relay_payload", "missing_order_id", "missing_nonce", "order_plan_unresolved"],
+        "executor-kit": ["validation_failure", "VALIDATION_FAILURE", "ValidationError type"]
+      },
+      "notes": "Retrying identical bytes re-fails identically. Executor-kit exception: an undecodable HookReady log is isolated as a terminal `ignored` job (isolateUndecodableLog, fallback kind validation_failure) so a mixed-ABI deployment skips instead of crashing; still non-retryable and counted in decode failures."
+    },
+    {
+      "code": "broadcast_disabled",
+      "condition": "Broadcast adapter is deliberately not configured; the request is verified but no chain transaction is attempted.",
+      "layer": "application",
+      "producers": ["chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["broadcast_disabled"]
+      },
+      "notes": "Feature-not-configured sentinel (status not_attempted), not a failure classification."
+    },
+    {
+      "code": "transient_infra_error",
+      "condition": "Unrecognized failure with no deterministic marker, treated by default as transient infrastructure noise (DB/network hiccup, generic broadcast failure).",
+      "layer": "infra",
+      "producers": ["go-cloud-engine", "chain-services"],
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["isSignalErrorRetryable default true", "isRetryableProcessingError default true", "deliveryBackoff (base 1s, cap 5min)"],
+        "chain-services": ["relay_broadcast_failed", "state_machine_broadcast_failed", "stage_executor_patch_broadcast_failed", "stage_resource_patch_broadcast_failed", "stage_patch_failed"]
+      },
+      "notes": "Default-retryable fallback. Divergence: executor-kit's fallback is deliberately conservative (see unknown_unclassified). Go delivery retries burn a bounded 12-round exponential budget before giving up."
+    },
+    {
+      "code": "unknown_unclassified",
+      "condition": "Failure carrying neither an explicit code nor any recognized error text; conservatively treated as non-retryable for human triage.",
+      "layer": "infra",
+      "producers": ["executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "executor-kit": ["unknown (classifyExecutorKitError fallback kind)"]
+      },
+      "producer_overrides": {},
+      "notes": "Executor-kit deliberately guesses nothing: unclassifiable failures dead-letter instead of being silently retried. Needs-ruling: opposite default from go-cloud-engine/chain-services transient_infra_error fallbacks — a cross-producer port of a handler must re-classify, not copy the fallback."
+    },
+    {
+      "code": "missing_handler",
+      "condition": "A HookReady event matches no configured state machine handler: a foreign supplier's hook on a shared chain.",
+      "layer": "application",
+      "producers": ["executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": false,
+      "benign_scan_outcome": true,
+      "internal_names": {
+        "executor-kit": ["missing_handler", "MISSING_HANDLER"]
+      },
+      "notes": "Benign scan outcome: a shared chain always carries other suppliers' hooks; the job is ignored and a chain-once scan that only met these must exit 0."
+    },
+    {
+      "code": "handler_failure",
+      "condition": "The executor's own handler callback failed after being matched (HANDLER_FAILURE code).",
+      "layer": "application",
+      "producers": ["executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "executor-kit": ["handler_failure", "HANDLER_FAILURE"]
+      },
+      "notes": "Explicit code only; handler exceptions without the code flow through the normal classifier."
+    },
+    {
+      "code": "ast_decode_failure",
+      "condition": "A compiled hook AST / persisted snapshot cannot be decoded (poison payload: same bytes always fail).",
+      "layer": "application",
+      "producers": ["go-cloud-engine"],
+      "retryable": false,
+      "backoff": "fixed",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["Permanentf(\"解析已编译 hook AST 失败\") (hookdsl.DecodeCompiledHook)", "poke poison-row postponePoisonHookState (pokePoisonBackoff 1h)"]
+      },
+      "notes": "Two lanes: hook delivery dead-letters the row immediately (re-decode of the same bytes is futile); the poke worker postpones the poison row by a fixed 1h window so one poisoned wait row cannot head-of-line block all delayed hooks (UVP-06)."
+    },
+    {
+      "code": "missing_executor_config",
+      "condition": "The order/stage record carries no executor configuration, or the stored executor config JSON cannot be parsed; retry cannot grow a config.",
+      "layer": "application",
+      "producers": ["go-cloud-engine"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["errNoExecutorConfig Permanentf (订单未绑定执行器配置)", "解析执行器配置失败", "dock delivery service is not configured"]
+      },
+      "notes": "Deterministic row-level defect; last_error must point at the real cause (missing config), not a misleading JSON-unmarshal message."
+    },
+    {
+      "code": "dock_route_unpublished",
+      "condition": "Dock routing defect: no published dock route for the zhixu/stage, route schema/parse failures, missing identity/entrance bindings, hook not bound on route, or target zhixu not published.",
+      "layer": "application",
+      "producers": ["go-cloud-engine"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["docking.PermanentError", "docking.Permanentf (has no published dock route / route schemaVersion / orderIdPolicy / missing identity or entrance / hook not bound / target zhixu not published)"]
+      },
+      "notes": "Configuration is deterministic: retrying cannot publish the route."
+    },
+    {
+      "code": "db_deterministic_violation",
+      "condition": "PostgreSQL error codes whose outcome is fully determined by the input: 22001 string_data_right_truncation, 22003 numeric_value_out_of_range, 23503 foreign_key_violation, 23514 check_violation, P0001 raise_exception (deterministic RAISE from DDL trigger/function).",
+      "layer": "db",
+      "producers": ["go-cloud-engine"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": [
+          "deterministicPGErrorCodes (22001, 22003, 23503, 23514, P0001)",
+          "22003 numeric_value_out_of_range (value exceeds the column domain: e.g. an over-bound retry-times option slipping the pre-check so max_attempts overflows int4)",
+          "P0001 raise_exception (dock reserved-namespace squatting rejection raised by a DDL trigger/function; transient faults never surface as P0001)"
+        ]
+      },
+      "notes": "Same verdict on both pgx (pgconn.PgError) and lib/pq paths. 22001 is double-guarded by the compiler-side ValidationError pre-check."
+    },
+    {
+      "code": "db_unique_violation",
+      "condition": "PostgreSQL 23505 unique_violation on concurrent first-registration: self-healing because the ON CONFLICT path makes a duplicate insert converge.",
+      "layer": "db",
+      "producers": ["go-cloud-engine"],
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["23505", "isSupplierUniqueViolation (registry)", "uniqueViolationConstraint (compiler zhixu_handler)"]
+      },
+      "notes": "Deliberately kept retryable (unlike db_deterministic_violation): concurrent first registration resolves on the next attempt."
+    },
+    {
+      "code": "business_error_non_retryable",
+      "condition": "A downstream component explicitly declared its business failure non-retryable via httpprotocol.BusinessError{Retryable:false}; the declaration is transported along the %w chain and honored by the delivery layer.",
+      "layer": "messaging",
+      "producers": ["go-cloud-engine"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["httpprotocol.BusinessError.Retryable=false", "isRetryableProcessingError BusinessError branch", "executors/http_receiver PermanentError passthrough (SIGNAL_PROCESSING_FAILED retryable=false)", "cmd/statemachine/app isSignalErrorRetryable PermanentError branches"]
+      },
+      "notes": "The receiver side mirrors this: pkg/executors/http_receiver re-derives retryable from statemachine.PermanentError so downstream-declared non-retry semantics survive the HTTP hop; BusinessError{Retryable:true} stays in the delivery retry lane with the standard exponential backoff."
+    },
+    {
+      "code": "post_commit_step_pending",
+      "condition": "A post-commit side effect (signal notification / projection automation) failed after the projection cursor advanced; it must not be dropped and must not rewind the cursor.",
+      "layer": "infra",
+      "producers": ["chain-services"],
+      "retryable": true,
+      "backoff": "sweep",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "chain-services": ["indexer #runPostCommitStepWithBoundedRetry", "sweepPendingPostCommitSteps", "durable pending post-commit queue (savePendingPostCommitStep / admin-ops replay)"]
+      },
+      "notes": "Bounded in-process retries (exponential delays), then the step is persisted to the durable pending queue; the background sweep re-delivers before each incremental refresh and dequeues on success, otherwise it stays queued with an attempt counter."
+    }
+  ]
+}
