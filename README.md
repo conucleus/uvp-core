@@ -9,6 +9,9 @@ Exported surfaces:
 - `uvp-node`: N-API module for Node/TypeScript callers.
 - `uvp-cli`: command-line oracle for fixtures and CI.
 
+`lint_zhixu` is a development-time diagnostics surface consumed via
+`uvp-cli`/`uvp-node`; it is not part of the compile gate.
+
 The core focus is Hook DSL because it is the current
 highest-risk semantic drift point between cloud UVP and EVM UVP.
 
