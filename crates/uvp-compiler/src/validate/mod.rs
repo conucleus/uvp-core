@@ -18,6 +18,11 @@ const MAX_TASK_PATTERNS: usize = 64;
 const MAX_STAGE_ENTRIES: usize = 256;
 const MAX_HOOKS: usize = 512;
 
+const MAX_SUPPLIER_NAME_BYTES: usize = 100;
+const MAX_SUPPLIER_TYPE_BYTES: usize = 60;
+const MAX_SUPPLIER_REAL_ID_TYPE_BYTES: usize = 20;
+const MAX_SUPPLIER_REAL_ID_BYTES: usize = 100;
+
 pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     let mut issues = Vec::new();
     if definition.api_version != "uvp/v0" {
@@ -172,6 +177,50 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
         }
     }
     issues
+}
+
+pub(crate) fn validate_supplier_dimensions(supplier: &Value) -> Result<(), String> {
+    let mut issues = Vec::new();
+    let spec = supplier.get("spec");
+    let name = supplier
+        .get("metadata")
+        .map(|metadata| value_str(metadata, "name"))
+        .unwrap_or_default()
+        .trim();
+    if name.len() > MAX_SUPPLIER_NAME_BYTES {
+        issues.push(format!(
+            "supplier name {name:?} exceeds {MAX_SUPPLIER_NAME_BYTES} bytes (global_supplier.name)"
+        ));
+    }
+    let supplier_type = spec
+        .map(|spec| value_str(spec, "supplierType"))
+        .unwrap_or_default();
+    if supplier_type.len() > MAX_SUPPLIER_TYPE_BYTES {
+        issues.push(format!(
+            "supplierType {supplier_type:?} exceeds {MAX_SUPPLIER_TYPE_BYTES} bytes (global_supplier.type)"
+        ));
+    }
+    let real_id_type = spec
+        .map(|spec| value_str(spec, "realIdType"))
+        .unwrap_or_default();
+    if real_id_type.len() > MAX_SUPPLIER_REAL_ID_TYPE_BYTES {
+        issues.push(format!(
+            "realIdType {real_id_type:?} exceeds {MAX_SUPPLIER_REAL_ID_TYPE_BYTES} bytes (global_supplier.real_id_type)"
+        ));
+    }
+    let real_id = spec
+        .map(|spec| value_str(spec, "realId"))
+        .unwrap_or_default();
+    if real_id.len() > MAX_SUPPLIER_REAL_ID_BYTES {
+        issues.push(format!(
+            "realId {real_id:?} exceeds {MAX_SUPPLIER_REAL_ID_BYTES} bytes (global_supplier.real_id)"
+        ));
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::join_issues_bounded(&issues))
+    }
 }
 
 fn is_plain_source_identifier(value: &str) -> bool {

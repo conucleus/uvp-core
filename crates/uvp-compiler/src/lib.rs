@@ -1,7 +1,8 @@
 //! uvp-compiler：定义到目标产物（hook_plan / cloud artifact）的编译器。
-//! crate 根只保留编译入口（compile_json/compile_request）、请求信封与
-//! 公共导出；生产逻辑见 `validate/`、`lower/`、`docking/`、`artifact/`、
-//! `dock.rs`（对接接口与路由链接）与 `lint.rs`。
+//! crate 根只保留编译入口（compile_json/compile_request）、supplier 尺寸
+//! 校验入口（validate_supplier_json）、请求信封与公共导出；生产逻辑见
+//! `validate/`、`lower/`、`docking/`、`artifact/`、`dock.rs`（对接接口与
+//! 路由链接）与 `lint.rs`。
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -90,6 +91,24 @@ pub fn compile_request(req: &CompileRequest) -> Result<Value> {
             "unsupported compile target {other:?}"
         ))),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ValidateSupplierRequest {
+    pub supplier: Value,
+}
+
+pub fn validate_supplier_json(input: &str) -> String {
+    let result = serde_json::from_str::<ValidateSupplierRequest>(input)
+        .map_err(|err| CompilerError::Message(format!("invalid validate supplier request: {err}")))
+        .and_then(
+            |req| match validate::validate_supplier_dimensions(&req.supplier) {
+                Ok(()) => Ok(Value::Bool(true)),
+                Err(issues) => Err(CompilerError::Message(issues)),
+            },
+        );
+    envelope_json(result)
 }
 
 #[derive(Debug, serde::Serialize)]

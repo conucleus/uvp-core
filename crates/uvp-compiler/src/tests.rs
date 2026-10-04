@@ -1,4 +1,5 @@
 use super::*;
+use crate::validate::validate_supplier_dimensions;
 use serde_json::json;
 
 const UNKNOWN_TARGET: &str = "zx-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
@@ -2523,4 +2524,80 @@ fn admission_items_must_share_one_header_source() {
         ),
         "{error}"
     );
+}
+
+#[test]
+fn rejects_supplier_name_exceeding_ddl_limit() {
+    let supplier = json!({ "metadata": { "name": format!(" {}", "a".repeat(101)) } });
+    let message = validate_supplier_dimensions(&supplier)
+        .expect_err("supplier name over 100 bytes after trim must fail");
+    assert!(
+        message.contains("supplier name \"aaa")
+            && message.contains("exceeds 100 bytes (global_supplier.name)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_supplier_type_exceeding_ddl_limit() {
+    let supplier = json!({
+        "metadata": { "name": "escrow-bank" },
+        "spec": { "supplierType": "t".repeat(61) }
+    });
+    let message =
+        validate_supplier_dimensions(&supplier).expect_err("supplierType over 60 bytes must fail");
+    assert!(
+        message.contains("supplierType \"ttt")
+            && message.contains("exceeds 60 bytes (global_supplier.type)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_supplier_real_id_type_exceeding_ddl_limit() {
+    let supplier = json!({
+        "metadata": { "name": "escrow-bank" },
+        "spec": {
+            "supplierType": "organization",
+            "realIdType": "p".repeat(21)
+        }
+    });
+    let message =
+        validate_supplier_dimensions(&supplier).expect_err("realIdType over 20 bytes must fail");
+    assert!(
+        message.contains("realIdType \"ppp")
+            && message.contains("exceeds 20 bytes (global_supplier.real_id_type)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_supplier_real_id_exceeding_ddl_limit() {
+    let supplier = json!({
+        "metadata": { "name": "escrow-bank" },
+        "spec": {
+            "supplierType": "organization",
+            "realId": "i".repeat(101)
+        }
+    });
+    let message =
+        validate_supplier_dimensions(&supplier).expect_err("realId over 100 bytes must fail");
+    assert!(
+        message.contains("realId \"iii")
+            && message.contains("exceeds 100 bytes (global_supplier.real_id)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn allows_supplier_at_ddl_dimension_limits() {
+    let supplier = json!({
+        "metadata": { "name": format!(" {}", "n".repeat(100)) },
+        "spec": {
+            "supplierType": "t".repeat(60),
+            "realIdType": "p".repeat(20),
+            "realId": "i".repeat(100)
+        }
+    });
+    validate_supplier_dimensions(&supplier).expect("fields at the DDL limits must pass");
 }

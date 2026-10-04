@@ -90,6 +90,13 @@ pub extern "C" fn uvp_lint_zhixu_json(request_json: *const c_char) -> *mut c_cha
 }
 
 #[no_mangle]
+pub extern "C" fn uvp_validate_supplier_json(request_json: *const c_char) -> *mut c_char {
+    into_c_string(guard_ffi_panic("uvp_validate_supplier_json", || {
+        uvp_compiler::validate_supplier_json(&to_rust_string(request_json))
+    }))
+}
+
+#[no_mangle]
 pub extern "C" fn uvp_derive_definition_uid_json(definition_json: *const c_char) -> *mut c_char {
     into_c_string(guard_ffi_panic(
         "uvp_derive_definition_uid_json",
