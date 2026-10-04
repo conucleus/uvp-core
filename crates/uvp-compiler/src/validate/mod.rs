@@ -187,6 +187,9 @@ pub(crate) fn validate_supplier_dimensions(supplier: &Value) -> Result<(), Strin
         .map(|metadata| value_str(metadata, "name"))
         .unwrap_or_default()
         .trim();
+    if name.is_empty() {
+        issues.push("metadata.name is required and cannot be blank".to_string());
+    }
     if name.len() > MAX_SUPPLIER_NAME_BYTES {
         issues.push(format!(
             "supplier name {name:?} exceeds {MAX_SUPPLIER_NAME_BYTES} bytes (global_supplier.name)"
