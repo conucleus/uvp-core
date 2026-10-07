@@ -1,0 +1,21 @@
+[package]
+name = "uvp-mc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "uvp-mc"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+uvp-compiler.workspace = true
+uvp-hook-dsl.workspace = true
+uvp-model.workspace = true

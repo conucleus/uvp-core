@@ -6,9 +6,10 @@ members = [
   "crates/uvp-ir",
   "crates/uvp-compiler",
   "crates/uvp-replay",
-  "crates/uvp-ffi",
-  "crates/uvp-node",
-  "crates/uvp-cli",
+    "crates/uvp-ffi",
+    "crates/uvp-node",
+    "crates/uvp-cli",
+    "crates/uvp-mc",
 ]
 
 [workspace.package]
@@ -26,6 +27,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 sha3 = "0.12"
 serde_json = "1.0.145"
 thiserror = "2.0.21"
+toml = "0.9"
 uvp-compiler = { path = "crates/uvp-compiler" }
 uvp-hook-dsl = { path = "crates/uvp-hook-dsl" }
 uvp-ir = { path = "crates/uvp-ir" }
