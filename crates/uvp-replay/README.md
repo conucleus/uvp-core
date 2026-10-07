@@ -69,8 +69,7 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   出生事实恒先落本订单（`createDockedOrderFromModule` 内 `_recordSignal` →
   `SignalSubmitted` 先行），求值路径已可推导其 Ready，链上出现 oracle 未推导
   的 dock `HookReady` 只能是事实缺失的异常——接受断言会把异常吞成配对成功，
-  该形态保持 missing-observed mismatch 暴露（冻结测试
-  `dock_hook_ready_without_signal_stays_a_mismatch` 钉住）。重复的出生
+  该形态保持 missing-observed mismatch 暴露。重复的出生
   `HookReady` 在合约 `!readyEmitted` 门下不可达，第二次以 missing-observed
   暴露流异常。非 trigger hook 的无信号 `HookReady` 同样不推导，保持 mismatch
   暴露真实异常。plan 缺失 v2 结构字段（`orderTriggerKind`、`stageId` 等）在此
