@@ -67,9 +67,13 @@ fn run_check(definition_path: &str, manifest_path: &str, json: bool) -> ExitCode
     match result {
         Ok(report) => {
             if json {
+                let envelope = serde_json::json!({
+                    "ok": report.passed,
+                    "value": report,
+                });
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&report).expect("report should serialize")
+                    serde_json::to_string_pretty(&envelope).expect("report should serialize")
                 );
             } else {
                 println!("zhixu: {}", report.zhixu_name);
