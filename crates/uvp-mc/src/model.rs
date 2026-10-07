@@ -97,14 +97,19 @@ pub fn settle(vocab: &Vocabulary, scope: &[bool], state: &mut McState, times: &m
             if vocab.intent_fact.contains_key(&fact) {
                 continue;
             }
-            if vocab.effects.contains_key(&fact) && effect_open(vocab, state, fact) {
-                state.fact_epochs[fact] = Some(state.now);
-                let name = vocab.facts[fact]
-                    .split_once("::")
-                    .map(|(_, signal)| signal)
-                    .unwrap_or(&vocab.facts[fact]);
-                times.insert(name.to_string(), epoch_to_dt(state.now));
-                changed = true;
+            match vocab.effects.get(&fact) {
+                Some(effect)
+                    if !effect.env_timed && effect_open(vocab, state, fact) =>
+                {
+                    state.fact_epochs[fact] = Some(state.now);
+                    let name = vocab.facts[fact]
+                        .split_once("::")
+                        .map(|(_, signal)| signal)
+                        .unwrap_or(&vocab.facts[fact]);
+                    times.insert(name.to_string(), epoch_to_dt(state.now));
+                    changed = true;
+                }
+                _ => {}
             }
         }
         if !changed {
@@ -212,11 +217,13 @@ pub fn enabled_actions(
                         out.push(Action::Land { fact });
                     }
                 }
-                None => {
-                    if !vocab.effects.contains_key(&fact) {
+                None => match vocab.effects.get(&fact) {
+                    Some(effect) if effect.env_timed && effect_open(vocab, state, fact) => {
                         out.push(Action::Land { fact });
                     }
-                }
+                    Some(_) => {}
+                    None => out.push(Action::Land { fact }),
+                },
             }
         }
     }

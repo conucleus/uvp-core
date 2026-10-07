@@ -161,14 +161,22 @@ fn deadlock_free(
             continue;
         }
         let times = state.signal_times(vocab);
+        let in_flight = scope.iter().any(|fact| {
+            state.fact_epochs[*fact].is_none()
+                && vocab
+                    .effects
+                    .get(fact)
+                    .is_some_and(|effect| effect.env_timed && model::effect_open(vocab, state, *fact))
+        });
         let sanctioned = model::next_deadline_epoch(vocab, &times, state.now).is_some()
-            || any_sanctioned_intent(vocab, scope, state, &times);
+            || any_sanctioned_intent(vocab, scope, state, &times)
+            || in_flight;
         if !sanctioned {
             violation = Some(violation_json(
                 vocab,
                 graph,
                 position,
-                "no sanctioned action and no pending deadline can move this state (in-flight effects settle synchronously)"
+                "no sanctioned action, no pending deadline and no in-flight relay can move this state"
                     .to_string(),
             ));
             break;

@@ -32,6 +32,7 @@ pub struct ResolvedEffect {
     pub all_facts: Vec<usize>,
     pub any_facts: Vec<usize>,
     pub unless_facts: Vec<usize>,
+    pub env_timed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +243,7 @@ impl Vocabulary {
             for fact in &effect.unless_any_facts {
                 resolved.unless_facts.push(need_fact(&fact_index, fact)?);
             }
+            resolved.env_timed = effect.env_timed;
             effects.insert(fact_id, resolved);
         }
 

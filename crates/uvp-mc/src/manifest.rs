@@ -37,6 +37,12 @@ pub struct Effect {
     pub requires_any_facts: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unless_any_facts: Vec<String>,
+    /// 银行回执类效果（默认 false）：门一开即随守卫在 settle 不动点内同步
+    /// 落地（即时分配）。跨秩序中继（裁决回传、协商结算）门控只承载因果，
+    /// 落地时机归对侧系统与人——env_timed=true 时作为受门控的环境动作参与
+    /// 全量探索，不进 time-only 收敛，也不在 settle 内强制落地。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub env_timed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
