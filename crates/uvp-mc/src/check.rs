@@ -233,8 +233,7 @@ fn time_only_closure(
     let predicate = check.predicate.as_deref().expect("validated");
     let in_scope = scope_mask(vocab, scope);
     let mut restricted_edges: Vec<Vec<usize>> = vec![Vec::new(); graph.states.len()];
-    for position in 0..graph.states.len() {
-        let state = &graph.states[position];
+    for (position, state) in graph.states.iter().enumerate() {
         let times = state.signal_times(vocab);
         for action in model::enabled_actions(vocab, &in_scope, state, &times, Mode::TimeOnly) {
             let successor = model::apply_action(vocab, &in_scope, state, &times, action);

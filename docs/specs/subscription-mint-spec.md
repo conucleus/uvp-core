@@ -145,7 +145,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   mint: per-fact
   executor: { supplierType: organization, supplierID: journey-executor }
   receiveSignals:
-    JOURNEY_START: "::ANCHOR(@fruit_merchant::stall_retail.retail.sold)"
+    JOURNEY_START: "::ANCHOR(@fruit_merchant::retail.sold)"
   sendSignals: [{name: str}, {name: cmp}, {name: err}]
 
 # 无锚监听：通道扇入（原撮合）
@@ -153,8 +153,8 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   source: match
   executor: { supplierType: organization, supplierID: juice-market-executor }
   receiveSignals:
-    SURPLUS_EVENT: "::ANCHOR(@fruit_merchant::stall_retail.retail.surplus)"
-    DEMAND_EVENT: "::ANCHOR(@buyer::juice_demand.entry.requested)"
+    SURPLUS_EVENT: "::ANCHOR(@fruit_merchant::retail.surplus)"
+    DEMAND_EVENT: "::ANCHOR(@buyer::juice_demand.requested)"
   sendSignals: [{name: str}, {name: frozen}, {name: cmp}, {name: deal}, {name: err}]
 
 # 有锚阶段：按单路由（原收购回流；同 source 类存在 mint 声明即有锚）
@@ -162,7 +162,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   source: seller
   executor: { supplierType: organization, supplierID: fruit-merchant-executor }
   receiveSignals:
-    FARMER_FRUIT_SETTLED: "::ANCHOR(@farmer::farmer_orchard.packing.settled)"
+    FARMER_FRUIT_SETTLED: "::ANCHOR(@farmer::packing.settled)"
   sendSignals: [{name: str}, {name: frozen}, {name: cmp}, {name: err}]
 
 # 同单推进：普通 hook（原语义）
@@ -170,7 +170,7 @@ stage 声明——"跨 source 类"不等于"跨秩序"；跨秩序事实级联�
   source: seller
   executor: { supplierType: organization, supplierID: farmer-executor }
   receiveSignals:
-    WASH_READY: "seller::farmer_orchard.picking.cmp"
+    WASH_READY: "seller::picking.cmp"
   sendSignals: [{name: str}, {name: cmp}, {name: err}]
 ```
 
@@ -193,7 +193,7 @@ Stage 字段总表（目标态）：
 
 | 场景 | 旧写法 | 新写法 |
 |---|---|---|
-| 分馏（汽油/顾客路线） | `::OUTSIDE@(源::t.s.sig)` | 订阅 + `mint: per-fact` |
+| 分馏（汽油/顾客路线） | `::OUTSIDE@(源::s.sig)` | 订阅 + `mint: per-fact` |
 | 撮合（k≥2 配对） | 旧扇入标头（k≥2） | 无锚监听 + 多条 `::ANCHOR(@…)`；配对后执行器 str 多父 |
 | 收购回流 | `::ANCHOR@(裸两段)` | 有锚阶段 + `::ANCHOR(@…)`（按单路由） |
 | 观察入口（k=1） | 旧扇入标头（k=1） | 无锚监听 + 单条 `::ANCHOR(@…)` |
@@ -253,7 +253,7 @@ Stage 字段总表（目标态）：
 
 | 裁决 | 结论 | 落地 |
 |---|---|---|
-| 模-1 静态执行者 | 出生/订阅阶段必须编译期静态绑定执行者（出生阶段必须非委托 executor；有锚订阅阶段允许绑定 zhixu 委托的唯一例外见上表"有锚订阅阶段绑定 zhixu 委托执行者"）；运行时 patch 一律拒绝（既有门禁不变） | Go validator 去豁免（uvp f724212 之后批次）；uvp-core validate_mint_anchors 增查；bootstrap child.main 前置注册静态执行者、register_select 撤销对该阶段的 patch |
+| 模-1 静态执行者 | 出生/订阅阶段必须编译期静态绑定执行者（出生阶段必须非委托 executor；有锚订阅阶段允许绑定 zhixu 委托的唯一例外见上表"有锚订阅阶段绑定 zhixu 委托执行者"）；运行时 patch 一律拒绝（既有门禁不变） | Go validator 去豁免（uvp f724212 之后批次）；uvp-core validate_mint_anchors 增查；bootstrap child 前置注册静态执行者、register_select 撤销对该阶段的 patch |
 | 模-2 出生入口组成 | 出生入口只能是 ANCHOR 订阅；"订阅之外附加单正普通 hook"形态废除 | uvp-core validate_mint_anchors 拒绝；TS 测试对齐 |
 | 模-3 域边界 | 域 = zhixu 实例。订阅按类匹配只在本实例内解析；跨秩序扇入要求 rel_zhixu_dock 显式对接（双向记录，compiler 新增 POST /zhixu-dock 登记，dbops.RegisterZhixuDock）。依赖按秩序 id 显式绑定（委托接缝/同单锚定）不受 dock 门限制 | uvp core-ddl + loadAffectedHooks + 契约测试 |
 | 事实标签 tie-break | hook_state.id 与 hook_delivery.id 改从共享序列 fact_label_seq 取值，标签对全部输出事实严格全序 | core-ddl |

@@ -94,7 +94,7 @@ pub fn settle(vocab: &Vocabulary, scope: &[bool], state: &mut McState, times: &m
                 changed = true;
             }
         }
-        for fact in 0..vocab.facts.len() {
+        for (fact, _) in vocab.facts.iter().enumerate() {
             if !scope[fact] || state.fact_epochs[fact].is_some() {
                 continue;
             }
