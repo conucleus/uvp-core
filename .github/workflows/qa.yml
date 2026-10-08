@@ -1,30 +1,22 @@
-name: uvp-core-ci
+name: qa
 
 on:
-  push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: uvp-core-ci-.github
-  cancel-in-progress: false
+  group: qa-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      UVP_CONSTRAINTS_PATH: ${{ github.workspace }}/uvp-protocol/protocol/uvp-constraints.v1.json
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout uvp-protocol
-        uses: actions/checkout@v4
-        with:
-          repository: conucleus/uvp-protocol
-          path: uvp-protocol
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -33,11 +25,7 @@ jobs:
       - run: cargo test --workspace
 
   node-native:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

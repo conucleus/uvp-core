@@ -21,6 +21,9 @@ char* uvp_replay_compiled_hook_json(const char* request_json);
  * uvp_parse_hook_json 相同；lint_zhixu 请求为 {"definition": <Zhixu>}。 */
 char* uvp_lint_hook_json(const char* request_json);
 char* uvp_lint_zhixu_json(const char* request_json);
+/* supplier 定义尺寸校验（DDL 列宽对齐）：请求为 {"supplier": <Supplier>}，
+ * 违例按 ok:false 信封返回，通过时 value 为 true。 */
+char* uvp_validate_supplier_json(const char* request_json);
 
 /* 定义身份 uid 派生：请求为定义文档 JSON（object），响应信封与其余
  * uvp_*_json 相同；value 为 "zx-<32hex>"（uvp:definition-uid:v2 内容派生）。 */

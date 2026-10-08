@@ -10,6 +10,7 @@ use uvp_model::{ZhixuDefinition, ZhixuExecutor, ZhixuStage};
 use crate::lower::{is_zhixu_executor_stage, parse_hook_for_compiler, value_str, StageEntry};
 
 const MAX_STAGE_SOURCE_BYTES: usize = 36;
+const MAX_SUPPLIER_ID_BYTES: usize = 36;
 const MAX_IDENTIFIER_BYTES: usize = 100;
 const MAX_SIGNAL_NAME_BYTES: usize = 100;
 const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
@@ -17,6 +18,11 @@ const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
 const MAX_TASK_PATTERNS: usize = 64;
 const MAX_STAGE_ENTRIES: usize = 256;
 const MAX_HOOKS: usize = 512;
+
+const MAX_SUPPLIER_NAME_BYTES: usize = 100;
+const MAX_SUPPLIER_TYPE_BYTES: usize = 60;
+const MAX_SUPPLIER_REAL_ID_TYPE_BYTES: usize = 20;
+const MAX_SUPPLIER_REAL_ID_BYTES: usize = 100;
 
 pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     let mut issues = Vec::new();
@@ -174,6 +180,53 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
     issues
 }
 
+pub(crate) fn validate_supplier_dimensions(supplier: &Value) -> Result<(), String> {
+    let mut issues = Vec::new();
+    let spec = supplier.get("spec");
+    let name = supplier
+        .get("metadata")
+        .map(|metadata| value_str(metadata, "name"))
+        .unwrap_or_default()
+        .trim();
+    if name.is_empty() {
+        issues.push("metadata.name is required and cannot be blank".to_string());
+    }
+    if name.len() > MAX_SUPPLIER_NAME_BYTES {
+        issues.push(format!(
+            "supplier name {name:?} exceeds {MAX_SUPPLIER_NAME_BYTES} bytes (global_supplier.name)"
+        ));
+    }
+    let supplier_type = spec
+        .map(|spec| value_str(spec, "supplierType"))
+        .unwrap_or_default();
+    if supplier_type.len() > MAX_SUPPLIER_TYPE_BYTES {
+        issues.push(format!(
+            "supplierType {supplier_type:?} exceeds {MAX_SUPPLIER_TYPE_BYTES} bytes (global_supplier.type)"
+        ));
+    }
+    let real_id_type = spec
+        .map(|spec| value_str(spec, "realIdType"))
+        .unwrap_or_default();
+    if real_id_type.len() > MAX_SUPPLIER_REAL_ID_TYPE_BYTES {
+        issues.push(format!(
+            "realIdType {real_id_type:?} exceeds {MAX_SUPPLIER_REAL_ID_TYPE_BYTES} bytes (global_supplier.real_id_type)"
+        ));
+    }
+    let real_id = spec
+        .map(|spec| value_str(spec, "realId"))
+        .unwrap_or_default();
+    if real_id.len() > MAX_SUPPLIER_REAL_ID_BYTES {
+        issues.push(format!(
+            "realId {real_id:?} exceeds {MAX_SUPPLIER_REAL_ID_BYTES} bytes (global_supplier.real_id)"
+        ));
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::join_issues_bounded(&issues))
+    }
+}
+
 fn is_plain_source_identifier(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -229,14 +282,16 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
         if executor.supplier_type == "zhixu" {
             continue;
         }
-        if executor
-            .supplier_id
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
-        {
+        let supplier_id = executor.supplier_id.as_deref().unwrap_or("");
+        if supplier_id.trim().is_empty() {
             issues.push(format!(
                 "{}.executor.supplierID is required when supplierType is {:?}",
                 entry.stage_identifier, executor.supplier_type
+            ));
+        } else if supplier_id.len() > MAX_SUPPLIER_ID_BYTES {
+            issues.push(format!(
+                "{}.executor.supplierID {supplier_id:?} exceeds 36 bytes (uuid-length executor identity)",
+                entry.stage_identifier
             ));
         }
     }

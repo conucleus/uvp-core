@@ -1,6 +1,7 @@
-//! uvp-constraints.v1 一致性 harness（Rust 线）：约束注册表
-//! `uvp-protocol/protocol/uvp-constraints.v1.json` 是跨语言接受面规则
-//! （zhixu / hook-dsl / dock / onchain-plan）的单一出处。
+//! uvp-constraints.v1 一致性 harness（Rust 线）：约束注册表自宿主于本仓
+//! `protocol/uvp-constraints.v1.json`，是跨语言接受面规则
+//! （zhixu / hook-dsl / dock / onchain-plan）的单一出处；链侧 TS harness
+//! 对同一份表独立见证。
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -8,7 +9,7 @@ use sha2::{Digest, Sha256};
 const CONSTRAINTS_ENV_VAR: &str = "UVP_CONSTRAINTS_PATH";
 const PINNED_VERSION: &str = "uvp.constraints.v1";
 
-const CONSTRAINTS_RELATIVE_PATH: &str = "uvp-protocol/protocol/uvp-constraints.v1.json";
+const CONSTRAINTS_RELATIVE_PATH: &str = "protocol/uvp-constraints.v1.json";
 
 fn default_constraints_path() -> std::path::PathBuf {
     let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -32,7 +33,7 @@ fn load_constraints_table() -> (String, Value, std::path::PathBuf) {
         panic!(
             "[uvp-constraints] 读不到跨语言约束注册表（硬失败，不 skip）：{}\n\
              - 设置 {CONSTRAINTS_ENV_VAR}=<uvp-constraints.v1.json 绝对路径> 覆盖；\n\
-             - 或确认 uvp-protocol 仓 protocol/uvp-constraints.v1.json 存在。\n\
+             - 或确认本仓 protocol/uvp-constraints.v1.json 存在。\n\
              原始错误：{err}",
             path.display()
         )
@@ -255,6 +256,178 @@ type Probe = (fn() -> (bool, String), fn() -> (bool, String), &'static str);
 fn rust_probes() -> Vec<(String, Probe)> {
     let mut probes: Vec<(String, Probe)> = Vec::new();
 
+    probes.push((
+        "file-resource-type-closed-enum".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["spec"]["taskPatterns"][0]["stages"][0]["fileResources"] = json!({
+                        "rule_file": { "fileType": "s3", "localFile": { "path": "/tmp/x" } }
+                    });
+                    d
+                })
+            },
+            "fileType must be one of",
+        ),
+    ));
+    probes.push((
+        "birth-channel-key-union-uniqueness".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["receiveSignals"] = json!({
+                        "START": "buyer::main.work.cmp",
+                        "GO": "buyer::main.work.seed"
+                    });
+                    d["spec"]["dockInterface"] = json!({
+                        "service": {
+                            "orderModes": ["new"],
+                            "inputs": { "enter": { "hook": "main.work#GO" } }
+                        }
+                    });
+                    d["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
+                        json!([{ "name": "str" }, { "name": "cmp" }, { "name": "seed" }]);
+                    d["spec"]["taskPatterns"][0]["stages"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({
+                            "name": "retail",
+                            "source": "buyer",
+                            "mint": "per-fact",
+                            "receiveSignals": { "SPAWN": "::ANCHOR(@buyer::main.work.seed)" },
+                            "sendSignals": [{ "name": "ack" }],
+                            "executor": { "supplierType": "organization", "supplierID": "mint-org" }
+                        }));
+                    d
+                })
+            },
+            "出生通道键并集查重",
+        ),
+    ));
+    probes.push((
+        "task-patterns-max-count".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    let patterns: Vec<Value> = (0..65)
+                        .map(|i| {
+                            json!({ "name": format!("t{i}"), "stages": [
+                                { "name": "main", "source": "buyer", "executor":
+                                    { "supplierType": "organization", "supplierID": format!("org{i}") } }
+                            ] })
+                        })
+                        .collect();
+                    d["spec"]["taskPatterns"] = json!(patterns);
+                    d
+                })
+            },
+            "task patterns, limit is 64",
+        ),
+    ));
+    probes.push((
+        "stage-entries-max-count".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    let stages: Vec<Value> = (0..257)
+                        .map(|i| {
+                            json!({ "name": format!("s{i}"), "source": "buyer", "executor":
+                                { "supplierType": "organization", "supplierID": format!("org{i}") } })
+                        })
+                        .collect();
+                    d["spec"]["taskPatterns"] = json!([{ "name": "bulk", "stages": stages }]);
+                    d
+                })
+            },
+            "stages across taskPatterns, limit is 256",
+        ),
+    ));
+    probes.push((
+        "compile-hooks-max-count".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    let stages: Vec<Value> = (0..513)
+                        .map(|i| {
+                            json!({ "name": format!("s{i}"), "source": "buyer",
+                                "sendSignals": [{ "name": "str" }],
+                                "receiveSignals": { "GO": format!("buyer::s{i}.str") },
+                                "executor": { "supplierType": "organization", "supplierID": format!("org{i}") } })
+                        })
+                        .collect();
+                    d["spec"]["taskPatterns"] = json!([{ "name": "bulk", "stages": stages }]);
+                    d
+                })
+            },
+            "receiveSignals channels (compiled hooks) across taskPatterns, limit is 512",
+        ),
+    ));
+    probes.push((
+        "interface-ports-max-count".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    let hooks = serde_json::Map::from_iter(
+                        (0..65).map(|i| (format!("GO{i}"), json!(format!("buyer::main.work.cmp")))),
+                    );
+                    stage_mut(&mut d)["receiveSignals"] = Value::Object(hooks);
+                    let inputs = serde_json::Map::from_iter((0..65).map(|i| {
+                        (
+                            format!("execute{i}"),
+                            json!({ "hook": format!("main.work#GO{i}") }),
+                        )
+                    }));
+                    d["spec"]["dockInterface"] = json!({
+                        "service": { "orderModes": ["new"], "inputs": Value::Object(inputs) }
+                    });
+                    d
+                })
+            },
+            "interface exposes",
+        ),
+    ));
+    probes.push((
+        "manifest-definitions-max-count".into(),
+        (
+            || probe_link(dock_definition(), target_dock_targets()),
+            || {
+                let targets: Vec<Value> = (0..257)
+                    .map(|i| {
+                        json!({ "uid": format!("zx-{i:032x}"), "definition": target_interface_definition() })
+                    })
+                    .collect();
+                probe_link(dock_definition(), json!(targets))
+            },
+            "definitions, limit is 256",
+        ),
+    ));
+    probes.push((
+        "executor-supplier-id-max-length".into(),
+        (
+            || probe_compile(base_definition()),
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    d["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierID"] =
+                        json!("a".repeat(37));
+                    d
+                })
+            },
+            "exceeds 36 bytes",
+        ),
+    ));
     probes.push((
         "zhixu-api-version-closed-enum".into(),
         (

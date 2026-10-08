@@ -1,4 +1,5 @@
 use super::*;
+use crate::validate::validate_supplier_dimensions;
 use serde_json::json;
 
 const UNKNOWN_TARGET: &str = "zx-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
@@ -2522,5 +2523,316 @@ fn admission_items_must_share_one_header_source() {
             "D032 payment_flow.settle.sendSignals[cmp].validWhen: every item must address the same header source (payment); item 1 addresses seller"
         ),
         "{error}"
+    );
+}
+
+#[test]
+fn rejects_supplier_name_exceeding_ddl_limit() {
+    let supplier = json!({ "metadata": { "name": format!(" {}", "a".repeat(101)) } });
+    let message = validate_supplier_dimensions(&supplier)
+        .expect_err("supplier name over 100 bytes after trim must fail");
+    assert!(
+        message.contains("supplier name \"aaa")
+            && message.contains("exceeds 100 bytes (global_supplier.name)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_supplier_type_exceeding_ddl_limit() {
+    let supplier = json!({
+        "metadata": { "name": "escrow-bank" },
+        "spec": { "supplierType": "t".repeat(61) }
+    });
+    let message =
+        validate_supplier_dimensions(&supplier).expect_err("supplierType over 60 bytes must fail");
+    assert!(
+        message.contains("supplierType \"ttt")
+            && message.contains("exceeds 60 bytes (global_supplier.type)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_supplier_real_id_type_exceeding_ddl_limit() {
+    let supplier = json!({
+        "metadata": { "name": "escrow-bank" },
+        "spec": {
+            "supplierType": "organization",
+            "realIdType": "p".repeat(21)
+        }
+    });
+    let message =
+        validate_supplier_dimensions(&supplier).expect_err("realIdType over 20 bytes must fail");
+    assert!(
+        message.contains("realIdType \"ppp")
+            && message.contains("exceeds 20 bytes (global_supplier.real_id_type)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_supplier_real_id_exceeding_ddl_limit() {
+    let supplier = json!({
+        "metadata": { "name": "escrow-bank" },
+        "spec": {
+            "supplierType": "organization",
+            "realId": "i".repeat(101)
+        }
+    });
+    let message =
+        validate_supplier_dimensions(&supplier).expect_err("realId over 100 bytes must fail");
+    assert!(
+        message.contains("realId \"iii")
+            && message.contains("exceeds 100 bytes (global_supplier.real_id)"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_supplier_with_blank_name() {
+    let supplier = json!({ "metadata": { "name": "   " } });
+    let message = validate_supplier_dimensions(&supplier).expect_err("blank name must fail");
+    assert!(
+        message.contains("metadata.name is required and cannot be blank"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn allows_supplier_at_ddl_dimension_limits() {
+    let supplier = json!({
+        "metadata": { "name": format!(" {}", "n".repeat(100)) },
+        "spec": {
+            "supplierType": "t".repeat(60),
+            "realIdType": "p".repeat(20),
+            "realId": "i".repeat(100)
+        }
+    });
+    validate_supplier_dimensions(&supplier).expect("fields at the DDL limits must pass");
+}
+
+#[test]
+fn rejects_metadata_name_violating_slug_pattern() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "Bad-Name" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [ { "name": "init", "stages": [
+                { "name": "main", "source": "buyer", "executor": { "supplierType": "organization", "supplierID": "org-1" } }
+            ]}]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("metadata.name outside the slug pattern must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("must match ^[a-z][a-z0-9_-]{0,99}$"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_stage_source_exceeding_36_bytes() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "source_too_long" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [ { "name": "init", "stages": [
+                { "name": "main", "source": "a".repeat(37), "executor": { "supplierType": "organization", "supplierID": "org-1" } }
+            ]}]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("stage source over 36 bytes must fail");
+    assert!(
+        error.to_string().contains("exceeds 36 bytes"),
+        "unexpected error: {error}"
+    );
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("cloud target must enforce the same requirement");
+    assert!(
+        error.to_string().contains("exceeds 36 bytes"),
+        "unexpected cloud error: {error}"
+    );
+}
+
+#[test]
+fn rejects_send_signal_exceeding_combined_limit() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "signal_too_long" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [ { "name": "init", "stages": [
+                {
+                    "name": "main",
+                    "source": "buyer",
+                    "sendSignals": [{ "name": "str" }, { "name": "s".repeat(91) }],
+                    "receiveSignals": { "GO": "buyer::init.main.str" },
+                    "executor": { "supplierType": "organization", "supplierID": "org-1" }
+                }
+            ]}]
+        }
+    });
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("combined sendSignal name over 100 bytes must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("exceeds 100 bytes combined (individual_record.signal_name)"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_receive_signal_key_exceeding_36_bytes() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "hook_key_too_long" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [ { "name": "init", "stages": [
+                {
+                    "name": "main",
+                    "source": "buyer",
+                    "sendSignals": [{ "name": "str" }],
+                    "receiveSignals": { "K".repeat(37): "buyer::init.main.str" },
+                    "executor": { "supplierType": "organization", "supplierID": "org-1" }
+                }
+            ]}]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("receiveSignals key over 36 bytes must fail");
+    assert!(
+        error.to_string().contains("key must be 1-36 bytes"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_selected_stages_duplicate_target() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "dup_selected_target" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [
+                { "name": "selector", "stages": [
+                    {
+                        "name": "assign",
+                        "source": "buyer",
+                        "selectedStages": ["execution.main", "execution.main"],
+                        "sendSignals": [{ "name": "executor_selected" }],
+                        "executor": { "supplierType": "organization", "supplierID": "selector-org" }
+                    }
+                ]},
+                { "name": "execution", "stages": [
+                    {
+                        "name": "main",
+                        "source": "buyer",
+                        "receiveSignals": { "GO": "buyer::selector.assign.executor_selected" },
+                        "executor": { "supplierType": "organization", "supplierID": "exec-org" }
+                    }
+                ]}
+            ]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("duplicate selectedStages target must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("contains duplicate target execution.main"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_signal_map_key_exceeding_26_bytes() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "signal_map_key_too_long" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [ { "name": "execution", "stages": [
+                {
+                    "name": "main",
+                    "source": "buyer",
+                    "sendSignals": [{ "name": "str" }, { "name": "done" }],
+                    "receiveSignals": { "GO": "buyer::execution.main.str" },
+                    "executor": {
+                        "supplierType": "zhixu",
+                        "zhixuExecutorConfig": {
+                            "target": null,
+                            "interface": "service",
+                            "order": { "mode": "new" },
+                            "inputMap": { "GO": "go" },
+                            "signalMap": { "k".repeat(27): "done" }
+                        }
+                    }
+                }
+            ]}]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("signalMap key over 26 bytes must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("must not contain '.' and must be at most 26 bytes"),
+        "unexpected error: {error}"
+    );
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("cloud target must enforce the same requirement");
+    assert!(
+        error
+            .to_string()
+            .contains("must not contain '.' and must be at most 26 bytes"),
+        "unexpected cloud error: {error}"
+    );
+}
+
+#[test]
+fn rejects_executor_supplier_id_over_uuid_length() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "supplier_id_too_long" },
+        "spec": {
+            "platform": { "type": "cloud" },
+            "nucleation": { "id": "core" },
+            "taskPatterns": [ { "name": "init", "stages": [
+                { "name": "main", "source": "buyer", "executor": { "supplierType": "organization", "supplierID": "a".repeat(37) } }
+            ]}]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("executor supplierID over 36 bytes must fail");
+    assert!(
+        error.to_string().contains("exceeds 36 bytes"),
+        "unexpected error: {error}"
+    );
+    let error = compile_cloud_artifact(&definition, None, true)
+        .expect_err("cloud target must enforce the same requirement");
+    assert!(
+        error.to_string().contains("exceeds 36 bytes"),
+        "unexpected cloud error: {error}"
     );
 }

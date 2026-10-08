@@ -123,7 +123,7 @@
 | 通道 | 声明 | 机制 | 保证 |
 |---|---|---|---|
 | 执行器 str | 无需声明 | `new_source=true`，可携带 `parent_order_ids` 自报血缘；无需父 | 执行器私有的铸造判定（配对、挑选、自发开单） |
-| 引擎 per-fact 代铸 | `mint: per-fact`（唯一声明点） | 每到达（扇入）事实，订单 ID 从事实纯函数派生（现 deriveOutsideOrderID 模式：域+阶段+订阅+上游引用），投递事务内 RegisterOrder 幂等重入 | **无需知情者的存在性**：投递失败只延迟，重放不漂移身份 |
+| 引擎 per-fact 代铸 | `mint: per-fact`（唯一声明点） | 每到达（扇入）事实，订单 ID 从事实纯函数派生（现 deriveBootstrapOrderID 模式：域+阶段+订阅+上游引用），投递事务内 RegisterOrder 幂等重入 | **无需知情者的存在性**：投递失败只延迟，重放不漂移身份 |
 
 - 代铸订单的溯源父从事实的关联订单引用复制（如 deal 携带买卖双方订单 id）。
 - 一个事实最多铸一次单（按去重身份幂等）。
@@ -211,7 +211,7 @@ Stage 字段总表（目标态）：
 
 ## 7. 版本与兼容
 
-- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v4`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v4`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v5 编号制品，无兼容义务。
+- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v5`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v5`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v3/v4 编号制品，无兼容义务。
 - 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v4`、`onchainHookPlan.v3`、`cloudArtifact.v4`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v3`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
 - `UVPStateMachine` 0.12 的六域 PlanCommit（含 capabilitiesRoot）、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.4 的 open/attach/input/output boundary（output 端口叶为 V3：叶直接钉绑定侧的 targetSourceId/targetSignalId 事实键分量）必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
 - OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals 不在语法面、两侧语料与两侧文档表述内。其中 trigger 入口表与 externalSignals 零存在；`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 由解析器词法识别并精确拒绝，报错统一指引 `::ANCHOR(@source::task.stage.signal)` 订阅入口，扇入类标头按通用语法错误拒绝（语法面排除的完整口径见 2.2）。
