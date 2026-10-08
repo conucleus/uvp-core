@@ -25,16 +25,13 @@ fn corpus_definition(send_signal: &str) -> Value {
         "spec": {
             "platform": {"type": "cloud"},
             "nucleation": {"id": "core"},
-            "taskPatterns": [{
-                "name": "seed",
-                "stages": [{
+            "stages": [{
                     "name": "boot",
                     "source": "buyer",
-                    "receiveSignals": {"START": "buyer::seed.boot.ignition"},
+                    "receiveSignals": {"START": "buyer::boot.ignition"},
                     "sendSignals": [{"name": "ignition"}, {"name": send_signal}],
                     "executor": {"supplierType": "organization", "supplierID": "org-a"}
                 }]
-            }]
         }
     })
 }

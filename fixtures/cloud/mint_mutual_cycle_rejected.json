@@ -16,50 +16,40 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "dispatch",
-          "stages": [
+          "name": "main",
+          "source": "producer",
+          "receiveSignals": {
+            "SPAWN": "::ANCHOR(@buyer::retail.ack)"
+          },
+          "sendSignals": [
             {
-              "name": "main",
-              "source": "producer",
-              "receiveSignals": {
-                "SPAWN": "::ANCHOR(@buyer::orchard.retail.ack)"
-              },
-              "sendSignals": [
-                {
-                  "name": "smart_contract"
-                }
-              ],
-              "mint": "per-fact",
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "dispatch-main-executor"
-              }
+              "name": "smart_contract"
             }
-          ]
+          ],
+          "mint": "per-fact",
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "dispatch-main-executor"
+          }
         },
         {
-          "name": "orchard",
-          "stages": [
+          "name": "retail",
+          "source": "buyer",
+          "receiveSignals": {
+            "SPAWN": "::ANCHOR(@producer::main.smart_contract)"
+          },
+          "sendSignals": [
             {
-              "name": "retail",
-              "source": "buyer",
-              "receiveSignals": {
-                "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)"
-              },
-              "sendSignals": [
-                {
-                  "name": "ack"
-                }
-              ],
-              "mint": "per-fact",
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "orchard-retail-executor"
-              }
+              "name": "ack"
             }
-          ]
+          ],
+          "mint": "per-fact",
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "orchard-retail-executor"
+          }
         }
       ]
     }

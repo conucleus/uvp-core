@@ -124,7 +124,7 @@ fn diagnostic_spans_point_at_real_source_fragments() {
         Profile::EvmStrict,
         Gate::Hook,
         "DUP",
-        "buyer::task.pay.cmp  &  task.pay.cmp",
+        "buyer::pay.cmp  &  pay.cmp",
     )
     .unwrap();
     let duplicate = report
@@ -132,25 +132,19 @@ fn diagnostic_spans_point_at_real_source_fragments() {
         .iter()
         .find(|diagnostic| diagnostic.code == "UVP-L001")
         .expect("duplicate-term must fire");
-    let condition = "task.pay.cmp  &  task.pay.cmp";
+    let condition = "pay.cmp  &  pay.cmp";
     let primary = duplicate.primary_span.expect("span must be present");
-    assert_eq!(
-        &condition[primary.start_byte..primary.end_byte],
-        "task.pay.cmp"
-    );
+    assert_eq!(&condition[primary.start_byte..primary.end_byte], "pay.cmp");
     assert_eq!(duplicate.related_spans.len(), 1);
     let related = duplicate.related_spans[0].span;
-    assert_eq!(
-        &condition[related.start_byte..related.end_byte],
-        "task.pay.cmp"
-    );
+    assert_eq!(&condition[related.start_byte..related.end_byte], "pay.cmp");
     assert!(related.start_byte > primary.end_byte);
 
     let report = lint_hook(
         Profile::EvmStrict,
         Gate::Hook,
         "ABS",
-        "buyer::task.pay.cmp & (task.pay.cmp | task.refund.cmp)",
+        "buyer::pay.cmp & (pay.cmp | refund.cmp)",
     )
     .unwrap();
     let absorption = report
@@ -158,19 +152,19 @@ fn diagnostic_spans_point_at_real_source_fragments() {
         .iter()
         .find(|diagnostic| diagnostic.code == "UVP-L003")
         .expect("absorption must fire");
-    let condition = "task.pay.cmp & (task.pay.cmp | task.refund.cmp)";
+    let condition = "pay.cmp & (pay.cmp | refund.cmp)";
     let primary = absorption.primary_span.expect("span must be present");
     assert_eq!(
         &condition[primary.start_byte..primary.end_byte],
-        "task.pay.cmp | task.refund.cmp"
+        "pay.cmp | refund.cmp"
     );
 }
 
 #[test]
 fn excessive_boolean_depth_is_reported() {
-    let mut condition = String::from("task.a.cmp");
+    let mut condition = String::from("a.cmp");
     for _ in 0..(MAX_LINT_BOOLEAN_DEPTH + 1) {
-        condition = format!("({condition} & task.b.cmp)");
+        condition = format!("({condition} & b.cmp)");
     }
     let hook = format!("buyer::{condition}");
     let report = lint_hook(Profile::EvmStrict, Gate::Hook, "DEEP", &hook).unwrap();
@@ -184,9 +178,9 @@ fn excessive_boolean_depth_is_reported() {
         codes(&report)
     );
 
-    let mut condition = String::from("task.a.cmp");
+    let mut condition = String::from("a.cmp");
     for _ in 0..MAX_LINT_BOOLEAN_DEPTH {
-        condition = format!("({condition} & task.b.cmp)");
+        condition = format!("({condition} & b.cmp)");
     }
     let hook = format!("buyer::{condition}");
     let report = lint_hook(Profile::EvmStrict, Gate::Hook, "DEEP", &hook).unwrap();
@@ -203,7 +197,7 @@ fn excessive_boolean_depth_is_reported() {
 #[test]
 fn excessive_operand_count_is_reported() {
     let operands = (0..(MAX_LINT_BOOLEAN_OPERANDS + 1))
-        .map(|index| format!("task.s{index}.cmp"))
+        .map(|index| format!("s{index}.cmp"))
         .collect::<Vec<_>>()
         .join(" & ");
     let hook = format!("buyer::{operands}");
@@ -223,7 +217,7 @@ fn excessive_operand_count_is_reported() {
 #[test]
 fn lint_hook_json_envelope_shape() {
     let envelope = lint_hook_json(
-        r#"{"profile": "evm_strict", "hookName": "DUP", "hook": "buyer::task.a.cmp & task.a.cmp"}"#,
+        r#"{"profile": "evm_strict", "hookName": "DUP", "hook": "buyer::a.cmp & a.cmp"}"#,
     );
     let value: Value = serde_json::from_str(&envelope).unwrap();
     assert_eq!(value["ok"], Value::Bool(true));
@@ -241,8 +235,7 @@ fn lint_hook_json_envelope_shape() {
         Value::String("duplicate_term".to_string())
     );
 
-    let envelope =
-        lint_hook_json(r#"{"hookName": "TAUT", "hook": "buyer::task.a.cmp | ~task.a.cmp"}"#);
+    let envelope = lint_hook_json(r#"{"hookName": "TAUT", "hook": "buyer::a.cmp | ~a.cmp"}"#);
     let value: Value = serde_json::from_str(&envelope).unwrap();
     assert_eq!(value["ok"], Value::Bool(false));
     assert!(value["value"].is_null());
@@ -254,8 +247,8 @@ fn ready_implies_soundness_spot_checks() {
     use uvp_hook_dsl::ProofResult::{Proven, Unknown};
 
     let signal = |name: &str| Expr::Signal(name.to_string());
-    let a = signal("task.a.cmp");
-    let b = signal("task.b.cmp");
+    let a = signal("a.cmp");
+    let b = signal("b.cmp");
 
     assert!(matches!(
         ready_implies(&Expr::And(vec![a.clone(), b.clone()]), &a),
@@ -297,11 +290,11 @@ fn ready_implies_soundness_spot_checks() {
 #[test]
 fn spanned_tree_matches_parser_side_table() {
     for hook in [
-        "buyer::task.a.cmp",
-        "buyer::task.a.cmp & ~task.b.cmp",
-        "buyer::(task.a.cmp +10s) & (task.b.cmp | task.c.cmp)",
-        "::ANCHOR(@seller::trade.listing.cmp)",
-        "buyer::~task.a.cmp & (task.b.cmp & task.c.cmp)",
+        "buyer::a.cmp",
+        "buyer::a.cmp & ~b.cmp",
+        "buyer::(a.cmp +10s) & (b.cmp | c.cmp)",
+        "::ANCHOR(@seller::listing.cmp)",
+        "buyer::~a.cmp & (b.cmp & c.cmp)",
     ] {
         let (hook_expr, spans) =
             uvp_hook_dsl::parse_hook_expr_with_spans(hook).expect("hook must parse");
@@ -380,7 +373,7 @@ impl Lcg {
 
 fn generate_random_hook(rng: &mut Lcg) -> String {
     let signal_count = 1 + rng.below(4) as usize;
-    let signal = |index: usize| format!("task.s{index}.cmp");
+    let signal = |index: usize| format!("s{index}.cmp");
     let mut operands = Vec::new();
     for index in 0..signal_count {
         let name = signal(index);
@@ -390,7 +383,7 @@ fn generate_random_hook(rng: &mut Lcg) -> String {
             2 => format!("~{name}"),
             3 => format!("({name} +{}s)", 1 + rng.below(30)),
             4 => format!("({name} +{}s)", 1 + rng.below(30)),
-            _ => format!("({name} | task.t{index}.cmp)"),
+            _ => format!("({name} | t{index}.cmp)"),
         });
     }
     operands[0] = match rng.below(2) {
@@ -418,11 +411,11 @@ fn generate_random_hook(rng: &mut Lcg) -> String {
 
 #[test]
 fn lint_gate_filter_accepts_admission_forms() {
-    let filter_request = r#"{"profile":"cloud_compat","gate":"filter","hookName":"ADMIT","hook":"buyer::~(task.cancel.cmp +14d)"}"#;
+    let filter_request = r#"{"profile":"cloud_compat","gate":"filter","hookName":"ADMIT","hook":"buyer::~(cancel.cmp +14d)"}"#;
     let envelope = lint_hook_json(filter_request);
     assert!(envelope.contains("\"ok\":true"), "{envelope}");
 
-    let hook_request = r#"{"profile":"cloud_compat","gate":"hook","hookName":"ADMIT","hook":"buyer::~(task.cancel.cmp +14d)"}"#;
+    let hook_request = r#"{"profile":"cloud_compat","gate":"hook","hookName":"ADMIT","hook":"buyer::~(cancel.cmp +14d)"}"#;
     let envelope = lint_hook_json(hook_request);
     assert!(envelope.contains("\"ok\":false"), "{envelope}");
 }

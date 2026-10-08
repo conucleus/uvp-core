@@ -16,99 +16,89 @@
       "platform": {
         "type": "cloud"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "procurement",
-          "stages": [
+          "executor": {
+            "supplierID": "purchaser-app",
+            "supplierType": "organization"
+          },
+          "name": "confirm",
+          "receiveSignals": {
+            "ORDER": "purchaser::confirm.seed"
+          },
+          "sendSignals": [
             {
-              "executor": {
-                "supplierID": "purchaser-app",
-                "supplierType": "organization"
-              },
-              "name": "confirm",
-              "receiveSignals": {
-                "ORDER": "purchaser::procurement.confirm.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "source": "purchaser"
-            }
-          ]
-        },
-        {
-          "name": "sourcing",
-          "stages": [
-            {
-              "executor": {
-                "supplierType": "zhixu",
-                "zhixuExecutorConfig": {
-                  "inputMap": {
-                    "EXECUTE": "execute"
-                  },
-                  "interface": "production_service",
-                  "order": {
-                    "mode": "new"
-                  },
-                  "signalMap": {
-                    "cmp": "completed",
-                    "str": "started"
-                  },
-                  "target": {
-                    "zhixu": "zx-0123456789abcdef0123456789abcdef"
-                  }
-                }
-              },
-              "name": "manufacture",
-              "receiveSignals": {
-                "EXECUTE": "purchaser::procurement.confirm.cmp"
-              },
-              "sendSignals": [
-                {
-                  "name": "str"
-                },
-                {
-                  "name": "cmp"
-                }
-              ],
-              "source": "purchaser"
+              "name": "cmp"
             },
             {
-              "executor": {
-                "supplierType": "zhixu",
-                "zhixuExecutorConfig": {
-                  "interface": "production_evidence",
-                  "order": {
-                    "mode": "existing"
-                  },
-                  "signalMap": {
-                    "cmp": "scrap_declared"
-                  },
-                  "target": {
-                    "zhixu": "zx-0123456789abcdef0123456789abcdef"
-                  }
-                }
-              },
-              "name": "source_evidence",
-              "receiveSignals": {
-                "READ": "recycler::sourcing.source_evidence.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "source": "recycler"
+              "name": "seed"
             }
-          ]
+          ],
+          "source": "purchaser"
+        },
+        {
+          "executor": {
+            "supplierType": "zhixu",
+            "zhixuExecutorConfig": {
+              "inputMap": {
+                "EXECUTE": "execute"
+              },
+              "interface": "production_service",
+              "order": {
+                "mode": "new"
+              },
+              "signalMap": {
+                "cmp": "completed",
+                "str": "started"
+              },
+              "target": {
+                "zhixu": "zx-0123456789abcdef0123456789abcdef"
+              }
+            }
+          },
+          "name": "manufacture",
+          "receiveSignals": {
+            "EXECUTE": "purchaser::confirm.cmp"
+          },
+          "sendSignals": [
+            {
+              "name": "str"
+            },
+            {
+              "name": "cmp"
+            }
+          ],
+          "source": "purchaser"
+        },
+        {
+          "executor": {
+            "supplierType": "zhixu",
+            "zhixuExecutorConfig": {
+              "interface": "production_evidence",
+              "order": {
+                "mode": "existing"
+              },
+              "signalMap": {
+                "cmp": "scrap_declared"
+              },
+              "target": {
+                "zhixu": "zx-0123456789abcdef0123456789abcdef"
+              }
+            }
+          },
+          "name": "source_evidence",
+          "receiveSignals": {
+            "READ": "recycler::source_evidence.seed"
+          },
+          "sendSignals": [
+            {
+              "name": "cmp"
+            },
+            {
+              "name": "seed"
+            }
+          ],
+          "source": "recycler"
         }
       ]
     }
@@ -116,14 +106,14 @@
   "expect": {
     "platform": "cloud",
     "hookDependencyCounts": {
-      "procurement.confirm#ORDER": 1,
-      "sourcing.manufacture#EXECUTE": 1,
-      "sourcing.source_evidence#READ": 1
+      "confirm#ORDER": 1,
+      "manufacture#EXECUTE": 1,
+      "source_evidence#READ": 1
     },
     "hookIds": [
-      "procurement.confirm#ORDER",
-      "sourcing.manufacture#EXECUTE",
-      "sourcing.source_evidence#READ"
+      "confirm#ORDER",
+      "manufacture#EXECUTE",
+      "source_evidence#READ"
     ],
     "dockRouteCount": 2
   },
@@ -143,21 +133,6 @@
           "nucleation": {
             "id": "friction-wheel-core"
           },
-          "taskPatterns": [
-            {
-              "name": "manufacturing",
-              "stages": [
-                {
-                  "name": "intake",
-                  "source": "factory"
-                },
-                {
-                  "name": "produce",
-                  "source": "factory"
-                }
-              ]
-            }
-          ],
           "dockInterface": {
             "production_evidence": {
               "orderModes": [
@@ -166,7 +141,7 @@
               "inputs": {},
               "outputs": {
                 "scrap_declared": {
-                  "signal": "factory::manufacturing.produce.scrap_created"
+                  "signal": "factory::produce.scrap_created"
                 }
               }
             },
@@ -176,22 +151,32 @@
               ],
               "inputs": {
                 "amend": {
-                  "hook": "manufacturing.produce#DOCK_AMEND"
+                  "hook": "produce#DOCK_AMEND"
                 },
                 "execute": {
-                  "hook": "manufacturing.intake#EXECUTE"
+                  "hook": "intake#EXECUTE"
                 }
               },
               "outputs": {
                 "completed": {
-                  "signal": "factory::manufacturing.produce.cmp"
+                  "signal": "factory::produce.cmp"
                 },
                 "started": {
-                  "signal": "factory::manufacturing.intake.str"
+                  "signal": "factory::intake.str"
                 }
               }
             }
-          }
+          },
+          "stages": [
+            {
+              "name": "intake",
+              "source": "factory"
+            },
+            {
+              "name": "produce",
+              "source": "factory"
+            }
+          ]
         }
       }
     }

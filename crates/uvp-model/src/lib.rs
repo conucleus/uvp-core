@@ -27,7 +27,7 @@ pub struct ZhixuSpec {
     pub platform: ZhixuPlatform,
     pub nucleation: Nucleation,
     #[serde(default)]
-    pub task_patterns: Vec<ZhixuTaskPattern>,
+    pub stages: Vec<ZhixuStage>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dock_interface: BTreeMap<String, DockInterfaceSpec>,
 }
@@ -53,14 +53,6 @@ pub struct Nucleation {
     pub id: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ZhixuTaskPattern {
-    pub name: String,
-    #[serde(default)]
-    pub stages: Vec<ZhixuStage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

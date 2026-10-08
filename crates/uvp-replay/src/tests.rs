@@ -77,9 +77,9 @@ fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    "hookId": "match.exchange#PAIR",
-                    "stageId": "match.exchange",
-                    "stageIdentifier": "match.exchange",
+                    "hookId": "exchange#PAIR",
+                    "stageId": "exchange",
+                    "stageIdentifier": "exchange",
                     "hookName": "PAIR",
                     "orderTriggerKind": "mint",
                     "emitReady": true,
@@ -89,7 +89,7 @@ fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
                         {"op": retired_op, "arity": 2}
                     ]
                 }],
-                "dependencyIndex": { "0x50": ["match.exchange#PAIR"], "0x51": ["match.exchange#PAIR"] }
+                "dependencyIndex": { "0x50": ["exchange#PAIR"], "0x51": ["exchange#PAIR"] }
             }
         }),
         json!({
@@ -145,15 +145,15 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    "hookId": "flow.start#START",
-                    "stageId": "flow.start",
-                    "stageIdentifier": "flow.start",
+                    "hookId": "start#START",
+                    "stageId": "start",
+                    "stageIdentifier": "start",
                     "hookName": "START",
                     "orderTriggerKind": "mint",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }],
-                "dependencyIndex": { "0x50": ["flow.start#START"] }
+                "dependencyIndex": { "0x50": ["start#START"] }
             }
         }),
         json!({
@@ -188,7 +188,7 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#START",
+            "hookId": "start#START",
             "status": "ready"
         }),
         json!({
@@ -199,8 +199,8 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#START",
-            "stageIdentifier": "flow.start",
+            "hookId": "start#START",
+            "stageIdentifier": "start",
             "hookName": "START"
         }),
         json!({
@@ -211,7 +211,7 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#START",
+            "hookId": "start#START",
             "status": "wait",
             "dueAt": "2026-04-27T00:00:05.000Z"
         }),
@@ -223,7 +223,7 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#START",
+            "hookId": "start#START",
             "status": "wait",
             "dueAt": "2026-04-27T00:00:05.000Z"
         }),
@@ -250,18 +250,18 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
         "zhixuId": "demo",
         "compiledHooks": [
             {
-                "hookId": "birth.one#ENTER",
-                "stageId": "birth.one",
-                "stageIdentifier": "birth.one",
+                "hookId": "one#ENTER",
+                "stageId": "one",
+                "stageIdentifier": "one",
                 "hookName": "ENTER",
                 "orderTriggerKind": "mint",
                 "emitReady": true,
                 "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
             },
             {
-                "hookId": "birth.two#ENTER",
-                "stageId": "birth.two",
-                "stageIdentifier": "birth.two",
+                "hookId": "two#ENTER",
+                "stageId": "two",
+                "stageIdentifier": "two",
                 "hookName": "ENTER",
                 "orderTriggerKind": "mint",
                 "emitReady": true,
@@ -269,8 +269,8 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
             }
         ],
         "dependencyIndex": {
-            "0x50": ["birth.one#ENTER"],
-            "0x51": ["birth.two#ENTER"]
+            "0x50": ["one#ENTER"],
+            "0x51": ["two#ENTER"]
         }
     });
     let events = vec![
@@ -313,8 +313,8 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-x",
-            "hookId": "birth.one#ENTER",
-            "stageIdentifier": "birth.one",
+            "hookId": "one#ENTER",
+            "stageIdentifier": "one",
             "hookName": "ENTER"
         }),
         json!({
@@ -347,9 +347,9 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
         result["mismatches"]
     );
     let order = &result["state"]["orders"]["0x01::order-x"];
-    assert_eq!(order["hookStatuses"]["birth.two#ENTER"], json!(null));
-    assert_eq!(order["materializedStages"]["birth.two"], json!(null));
-    assert_eq!(order["materializedStages"]["birth.one"], true);
+    assert_eq!(order["hookStatuses"]["two#ENTER"], json!(null));
+    assert_eq!(order["materializedStages"]["two"], json!(null));
+    assert_eq!(order["materializedStages"]["one"], true);
 }
 
 #[test]
@@ -358,9 +358,9 @@ fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
         "planId": "0x01",
         "zhixuId": "demo",
         "compiledHooks": [{
-            "hookId": "flow.pay#TIMEOUT",
-            "stageId": "flow.pay",
-            "stageIdentifier": "flow.pay",
+            "hookId": "pay#TIMEOUT",
+            "stageId": "pay",
+            "stageIdentifier": "pay",
             "hookName": "TIMEOUT",
             "orderTriggerKind": "none",
             "emitReady": true,
@@ -373,8 +373,8 @@ fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
             ]
         }],
         "dependencyIndex": {
-            "0x50": ["flow.pay#TIMEOUT"],
-            "0x51": ["flow.pay#TIMEOUT"]
+            "0x50": ["pay#TIMEOUT"],
+            "0x51": ["pay#TIMEOUT"]
         }
     });
     let events = vec![
@@ -402,7 +402,7 @@ fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
             "transactionHash": "0x03",
             "planId": "0x01",
             "orderId": "order-w",
-            "stageId": "flow.pay"
+            "stageId": "pay"
         }),
         json!({
             "eventName": "SignalSubmitted",
@@ -426,7 +426,7 @@ fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-w",
-            "hookId": "flow.pay#TIMEOUT",
+            "hookId": "pay#TIMEOUT",
             "status": "wait",
             "dueAt": "2026-04-27T00:00:30.000Z"
         }),
@@ -452,7 +452,7 @@ fn wait_reemission_on_due_at_only_change_pairs_cleanly() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-w",
-            "hookId": "flow.pay#TIMEOUT",
+            "hookId": "pay#TIMEOUT",
             "status": "wait",
             "dueAt": "2026-04-27T00:00:15.000Z"
         }),
@@ -487,9 +487,9 @@ fn poke_before_due_or_not_waiting_is_skipped() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    "hookId": "flow.pay#TIMEOUT",
-                    "stageId": "flow.pay",
-                    "stageIdentifier": "flow.pay",
+                    "hookId": "pay#TIMEOUT",
+                    "stageId": "pay",
+                    "stageIdentifier": "pay",
                     "hookName": "TIMEOUT",
                     "orderTriggerKind": "none",
                     "emitReady": true,
@@ -498,7 +498,7 @@ fn poke_before_due_or_not_waiting_is_skipped() {
                         {"op": "DELAY", "delaySeconds": 10}
                     ]
                 }],
-                "dependencyIndex": { "0x50": ["flow.pay#TIMEOUT"] }
+                "dependencyIndex": { "0x50": ["pay#TIMEOUT"] }
             }
         }),
         json!({
@@ -518,7 +518,7 @@ fn poke_before_due_or_not_waiting_is_skipped() {
             "transactionHash": "0x03",
             "planId": "0x01",
             "orderId": "order-1",
-            "stageId": "flow.pay"
+            "stageId": "pay"
         }),
         json!({
             "eventName": "SignalSubmitted",
@@ -542,7 +542,7 @@ fn poke_before_due_or_not_waiting_is_skipped() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.pay#TIMEOUT",
+            "hookId": "pay#TIMEOUT",
             "status": "wait",
             "dueAt": "2026-04-27T00:00:10.000Z"
         }),
@@ -554,7 +554,7 @@ fn poke_before_due_or_not_waiting_is_skipped() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.pay#TIMEOUT",
+            "hookId": "pay#TIMEOUT",
             "pokedAt": "2026-04-27T00:00:05.000Z"
         }),
         json!({
@@ -565,7 +565,7 @@ fn poke_before_due_or_not_waiting_is_skipped() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.pay#TIMEOUT",
+            "hookId": "pay#TIMEOUT",
             "pokedAt": "2026-04-27T00:00:11.000Z"
         }),
         json!({
@@ -576,7 +576,7 @@ fn poke_before_due_or_not_waiting_is_skipped() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.pay#TIMEOUT",
+            "hookId": "pay#TIMEOUT",
             "status": "ready"
         }),
         json!({
@@ -587,8 +587,8 @@ fn poke_before_due_or_not_waiting_is_skipped() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.pay#TIMEOUT",
-            "stageIdentifier": "flow.pay",
+            "hookId": "pay#TIMEOUT",
+            "stageIdentifier": "pay",
             "hookName": "TIMEOUT"
         }),
     ];
@@ -678,7 +678,7 @@ fn replays_ready_hook() {
                 "compiledHooks": [{
                     "hookId": "0x10",
                     "stageId": "0x20",
-                    "stageIdentifier": "flow.start",
+                    "stageIdentifier": "start",
                     "hookName": "START",
                     "orderTriggerKind": "mint",
                     "emitReady": true,
@@ -733,7 +733,7 @@ fn replays_ready_hook() {
             "zhixuId": "demo",
             "orderId": "order-1",
             "hookId": "0x10",
-            "stageIdentifier": "flow.start",
+            "stageIdentifier": "start",
             "hookName": "START"
         })
     );
@@ -752,9 +752,9 @@ fn emit_ready_is_independent_from_order_materialization() {
     );
 
     let silent_trigger = json!({
-        "hookId": "flow.start#SILENT",
-        "stageId": "flow.start",
-        "stageIdentifier": "flow.start",
+        "hookId": "start#SILENT",
+        "stageId": "start",
+        "stageIdentifier": "start",
         "hookName": "SILENT",
         "orderTriggerKind": "mint",
         "emitReady": false,
@@ -764,14 +764,14 @@ fn emit_ready_is_independent_from_order_materialization() {
         evaluate_hook(&mut order, &silent_trigger, "2026-04-27T00:00:00.000Z")
             .expect("silent trigger should evaluate");
     assert!(trigger_observations.is_empty());
-    assert!(order.materialized_stages["flow.start"]);
-    assert_eq!(order.hook_statuses["flow.start#SILENT"].status, "ready");
-    assert!(!order.hook_statuses["flow.start#SILENT"].ready_emitted);
+    assert!(order.materialized_stages["start"]);
+    assert_eq!(order.hook_statuses["start#SILENT"].status, "ready");
+    assert!(!order.hook_statuses["start#SILENT"].ready_emitted);
 
     let ordinary_hook = json!({
-        "hookId": "flow.start#OBSERVE",
-        "stageId": "flow.start",
-        "stageIdentifier": "flow.start",
+        "hookId": "start#OBSERVE",
+        "stageId": "start",
+        "stageIdentifier": "start",
         "hookName": "OBSERVE",
         "orderTriggerKind": "none",
         "emitReady": true,
@@ -781,7 +781,7 @@ fn emit_ready_is_independent_from_order_materialization() {
         .expect("materialized ordinary hook should evaluate");
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0]["eventName"], "HookReady");
-    assert_eq!(observations[0]["hookId"], "flow.start#OBSERVE");
+    assert_eq!(observations[0]["hookId"], "start#OBSERVE");
 }
 
 #[test]
@@ -796,15 +796,15 @@ fn stage_materialized_event_backfills_materialization() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    "hookId": "flow.exec#WATCH",
-                    "stageId": "flow.exec",
-                    "stageIdentifier": "flow.exec",
+                    "hookId": "exec#WATCH",
+                    "stageId": "exec",
+                    "stageIdentifier": "exec",
                     "hookName": "WATCH",
                     "orderTriggerKind": "none",
                     "emitReady": false,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }],
-                "dependencyIndex": { "0x50": ["flow.exec#WATCH"] }
+                "dependencyIndex": { "0x50": ["exec#WATCH"] }
             }
         }),
         json!({
@@ -824,8 +824,8 @@ fn stage_materialized_event_backfills_materialization() {
             "transactionHash": "0x03",
             "planId": "0x01",
             "orderId": "order-1",
-            "stageId": "flow.exec",
-            "triggerHookId": "flow.exec#BIRTH",
+            "stageId": "exec",
+            "triggerHookId": "exec#BIRTH",
             "sourceId": "0x30",
             "signalId": "0x40"
         }),
@@ -853,8 +853,7 @@ fn stage_materialized_event_backfills_materialization() {
     )
     .unwrap();
     assert_eq!(
-        result["state"]["orders"]["0x01::order-1"]["hookStatuses"]["flow.exec#WATCH"]["status"],
-        "ready",
+        result["state"]["orders"]["0x01::order-1"]["hookStatuses"]["exec#WATCH"]["status"], "ready",
         "watcher must evaluate after the chain-emitted StageMaterialized"
     );
 }
@@ -871,9 +870,9 @@ fn hooks_missing_required_v2_fields_are_rejected() {
         json!({"submittedAt": "2026-04-27T00:00:00.000Z"}),
     );
     let hook_missing_kind = json!({
-        "hookId": "flow.start#BARE",
-        "stageId": "flow.start",
-        "stageIdentifier": "flow.start",
+        "hookId": "start#BARE",
+        "stageId": "start",
+        "stageIdentifier": "start",
         "hookName": "BARE",
         "emitReady": true,
         "isTrigger": true,
@@ -887,9 +886,9 @@ fn hooks_missing_required_v2_fields_are_rejected() {
     );
 
     let hook_missing_emit_ready = json!({
-        "hookId": "flow.start#BARE",
-        "stageId": "flow.start",
-        "stageIdentifier": "flow.start",
+        "hookId": "start#BARE",
+        "stageId": "start",
+        "stageIdentifier": "start",
         "hookName": "BARE",
         "orderTriggerKind": "mint",
         "isTrigger": true,
@@ -921,15 +920,15 @@ fn replay_scopes_same_order_id_by_plan() {
                 "planId": plan_id,
                 "zhixuId": "same-zhixu",
                 "compiledHooks": [{
-                    "hookId": "flow.start#READY",
-                    "stageId": "flow.start",
-                    "stageIdentifier": "flow.start",
+                    "hookId": "start#READY",
+                    "stageId": "start",
+                    "stageIdentifier": "start",
                     "hookName": "READY",
                     "orderTriggerKind": "mint",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }],
-                "dependencyIndex": {"0x50": ["flow.start#READY"]}
+                "dependencyIndex": {"0x50": ["start#READY"]}
             }
         }));
         events.push(json!({
@@ -995,8 +994,8 @@ fn single_hook_plan(hook_id: &str, instructions: Value) -> Value {
         "zhixuId": "demo",
         "compiledHooks": [{
             "hookId": hook_id,
-            "stageId": "flow.start",
-            "stageIdentifier": "flow.start",
+            "stageId": "start",
+            "stageIdentifier": "start",
             "hookName": "START",
             "orderTriggerKind": "mint",
             "emitReady": true,
@@ -1009,7 +1008,7 @@ fn single_hook_plan(hook_id: &str, instructions: Value) -> Value {
 #[test]
 fn wait_due_at_compares_by_instant_not_rendering() {
     let plan = single_hook_plan(
-        "flow.start#TIMEOUT",
+        "start#TIMEOUT",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "DELAY", "delaySeconds": 10 }
@@ -1045,7 +1044,7 @@ fn wait_due_at_compares_by_instant_not_rendering() {
             "transactionHash": "0x03",
             "planId": "0x01",
             "orderId": "order-1",
-            "stageId": "flow.start"
+            "stageId": "start"
         }),
         json!({
             "eventName": "SignalSubmitted",
@@ -1071,7 +1070,7 @@ fn wait_due_at_compares_by_instant_not_rendering() {
         "planId": "0x01",
         "zhixuId": "demo",
         "orderId": "order-1",
-        "hookId": "flow.start#TIMEOUT",
+        "hookId": "start#TIMEOUT",
         "status": "wait",
         "dueAt": "2026-04-27T00:00:10Z"
     }));
@@ -1100,7 +1099,7 @@ fn wait_due_at_compares_by_instant_not_rendering() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#TIMEOUT",
+            "hookId": "start#TIMEOUT",
             "status": "wait",
             "dueAt": due_at
         }));
@@ -1124,7 +1123,7 @@ fn wait_due_at_compares_by_instant_not_rendering() {
         "planId": "0x01",
         "zhixuId": "demo",
         "orderId": "order-1",
-        "hookId": "flow.start#TIMEOUT",
+        "hookId": "start#TIMEOUT",
         "status": "wait",
         "dueAt": "2026-04-27T00:00:11Z"
     }));
@@ -1144,7 +1143,7 @@ fn wait_due_at_compares_by_instant_not_rendering() {
 #[test]
 fn observations_pair_per_hook_key_not_global_index() {
     let plan = single_hook_plan(
-        "flow.start#BIRTH",
+        "start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     let mut events = vec![json!({
@@ -1189,8 +1188,8 @@ fn observations_pair_per_hook_key_not_global_index() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": order_id,
-            "hookId": "flow.start#BIRTH",
-            "stageIdentifier": "flow.start",
+            "hookId": "start#BIRTH",
+            "stageIdentifier": "start",
             "hookName": "START"
         }));
     }
@@ -1218,16 +1217,16 @@ fn case_distinct_hook_ids_stay_separate() {
         "eventName": "HookReady",
         "planId": "0x01",
         "orderId": "order-1",
-        "hookId": "task.Main#GO",
-        "stageIdentifier": "task.Main",
+        "hookId": "Main#GO",
+        "stageIdentifier": "Main",
         "hookName": "GO"
     });
     let lower = json!({
         "eventName": "HookReady",
         "planId": "0x01",
         "orderId": "order-1",
-        "hookId": "task.main#GO",
-        "stageIdentifier": "task.main",
+        "hookId": "main#GO",
+        "stageIdentifier": "main",
         "hookName": "GO"
     });
     assert_ne!(hook_observation_key(&upper), hook_observation_key(&lower));
@@ -1237,7 +1236,7 @@ fn case_distinct_hook_ids_stay_separate() {
 #[test]
 fn init_status_changes_are_trimmed() {
     let plan = single_hook_plan(
-        "flow.start#BIRTH",
+        "start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     let events = vec![
@@ -1266,7 +1265,7 @@ fn init_status_changes_are_trimmed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#BIRTH",
+            "hookId": "start#BIRTH",
             "status": "init"
         }),
         json!({
@@ -1291,7 +1290,7 @@ fn init_status_changes_are_trimmed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#BIRTH",
+            "hookId": "start#BIRTH",
             "status": "init"
         }),
         json!({
@@ -1302,7 +1301,7 @@ fn init_status_changes_are_trimmed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#BIRTH",
+            "hookId": "start#BIRTH",
             "status": "ready"
         }),
         json!({
@@ -1313,8 +1312,8 @@ fn init_status_changes_are_trimmed() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#BIRTH",
-            "stageIdentifier": "flow.start",
+            "hookId": "start#BIRTH",
+            "stageIdentifier": "start",
             "hookName": "START"
         }),
     ];
@@ -1343,17 +1342,17 @@ fn per_key_hook_ids_evaluate_triggers_before_watchers_in_stable_order() {
         "planId": "0x01",
         "zhixuId": "demo",
         "compiledHooks": [
-            { "hookId": "w.watch#W1", "stageId": "w.one", "stageIdentifier": "w.one",
+            { "hookId": "watch#W1", "stageId": "one", "stageIdentifier": "one",
               "hookName": "W1", "orderTriggerKind": "none", "emitReady": true,
               "instructions": [{ "op": "SIGNAL", "signalKey": "0x50" }] },
-            { "hookId": "b.birth#T", "stageId": "b.birth", "stageIdentifier": "b.birth",
+            { "hookId": "birth#T", "stageId": "birth", "stageIdentifier": "birth",
               "hookName": "T", "orderTriggerKind": "mint", "emitReady": true,
               "instructions": [{ "op": "SIGNAL", "signalKey": "0x50" }] },
-            { "hookId": "w.watch#W2", "stageId": "w.two", "stageIdentifier": "w.two",
+            { "hookId": "watch#W2", "stageId": "two", "stageIdentifier": "two",
               "hookName": "W2", "orderTriggerKind": "none", "emitReady": true,
               "instructions": [{ "op": "SIGNAL", "signalKey": "0x50" }] }
         ],
-        "dependencyIndex": { "0x50": ["w.watch#W1", "b.birth#T", "w.watch#W2"] }
+        "dependencyIndex": { "0x50": ["watch#W1", "birth#T", "watch#W2"] }
     });
     let events = vec![
         json!({
@@ -1403,7 +1402,7 @@ fn per_key_hook_ids_evaluate_triggers_before_watchers_in_stable_order() {
         .collect();
     assert_eq!(
         order,
-        vec!["b.birth#T", "w.watch#W1", "w.watch#W2"],
+        vec!["birth#T", "watch#W1", "watch#W2"],
         "trigger-first stable partition over dependencyIndex order: {observed:?}"
     );
 }
@@ -1420,14 +1419,14 @@ fn order_link_birth_requires_structural_hook_fields() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    "hookId": "linked.entry#BIRTH",
-                    "stageIdentifier": "linked.entry",
+                    "hookId": "entry#BIRTH",
+                    "stageIdentifier": "entry",
                     "hookName": "BIRTH",
                     "orderTriggerKind": "mint",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }],
-                "dependencyIndex": { "0x50": ["linked.entry#BIRTH"] }
+                "dependencyIndex": { "0x50": ["entry#BIRTH"] }
             }
         }),
         json!({
@@ -1448,8 +1447,8 @@ fn order_link_birth_requires_structural_hook_fields() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-7",
-            "hookId": "linked.entry#BIRTH",
-            "stageIdentifier": "linked.entry",
+            "hookId": "entry#BIRTH",
+            "stageIdentifier": "entry",
             "hookName": "BIRTH"
         }),
     ];
@@ -1470,7 +1469,7 @@ fn order_link_birth_requires_structural_hook_fields() {
     events[0]["plan"]["compiledHooks"][0]
         .as_object_mut()
         .unwrap()
-        .insert("stageId".to_string(), json!("linked.entry"));
+        .insert("stageId".to_string(), json!("entry"));
     events[0]["plan"]["compiledHooks"][0]
         .as_object_mut()
         .unwrap()
@@ -1503,9 +1502,9 @@ fn order_trigger_hook_with_delay_is_a_structural_error() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    "hookId": "flow.start#BIRTH",
-                    "stageId": "flow.start",
-                    "stageIdentifier": "flow.start",
+                    "hookId": "start#BIRTH",
+                    "stageId": "start",
+                    "stageIdentifier": "start",
                     "hookName": "BIRTH",
                     "orderTriggerKind": kind,
                     "emitReady": true,
@@ -1514,7 +1513,7 @@ fn order_trigger_hook_with_delay_is_a_structural_error() {
                         {"op": "DELAY", "delaySeconds": 5}
                     ]
                 }],
-                "dependencyIndex": { "0x50": ["flow.start#BIRTH"] }
+                "dependencyIndex": { "0x50": ["start#BIRTH"] }
             }
         })];
         let error = replay_chain_events(
@@ -1541,9 +1540,9 @@ fn order_trigger_hook_with_delay_is_a_structural_error() {
             "planId": "0x01",
             "zhixuId": "demo",
             "compiledHooks": [{
-                "hookId": "flow.pay#TIMEOUT",
-                "stageId": "flow.pay",
-                "stageIdentifier": "flow.pay",
+                "hookId": "pay#TIMEOUT",
+                "stageId": "pay",
+                "stageIdentifier": "pay",
                 "hookName": "TIMEOUT",
                 "orderTriggerKind": "none",
                 "emitReady": true,
@@ -1552,7 +1551,7 @@ fn order_trigger_hook_with_delay_is_a_structural_error() {
                     {"op": "DELAY", "delaySeconds": 5}
                 ]
             }],
-            "dependencyIndex": { "0x50": ["flow.pay#TIMEOUT"] }
+            "dependencyIndex": { "0x50": ["pay#TIMEOUT"] }
         }
     })];
     replay_chain_events(
@@ -1638,7 +1637,7 @@ fn or_winner_carries_its_own_expiry_verbatim() {
 #[test]
 fn decaying_veto_positions_are_rejected_at_registration() {
     let veto_root = watcher_plan(
-        "flow.pay#VETO_ROOT",
+        "pay#VETO_ROOT",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "DELAY", "delaySeconds": 5 },
@@ -1661,7 +1660,7 @@ fn decaying_veto_positions_are_rejected_at_registration() {
     );
 
     let veto_under_or = watcher_plan(
-        "flow.pay#VETO_OR",
+        "pay#VETO_OR",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "DELAY", "delaySeconds": 5 },
@@ -1686,7 +1685,7 @@ fn decaying_veto_positions_are_rejected_at_registration() {
     );
 
     let veto_in_delay = watcher_plan(
-        "flow.pay#VETO_DELAY",
+        "pay#VETO_DELAY",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "SIGNAL", "signalKey": "0x51" },
@@ -1712,7 +1711,7 @@ fn decaying_veto_positions_are_rejected_at_registration() {
     );
 
     let double_negation = watcher_plan(
-        "flow.pay#VETO_NOT",
+        "pay#VETO_NOT",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "DELAY", "delaySeconds": 5 },
@@ -1736,7 +1735,7 @@ fn decaying_veto_positions_are_rejected_at_registration() {
     );
 
     let mut legal = watcher_plan(
-        "flow.pay#VETO",
+        "pay#VETO",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "SIGNAL", "signalKey": "0x51" },
@@ -1745,7 +1744,7 @@ fn decaying_veto_positions_are_rejected_at_registration() {
             { "op": "AND", "arity": 2 }
         ]),
     );
-    legal["dependencyIndex"] = json!({ "0x50": ["flow.pay#VETO"], "0x51": ["flow.pay#VETO"] });
+    legal["dependencyIndex"] = json!({ "0x50": ["pay#VETO"], "0x51": ["pay#VETO"] });
     replay_chain_events(
         vec![plan_registered_event(legal)],
         &ReplayOptions {
@@ -1804,9 +1803,9 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
                 "planId": "0x01",
                 "zhixuId": "demo",
                 "compiledHooks": [{
-                    "hookId": "flow.start#WAIT",
-                    "stageId": "flow.start",
-                    "stageIdentifier": "flow.start",
+                    "hookId": "start#WAIT",
+                    "stageId": "start",
+                    "stageIdentifier": "start",
                     "hookName": "WAIT",
                     "orderTriggerKind": "none",
                     "emitReady": true,
@@ -1815,7 +1814,7 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
                         {"op": "DELAY", "delaySeconds": 5}
                     ]
                 }],
-                "dependencyIndex": { "0x50": ["flow.start#WAIT"] }
+                "dependencyIndex": { "0x50": ["start#WAIT"] }
             }
         }),
         json!({
@@ -1850,7 +1849,7 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#WAIT",
+            "hookId": "start#WAIT",
             "status": "wait",
             "dueAt": "1970-01-01T00:00:00.000Z"
         }),
@@ -1862,7 +1861,7 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#WAIT",
+            "hookId": "start#WAIT",
             "pokedAt": "1970-01-01T00:00:00.000Z"
         }),
         json!({
@@ -1873,8 +1872,8 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#WAIT",
-            "stageIdentifier": "flow.start",
+            "hookId": "start#WAIT",
+            "stageIdentifier": "start",
             "hookName": "WAIT"
         }),
     ];
@@ -1903,7 +1902,7 @@ fn epoch_zero_due_is_persisted_and_poke_eligible() {
         "poke at epoch 0 must make the hook ready: {observed:?}"
     );
     let order = &result["state"]["orders"]["0x01::order-1"];
-    assert_eq!(order["hookStatuses"]["flow.start#WAIT"]["status"], "ready");
+    assert_eq!(order["hookStatuses"]["start#WAIT"]["status"], "ready");
 }
 
 fn watcher_plan(hook_id: &str, instructions: Value) -> Value {
@@ -1912,8 +1911,8 @@ fn watcher_plan(hook_id: &str, instructions: Value) -> Value {
         "zhixuId": "demo",
         "compiledHooks": [{
             "hookId": hook_id,
-            "stageId": "flow.pay",
-            "stageIdentifier": "flow.pay",
+            "stageId": "pay",
+            "stageIdentifier": "pay",
             "hookName": "TIMEOUT",
             "orderTriggerKind": "none",
             "emitReady": true,
@@ -1936,7 +1935,7 @@ fn plan_registered_event(plan: Value) -> Value {
 #[test]
 fn delay_cap_30d_is_enforced_at_registration() {
     let over = watcher_plan(
-        "flow.pay#TIMEOUT",
+        "pay#TIMEOUT",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "DELAY", "delaySeconds": 2592001 }
@@ -1958,7 +1957,7 @@ fn delay_cap_30d_is_enforced_at_registration() {
     );
 
     let at_limit = watcher_plan(
-        "flow.pay#TIMEOUT",
+        "pay#TIMEOUT",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "DELAY", "delaySeconds": 2592000 }
@@ -1977,7 +1976,7 @@ fn delay_cap_30d_is_enforced_at_registration() {
 #[test]
 fn root_without_positive_anchor_is_rejected_at_registration() {
     let plan = watcher_plan(
-        "flow.pay#GUARD",
+        "pay#GUARD",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" },
             { "op": "NOT" }
@@ -2007,7 +2006,7 @@ fn instruction_depth_cap_120_is_enforced_at_registration() {
             instructions.push(json!({ "op": "SIGNAL", "signalKey": "0x50" }));
             instructions.push(json!({ "op": "AND", "arity": 2 }));
         }
-        watcher_plan("flow.pay#DEEP", Value::Array(instructions))
+        watcher_plan("pay#DEEP", Value::Array(instructions))
     };
     let error = replay_chain_events(
         vec![plan_registered_event(nested_and_plan(121))],
@@ -2036,10 +2035,10 @@ fn instruction_depth_cap_120_is_enforced_at_registration() {
 #[test]
 fn dependency_index_key_mismatch_is_rejected_at_registration() {
     let mut wrong_key = watcher_plan(
-        "flow.pay#TIMEOUT",
+        "pay#TIMEOUT",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
-    wrong_key["dependencyIndex"] = json!({ "0x99": ["flow.pay#TIMEOUT"] });
+    wrong_key["dependencyIndex"] = json!({ "0x99": ["pay#TIMEOUT"] });
     let error = replay_chain_events(
         vec![plan_registered_event(wrong_key)],
         &ReplayOptions {
@@ -2049,9 +2048,9 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
     )
     .unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("dependencyIndex maps key 0x99 to hook flow.pay#TIMEOUT but the key is not a SIGNAL atom"),
+        error.to_string().contains(
+            "dependencyIndex maps key 0x99 to hook pay#TIMEOUT but the key is not a SIGNAL atom"
+        ),
         "{error}"
     );
     assert!(
@@ -2060,7 +2059,7 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
     );
 
     let mut unindexed = watcher_plan(
-        "flow.pay#TIMEOUT",
+        "pay#TIMEOUT",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     unindexed["dependencyIndex"] = json!({});
@@ -2084,7 +2083,7 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
     );
 
     let mut missing_index = watcher_plan(
-        "flow.pay#TIMEOUT",
+        "pay#TIMEOUT",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     missing_index
@@ -2106,7 +2105,7 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
 
     replay_chain_events(
         vec![plan_registered_event(watcher_plan(
-            "flow.pay#TIMEOUT",
+            "pay#TIMEOUT",
             json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
         ))],
         &ReplayOptions {
@@ -2120,7 +2119,7 @@ fn dependency_index_key_mismatch_is_rejected_at_registration() {
 #[test]
 fn silent_order_trigger_is_rejected_at_registration() {
     let mut silent = single_hook_plan(
-        "flow.start#TRIGGER",
+        "start#TRIGGER",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     silent["compiledHooks"][0]["emitReady"] = json!(false);
@@ -2135,7 +2134,7 @@ fn silent_order_trigger_is_rejected_at_registration() {
     assert!(
         error
             .to_string()
-            .contains("order-trigger hook flow.start#TRIGGER must carry emitReady=true"),
+            .contains("order-trigger hook start#TRIGGER must carry emitReady=true"),
         "{error}"
     );
     assert!(
@@ -2144,7 +2143,7 @@ fn silent_order_trigger_is_rejected_at_registration() {
     );
 
     let mut silent_watcher = watcher_plan(
-        "flow.pay#WATCH",
+        "pay#WATCH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     silent_watcher["compiledHooks"][0]["emitReady"] = json!(false);
@@ -2161,7 +2160,7 @@ fn silent_order_trigger_is_rejected_at_registration() {
 #[test]
 fn duplicate_order_registered_is_absorbed_without_resetting_state() {
     let plan = single_hook_plan(
-        "flow.start#BIRTH",
+        "start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     let mut events = vec![
@@ -2198,8 +2197,8 @@ fn duplicate_order_registered_is_absorbed_without_resetting_state() {
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
-            "hookId": "flow.start#BIRTH",
-            "stageIdentifier": "flow.start",
+            "hookId": "start#BIRTH",
+            "stageIdentifier": "start",
             "hookName": "START"
         }),
     ];
@@ -2228,10 +2227,10 @@ fn duplicate_order_registered_is_absorbed_without_resetting_state() {
         Some(1),
         "absorbed re-registration must keep accumulated signals: {order}"
     );
-    assert_eq!(order["hookStatuses"]["flow.start#BIRTH"]["status"], "ready");
+    assert_eq!(order["hookStatuses"]["start#BIRTH"]["status"], "ready");
 
     let plan = single_hook_plan(
-        "flow.start#BIRTH",
+        "start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     let events = vec![
@@ -2274,7 +2273,7 @@ fn duplicate_order_registered_is_absorbed_without_resetting_state() {
 #[test]
 fn non_integer_block_number_fails_loudly_at_sorting() {
     let plan = single_hook_plan(
-        "flow.start#BIRTH",
+        "start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     for bad_block in [json!("later"), json!(1.5), Value::Null] {
@@ -2311,7 +2310,7 @@ fn non_integer_block_number_fails_loudly_at_sorting() {
         "{error}"
     );
     let plan = single_hook_plan(
-        "flow.start#BIRTH",
+        "start#BIRTH",
         json!([{ "op": "SIGNAL", "signalKey": "0x50" }]),
     );
     let mut event = plan_registered_event(plan);
@@ -2344,14 +2343,14 @@ fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
         "planId": "0x01",
         "zhixuId": "demo",
         "compiledHooks": [{
-            "hookId": "flow.pay#OBSERVE",
-            "stageIdentifier": "flow.pay",
+            "hookId": "pay#OBSERVE",
+            "stageIdentifier": "pay",
             "hookName": "OBSERVE",
             "orderTriggerKind": "none",
             "emitReady": true,
-            "dependencies": [{ "source": "buyer", "signalName": "flow.pay.ack" }]
+            "dependencies": [{ "source": "buyer", "signalName": "pay.ack" }]
         }],
-        "dependencyIndex": { "buyer::flow.pay.ack": ["flow.pay#OBSERVE"] }
+        "dependencyIndex": { "buyer::pay.ack": ["pay#OBSERVE"] }
     });
     let events = vec![
         plan_registered_event(rust_shaped_plan),
@@ -2390,7 +2389,7 @@ fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
     .unwrap_err();
     let message = error.to_string();
     assert!(
-        message.contains("flow.pay#OBSERVE")
+        message.contains("pay#OBSERVE")
             && message.contains("missing instructions")
             && message.contains("cannot be replayed"),
         "{message}"
@@ -2400,15 +2399,15 @@ fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
         "planId": "0x01",
         "zhixuId": "demo",
         "compiledHooks": [{
-            "hookId": "flow.pay#OBSERVE",
-            "stageId": "flow.pay",
-            "stageIdentifier": "flow.pay",
+            "hookId": "pay#OBSERVE",
+            "stageId": "pay",
+            "stageIdentifier": "pay",
             "hookName": "OBSERVE",
             "orderTriggerKind": "none",
             "emitReady": true,
             "instructions": []
         }],
-        "dependencyIndex": { "0x50": ["flow.pay#OBSERVE"] }
+        "dependencyIndex": { "0x50": ["pay#OBSERVE"] }
     });
     let error = replay_chain_events(
         vec![plan_registered_event(empty_track)],
@@ -2426,7 +2425,7 @@ fn plan_without_instruction_track_fails_loudly_instead_of_hollow_pass() {
 
 fn admission_plan(admissions: Value) -> Value {
     let mut plan = watcher_plan(
-        "flow.pay#OBSERVE",
+        "pay#OBSERVE",
         json!([
             { "op": "SIGNAL", "signalKey": "0x50" }
         ]),
@@ -2438,7 +2437,7 @@ fn admission_plan(admissions: Value) -> Value {
 fn admission_entry(label: &str, instructions: Value) -> Value {
     json!({
         "admissionId": label,
-        "stageIdentifier": "flow.pay",
+        "stageIdentifier": "pay",
         "signalName": label,
         "instructions": instructions,
     })
@@ -2559,25 +2558,25 @@ fn duplicate_hook_id_in_plan_is_a_structural_error() {
             "zhixuId": "demo",
             "compiledHooks": [
                 {
-                    "hookId": "match.exchange#PAIR",
-                    "stageId": "match.exchange",
-                    "stageIdentifier": "match.exchange",
+                    "hookId": "exchange#PAIR",
+                    "stageId": "exchange",
+                    "stageIdentifier": "exchange",
                     "hookName": "PAIR",
                     "orderTriggerKind": "mint",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 },
                 {
-                    "hookId": "match.exchange#PAIR",
-                    "stageId": "match.exchange",
-                    "stageIdentifier": "match.exchange",
+                    "hookId": "exchange#PAIR",
+                    "stageId": "exchange",
+                    "stageIdentifier": "exchange",
                     "hookName": "PAIR",
                     "orderTriggerKind": "none",
                     "emitReady": false,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }
             ],
-            "dependencyIndex": { "0x50": ["match.exchange#PAIR"] }
+            "dependencyIndex": { "0x50": ["exchange#PAIR"] }
         }
     })];
     let error = replay_chain_events(
@@ -2604,15 +2603,15 @@ fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
                     "planId": "0x01",
                     "zhixuId": "demo",
                     "compiledHooks": [{
-                        "hookId": "linked.entry#BIRTH",
-                        "stageId": "linked.entry",
-                        "stageIdentifier": "linked.entry",
+                        "hookId": "entry#BIRTH",
+                        "stageId": "entry",
+                        "stageIdentifier": "entry",
                         "hookName": "BIRTH",
                         "orderTriggerKind": "mint",
                         "emitReady": true,
                         "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                     }],
-                    "dependencyIndex": { "0x50": ["linked.entry#BIRTH"] }
+                    "dependencyIndex": { "0x50": ["entry#BIRTH"] }
                 }
             }),
             json!({

@@ -7,7 +7,7 @@
     {
       "name": "and duplicate direct",
       "hookName": "DUP",
-      "hook": "buyer::task.a.cmp & task.a.cmp",
+      "hook": "buyer::a.cmp & a.cmp",
       "expectCodes": [
         "UVP-L001"
       ]
@@ -15,7 +15,7 @@
     {
       "name": "or duplicate direct",
       "hookName": "DUP",
-      "hook": "buyer::task.a.cmp | task.a.cmp",
+      "hook": "buyer::a.cmp | a.cmp",
       "expectCodes": [
         "UVP-L001"
       ]
@@ -23,7 +23,7 @@
     {
       "name": "and duplicate with distinct middle operand",
       "hookName": "DUP",
-      "hook": "buyer::task.a.cmp & task.b.cmp & task.a.cmp",
+      "hook": "buyer::a.cmp & b.cmp & a.cmp",
       "expectCodes": [
         "UVP-L001"
       ]
@@ -31,7 +31,7 @@
     {
       "name": "or duplicate identical subtrees",
       "hookName": "DUP",
-      "hook": "buyer::(task.a.cmp & task.b.cmp) | (task.a.cmp & task.b.cmp)",
+      "hook": "buyer::(a.cmp & b.cmp) | (a.cmp & b.cmp)",
       "expectCodes": [
         "UVP-L001"
       ]
@@ -39,7 +39,7 @@
     {
       "name": "impossible direct polarity",
       "hookName": "BAD",
-      "hook": "buyer::task.a.cmp & ~task.a.cmp",
+      "hook": "buyer::a.cmp & ~a.cmp",
       "expectCodes": [
         "UVP-L002"
       ]
@@ -47,7 +47,7 @@
     {
       "name": "impossible reversed polarity",
       "hookName": "BAD",
-      "hook": "buyer::~task.a.cmp & task.a.cmp",
+      "hook": "buyer::~a.cmp & a.cmp",
       "expectCodes": [
         "UVP-L002"
       ]
@@ -55,7 +55,7 @@
     {
       "name": "impossible delayed positive vs negative guard",
       "hookName": "BAD",
-      "hook": "buyer::(task.a.cmp +10s) & ~task.a.cmp",
+      "hook": "buyer::(a.cmp +10s) & ~a.cmp",
       "expectCodes": [
         "UVP-L002"
       ]
@@ -63,7 +63,7 @@
     {
       "name": "absorption and form",
       "hookName": "ABS",
-      "hook": "buyer::task.a.cmp & (task.a.cmp | task.b.cmp)",
+      "hook": "buyer::a.cmp & (a.cmp | b.cmp)",
       "expectCodes": [
         "UVP-L003"
       ]
@@ -71,7 +71,7 @@
     {
       "name": "absorption or form",
       "hookName": "ABS",
-      "hook": "buyer::task.a.cmp | (task.a.cmp & task.b.cmp)",
+      "hook": "buyer::a.cmp | (a.cmp & b.cmp)",
       "expectCodes": [
         "UVP-L003"
       ]
@@ -79,7 +79,7 @@
     {
       "name": "dominated delay in and",
       "hookName": "DELAY",
-      "hook": "buyer::(task.a.cmp +10s) & (task.a.cmp +5s)",
+      "hook": "buyer::(a.cmp +10s) & (a.cmp +5s)",
       "expectCodes": [
         "UVP-L004"
       ]
@@ -87,7 +87,7 @@
     {
       "name": "dominated delay in or",
       "hookName": "DELAY",
-      "hook": "buyer::(task.a.cmp +10s) | (task.a.cmp +5s)",
+      "hook": "buyer::(a.cmp +10s) | (a.cmp +5s)",
       "expectCodes": [
         "UVP-L004"
       ]
@@ -95,31 +95,31 @@
     {
       "name": "partial duplicate durations in or report the true shorter dominator",
       "hookName": "DELAY",
-      "hook": "buyer::(task.a.cmp +10s) | (task.a.cmp +10s) | (task.a.cmp +5s)",
+      "hook": "buyer::(a.cmp +10s) | (a.cmp +10s) | (a.cmp +5s)",
       "expectCodes": [
         "UVP-L001",
         "UVP-L004"
       ],
       "forbiddenMessageSubstrings": [
-        "is dominated by `task.a.cmp+10s`"
+        "is dominated by `a.cmp+10s`"
       ]
     },
     {
       "name": "partial duplicate durations in and keep the true longer dominator",
       "hookName": "DELAY",
-      "hook": "buyer::(task.a.cmp +10s) & (task.a.cmp +10s) & (task.a.cmp +5s)",
+      "hook": "buyer::(a.cmp +10s) & (a.cmp +10s) & (a.cmp +5s)",
       "expectCodes": [
         "UVP-L001",
         "UVP-L004"
       ],
       "forbiddenMessageSubstrings": [
-        "is dominated by `task.a.cmp+5s`"
+        "is dominated by `a.cmp+5s`"
       ]
     },
     {
       "name": "dead or branch",
       "hookName": "DEAD",
-      "hook": "buyer::(task.a.cmp & ~task.a.cmp) | task.b.cmp",
+      "hook": "buyer::(a.cmp & ~a.cmp) | b.cmp",
       "expectCodes": [
         "UVP-L002",
         "UVP-L005"
@@ -128,19 +128,19 @@
     {
       "name": "clean delay with negative guard stays silent",
       "hookName": "OK",
-      "hook": "buyer::(task.a.cmp +10s) & ~task.b.cmp",
+      "hook": "buyer::(a.cmp +10s) & ~b.cmp",
       "expectCodes": []
     },
     {
       "name": "distinct signals stay silent",
       "hookName": "OK",
-      "hook": "buyer::task.a.cmp & task.b.cmp",
+      "hook": "buyer::a.cmp & b.cmp",
       "expectCodes": []
     },
     {
       "name": "delay implies plain signal: absorption, not delay domination",
       "hookName": "ABS",
-      "hook": "buyer::(task.a.cmp +10s) & task.a.cmp",
+      "hook": "buyer::(a.cmp +10s) & a.cmp",
       "expectCodes": [
         "UVP-L003"
       ]
@@ -148,13 +148,13 @@
     {
       "name": "subscription hook carries no layer-1 diagnostics",
       "hookName": "SUB",
-      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "hook": "::ANCHOR(@seller::listing.cmp)",
       "expectCodes": []
     },
     {
       "name": "identical delays are duplicate terms, not dominated delays",
       "hookName": "DUP",
-      "hook": "buyer::(task.a.cmp +10s) & (task.a.cmp +10s)",
+      "hook": "buyer::(a.cmp +10s) & (a.cmp +10s)",
       "expectCodes": [
         "UVP-L001"
       ]
@@ -164,33 +164,33 @@
     {
       "name": "or tautology is a semantic validation rejection, not a lint case",
       "hookName": "TAUT",
-      "hook": "buyer::task.a.cmp | ~task.a.cmp",
+      "hook": "buyer::a.cmp | ~a.cmp",
       "messageContains": "positive signal anchor"
     },
     {
       "name": "non-signal negation is a parser rejection",
       "hookName": "NEG",
-      "hook": "buyer::~(task.a.cmp & task.b.cmp)",
+      "hook": "buyer::~(a.cmp & b.cmp)",
       "messageContains": "negation only supports direct signal references"
     },
     {
       "name": "lint shares the hook_name gate with parse_hook",
       "hookName": "bad.name",
-      "hook": "buyer::task.a.cmp",
+      "hook": "buyer::a.cmp",
       "messageContains": "hook_name"
     },
     {
       "name": "nested delay operand is rejected before lint",
       "profile": "cloud_compat",
       "hookName": "NESTED",
-      "hook": "buyer::((task.a.cmp +1s) +10s) & (task.a.cmp +5s)",
+      "hook": "buyer::((a.cmp +1s) +10s) & (a.cmp +5s)",
       "messageContains": "no nested delays"
     },
     {
       "name": "nested delay is never fold-equated (reject before lint)",
       "profile": "cloud_compat",
       "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +1s) +5s",
+      "hook": "buyer::(a.cmp +1s) +5s",
       "messageContains": "no nested delays"
     }
   ]

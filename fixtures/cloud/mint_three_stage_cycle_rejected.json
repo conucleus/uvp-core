@@ -16,72 +16,57 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "dispatch",
-          "stages": [
+          "name": "main",
+          "source": "producer",
+          "receiveSignals": {
+            "SPAWN": "::ANCHOR(@maker::assemble.part)"
+          },
+          "sendSignals": [
             {
-              "name": "main",
-              "source": "producer",
-              "receiveSignals": {
-                "SPAWN": "::ANCHOR(@maker::workshop.assemble.part)"
-              },
-              "sendSignals": [
-                {
-                  "name": "smart_contract"
-                }
-              ],
-              "mint": "per-fact",
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "dispatch-main-executor"
-              }
+              "name": "smart_contract"
             }
-          ]
+          ],
+          "mint": "per-fact",
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "dispatch-main-executor"
+          }
         },
         {
-          "name": "orchard",
-          "stages": [
+          "name": "retail",
+          "source": "buyer",
+          "receiveSignals": {
+            "SPAWN": "::ANCHOR(@producer::main.smart_contract)"
+          },
+          "sendSignals": [
             {
-              "name": "retail",
-              "source": "buyer",
-              "receiveSignals": {
-                "SPAWN": "::ANCHOR(@producer::dispatch.main.smart_contract)"
-              },
-              "sendSignals": [
-                {
-                  "name": "ack"
-                }
-              ],
-              "mint": "per-fact",
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "orchard-retail-executor"
-              }
+              "name": "ack"
             }
-          ]
+          ],
+          "mint": "per-fact",
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "orchard-retail-executor"
+          }
         },
         {
-          "name": "workshop",
-          "stages": [
+          "name": "assemble",
+          "source": "maker",
+          "receiveSignals": {
+            "SPAWN": "::ANCHOR(@buyer::retail.ack)"
+          },
+          "sendSignals": [
             {
-              "name": "assemble",
-              "source": "maker",
-              "receiveSignals": {
-                "SPAWN": "::ANCHOR(@buyer::orchard.retail.ack)"
-              },
-              "sendSignals": [
-                {
-                  "name": "part"
-                }
-              ],
-              "mint": "per-fact",
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "workshop-assemble-executor"
-              }
+              "name": "part"
             }
-          ]
+          ],
+          "mint": "per-fact",
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "workshop-assemble-executor"
+          }
         }
       ]
     }

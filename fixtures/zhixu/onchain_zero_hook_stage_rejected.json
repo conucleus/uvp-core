@@ -16,24 +16,19 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "flow",
-          "stages": [
+          "name": "start",
+          "source": "buyer",
+          "sendSignals": [
             {
-              "name": "start",
-              "source": "buyer",
-              "sendSignals": [
-                {
-                  "name": "step_done"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-a"
-              }
+              "name": "step_done"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-a"
+          }
         }
       ]
     }

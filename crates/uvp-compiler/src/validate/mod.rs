@@ -15,7 +15,6 @@ const MAX_IDENTIFIER_BYTES: usize = 100;
 const MAX_SIGNAL_NAME_BYTES: usize = 100;
 const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
 
-const MAX_TASK_PATTERNS: usize = 64;
 const MAX_STAGE_ENTRIES: usize = 256;
 const MAX_HOOKS: usize = 512;
 
@@ -53,127 +52,98 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
     if definition.spec.nucleation.id.trim().is_empty() {
         issues.push("spec.nucleation.id must be non-empty".to_string());
     }
-    if definition.spec.task_patterns.is_empty() {
-        issues.push("spec.taskPatterns must contain at least one task pattern".to_string());
+    if definition.spec.stages.is_empty() {
+        issues.push("spec.stages must contain at least one stage".to_string());
     }
-    if definition.spec.task_patterns.len() > MAX_TASK_PATTERNS {
+    if definition.spec.stages.len() > MAX_STAGE_ENTRIES {
         issues.push(format!(
-            "spec.taskPatterns contains {} task patterns, limit is {MAX_TASK_PATTERNS}",
-            definition.spec.task_patterns.len()
-        ));
-    }
-    let stage_total: usize = definition
-        .spec
-        .task_patterns
-        .iter()
-        .map(|task| task.stages.len())
-        .sum();
-    if stage_total > MAX_STAGE_ENTRIES {
-        issues.push(format!(
-            "definition flattens to {stage_total} stages across taskPatterns, limit is {MAX_STAGE_ENTRIES}"
+            "spec.stages contains {} stages, limit is {MAX_STAGE_ENTRIES}",
+            definition.spec.stages.len()
         ));
     }
     let hook_total: usize = definition
         .spec
-        .task_patterns
+        .stages
         .iter()
-        .flat_map(|task| task.stages.iter())
         .map(|stage| stage.receive_signals.len())
         .sum();
     if hook_total > MAX_HOOKS {
         issues.push(format!(
-            "definition declares {hook_total} receiveSignals channels (compiled hooks) across taskPatterns, limit is {MAX_HOOKS}"
+            "definition declares {hook_total} receiveSignals channels (compiled hooks) across spec.stages, limit is {MAX_HOOKS}"
         ));
     }
-    for (task_index, task) in definition.spec.task_patterns.iter().enumerate() {
-        if !valid_identifier_part(&task.name) {
+    for (stage_index, stage) in definition.spec.stages.iter().enumerate() {
+        if !valid_identifier_part(&stage.name) {
             issues.push(format!(
-                "spec.taskPatterns[{task_index}].name must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-': {}",
-                task.name
+                "spec.stages[{stage_index}].name must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-': {}",
+                stage.name
             ));
         }
-        if task.stages.is_empty() {
-            issues.push(format!(
-                "spec.taskPatterns[{task_index}].stages must contain at least one stage",
-            ));
-        }
-        for (stage_index, stage) in task.stages.iter().enumerate() {
-            if !valid_identifier_part(&stage.name) {
+        if let Some(executor) = &stage.executor {
+            if !uvp_model::is_known_supplier_type(&executor.supplier_type) {
                 issues.push(format!(
-                    "spec.taskPatterns[{task_index}].stages[{stage_index}].name must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-': {}",
-                    stage.name
+                    "spec.stages[{stage_index}].executor.supplierType must be one of {} (exact match, whitespace variants rejected), found {:?}",
+                    uvp_model::SUPPLIER_TYPES
+                        .map(|value| format!("{value:?}"))
+                        .join(", "),
+                    executor.supplier_type
                 ));
             }
-            if let Some(executor) = &stage.executor {
-                if !uvp_model::is_known_supplier_type(&executor.supplier_type) {
-                    issues.push(format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}].executor.supplierType must be one of {} (exact match, whitespace variants rejected), found {:?}",
-                        uvp_model::SUPPLIER_TYPES
-                            .map(|value| format!("{value:?}"))
-                            .join(", "),
-                        executor.supplier_type
-                    ));
-                }
-                if let Some(selectable) = &executor.selectable_resource {
-                    let path = format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}].executor.selectableResource"
-                    );
-                    match selectable.as_object() {
-                        Some(entries) => {
-                            for (key, resource) in entries {
-                                if let Some(issue) = file_resource_type_issue(&path, key, resource)
-                                {
-                                    issues.push(issue);
-                                }
+            if let Some(selectable) = &executor.selectable_resource {
+                let path = format!("spec.stages[{stage_index}].executor.selectableResource");
+                match selectable.as_object() {
+                    Some(entries) => {
+                        for (key, resource) in entries {
+                            if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+                                issues.push(issue);
                             }
                         }
-                        None => issues.push(format!("{path} must be a map of file resources")),
                     }
+                    None => issues.push(format!("{path} must be a map of file resources")),
                 }
             }
-            for (key, resource) in &stage.file_resources {
-                let path =
-                    format!("spec.taskPatterns[{task_index}].stages[{stage_index}].fileResources");
-                if let Some(issue) = file_resource_type_issue(&path, key, resource) {
-                    issues.push(issue);
-                }
+        }
+        for (key, resource) in &stage.file_resources {
+            let path = format!("spec.stages[{stage_index}].fileResources");
+            if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+                issues.push(issue);
             }
-            if stage.source.trim().is_empty() {
+        }
+        if stage.source.trim().is_empty() {
+            issues.push(format!(
+                "spec.stages[{stage_index}].source must be non-empty"
+            ));
+        } else {
+            if !is_plain_source_identifier(&stage.source) {
                 issues.push(format!(
-                    "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be non-empty"
+                    "spec.stages[{stage_index}].source must be a plain identifier (ASCII letters, digits, '_' or '-'): {}",
+                    stage.source
                 ));
+            }
+            if stage.source.len() > MAX_STAGE_SOURCE_BYTES {
+                issues.push(format!(
+                    "spec.stages[{stage_index}].source {:?} exceeds {MAX_STAGE_SOURCE_BYTES} bytes",
+                    stage.source
+                ));
+            }
+        }
+        if stage.name.len() > MAX_IDENTIFIER_BYTES {
+            issues.push(format!(
+                "spec.stages[{stage_index}] identifier {:?} exceeds {MAX_IDENTIFIER_BYTES} bytes (global_stage.stage_identifier)",
+                stage.name
+            ));
+        }
+        for signal in &stage.send_signals {
+            let full_name_bytes = if signal.name.contains('.') {
+                signal.name.len()
             } else {
-                if !is_plain_source_identifier(&stage.source) {
-                    issues.push(format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}].source must be a plain identifier (ASCII letters, digits, '_' or '-'): {}",
-                        stage.source
-                    ));
-                }
-                if stage.source.len() > MAX_STAGE_SOURCE_BYTES {
-                    issues.push(format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}].source {:?} exceeds {MAX_STAGE_SOURCE_BYTES} bytes",
-                        stage.source
-                    ));
-                }
-            }
-            let stage_identifier = format!("{}.{}", task.name, stage.name);
-            if stage_identifier.len() > MAX_IDENTIFIER_BYTES {
+                stage.name.len() + 1 + signal.name.len()
+            };
+            if full_name_bytes > MAX_SIGNAL_NAME_BYTES {
                 issues.push(format!(
-                    "spec.taskPatterns[{task_index}].stages[{stage_index}] identifier {stage_identifier:?} exceeds {MAX_IDENTIFIER_BYTES} bytes (global_stage.stage_identifier)"
+                    "spec.stages[{stage_index}] ({:?}) sendSignal {:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)",
+                    stage.name, signal.name
                 ));
-            }
-            for signal in &stage.send_signals {
-                let full_name_bytes = if signal.name.contains('.') {
-                    signal.name.len()
-                } else {
-                    stage_identifier.len() + 1 + signal.name.len()
-                };
-                if full_name_bytes > MAX_SIGNAL_NAME_BYTES {
-                    issues.push(format!(
-                        "spec.taskPatterns[{task_index}].stages[{stage_index}] ({stage_identifier:?}) sendSignal {:?} exceeds {MAX_SIGNAL_NAME_BYTES} bytes combined (individual_record.signal_name)",
-                        signal.name
-                    ));
-                }
             }
         }
     }
@@ -755,16 +725,16 @@ pub(crate) fn declares_signal_expanding_to(
 }
 
 fn parse_signal_reference(signal_name: &str) -> Option<(String, String)> {
-    let parts = signal_name.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
+    let (stage_identifier, signal) = signal_name.split_once('.')?;
+    if signal.is_empty() || stage_identifier.is_empty() {
         return None;
     }
-    Some((format!("{}.{}", parts[0], parts[1]), parts[2].to_string()))
+    Some((stage_identifier.to_string(), signal.to_string()))
 }
 
 pub(crate) fn valid_signal_declaration(value: &str) -> bool {
     let parts: Vec<&str> = value.split('.').collect();
-    matches!(parts.len(), 1 | 3) && parts.iter().all(|part| valid_identifier_part(part))
+    matches!(parts.len(), 1 | 2) && parts.iter().all(|part| valid_identifier_part(part))
 }
 
 fn has_static_executor(executor: Option<&ZhixuExecutor>) -> bool {

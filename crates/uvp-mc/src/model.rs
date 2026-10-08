@@ -74,7 +74,11 @@ pub fn eval_decoded(
         .map(|outcome| outcome.state)
 }
 
-pub fn eval_decided_or_default(decoded: &DecodedCompiledHook, times: &SignalTimes, now: i64) -> bool {
+pub fn eval_decided_or_default(
+    decoded: &DecodedCompiledHook,
+    times: &SignalTimes,
+    now: i64,
+) -> bool {
     eval_decoded(decoded, times, now) == Some(EvalState::Ready)
 }
 
@@ -98,9 +102,7 @@ pub fn settle(vocab: &Vocabulary, scope: &[bool], state: &mut McState, times: &m
                 continue;
             }
             match vocab.effects.get(&fact) {
-                Some(effect)
-                    if !effect.env_timed && effect_open(vocab, state, fact) =>
-                {
+                Some(effect) if !effect.env_timed && effect_open(vocab, state, fact) => {
                     state.fact_epochs[fact] = Some(state.now);
                     let name = vocab.facts[fact]
                         .split_once("::")

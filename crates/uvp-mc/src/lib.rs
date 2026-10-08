@@ -71,9 +71,7 @@ pub fn mc_check(request: McCheckRequest) -> Result<McCheckReport> {
     for check in &request.manifest.checks {
         checks.push(checker.run(check)?);
     }
-    let passed = checks
-        .iter()
-        .all(|outcome| outcome.status == Status::Pass);
+    let passed = checks.iter().all(|outcome| outcome.status == Status::Pass);
     Ok(McCheckReport {
         zhixu_name: vocab.zhixu_name.clone(),
         passed,

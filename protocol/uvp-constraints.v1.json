@@ -182,7 +182,7 @@
     {
       "id": "stage-identifier-max-length",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[] 组合标识 {taskName}.{stageName}",
+      "target": "spec.stages[].name（stage identifier 单段即 stage name）",
       "constraint": {
         "type": "max_length",
         "params": {
@@ -206,7 +206,7 @@
     {
       "id": "stage-source-max-length",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[].source",
+      "target": "spec.stages[].source",
       "constraint": {
         "type": "max_length",
         "params": {
@@ -230,7 +230,7 @@
     {
       "id": "stage-source-required",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[].source",
+      "target": "spec.stages[].source",
       "constraint": {
         "type": "required",
         "params": {
@@ -253,7 +253,7 @@
     {
       "id": "stage-source-charset",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[].source",
+      "target": "spec.stages[].source",
       "constraint": {
         "type": "pattern",
         "params": {
@@ -275,33 +275,9 @@
       "ruling": "单线登记：rust 强制 stage.source 为 plain identifier；go/ts 无此校验（不对称现状）。"
     },
     {
-      "id": "task-pattern-name-charset",
-      "area": "zhixu",
-      "target": "taskPatterns[].name",
-      "constraint": {
-        "type": "pattern",
-        "params": {
-          "regex": "^[A-Za-z][A-Za-z0-9_-]*$",
-          "charset": "ASCII letter first, then ASCII letters, digits, '_' or '-'"
-        }
-      },
-      "error": {
-        "rust": "must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'",
-        "go": null,
-        "ts": null
-      },
-      "applies": [
-        "rust"
-      ],
-      "sources": {
-        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_zhixu_shape valid_identifier_part（与 stage name 同规则，组合标识 task.stage 落 global_stage.stage_identifier）"
-      },
-      "ruling": "taskPatterns name 字符集——首字符 ASCII 字母，其余 ASCII 字母/数字/下划线/中划线；长度由 stage-identifier-max-length 组合规则钉。"
-    },
-    {
       "id": "stage-name-charset",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[].name",
+      "target": "spec.stages[].name",
       "constraint": {
         "type": "pattern",
         "params": {
@@ -320,12 +296,12 @@
       "sources": {
         "rust": "crates/uvp-compiler/src/validate/mod.rs validate_zhixu_shape valid_identifier_part"
       },
-      "ruling": "stage name 字符集与 taskPatterns name 同规则；跨 task 的同名 stage 合法（stage identifier 含 task 段），task 内重名由唯一性检查拒绝。"
+      "ruling": "stage name 字符集——首字符 ASCII 字母，其余 ASCII 字母/数字/下划线/中划线；长度由 stage-identifier-max-length 钉。stage identifier 单段即 stage name，同名 stage 在整条秩序内非法（duplicate stage 由唯一性检查拒绝）。"
     },
     {
       "id": "executor-supplier-id-max-length",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[].executor.supplierID",
+      "target": "spec.stages[].executor.supplierID",
       "constraint": {
         "type": "max_length",
         "params": {
@@ -349,7 +325,7 @@
     {
       "id": "executor-supplier-type-closed-enum",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[].executor.supplierType",
+      "target": "spec.stages[].executor.supplierType",
       "constraint": {
         "type": "closed_enum",
         "params": {
@@ -385,7 +361,7 @@
         "params": {
           "max": 100,
           "unit": "bytes",
-          "formula": "sendSignal 含 '.'（canonical 三段式 task.stage.signal，声明本身即全名）时按 len(signal) 原文精确计长；裸名（不含 '.'）时才拼 stage 前缀：len(stageIdentifier) + 1 + len(signal)"
+          "formula": "sendSignal 含 '.'（canonical 两段式 stage.signal，声明本身即全名）时按 len(signal) 原文精确计长；裸名（不含 '.'）时才拼 stage 前缀：len(stageIdentifier) + 1 + len(signal)"
         }
       },
       "error": {
@@ -397,9 +373,9 @@
         "rust"
       ],
       "sources": {
-        "rust": "crates/uvp-compiler/src/validate/mod.rs MAX_SIGNAL_NAME_BYTES（sendSignals 组合维度：canonical 三段式按原文精确计长、裸名拼 stage 前缀）"
+        "rust": "crates/uvp-compiler/src/validate/mod.rs MAX_SIGNAL_NAME_BYTES（sendSignals 组合维度：canonical 两段式按原文精确计长、裸名拼 stage 前缀）"
       },
-      "ruling": "执行器自发信号名落 individual_record.signal_name VARCHAR(100)，全名 ≤100：canonical 三段式声明本身即全名、按原文精确计长；裸名才拼 stage 前缀（三段式再拼一次前缀会把 task.stage 段重复计入，误拒真实 ≤100 的合法声明）。两侧实现（rust validate/mod.rs、go validateDDLDimensions）已统一为该口径；stage 标识符合法不等于组合合法。"
+      "ruling": "执行器自发信号名落 individual_record.signal_name VARCHAR(100)，全名 ≤100：canonical 两段式声明本身即全名、按原文精确计长；裸名才拼 stage 前缀（两段式再拼一次前缀会把 stage 段重复计入，误拒真实 ≤100 的合法声明）。两侧实现（rust validate/mod.rs、go validateDDLDimensions）已统一为该口径；stage 标识符合法不等于组合合法。"
     },
     {
       "id": "receive-signals-key-max-length",
@@ -476,7 +452,7 @@
     {
       "id": "subscription-target-source-max-length",
       "area": "hook-dsl",
-      "target": "订阅目标 `::ANCHOR(@source::task.stage.signal)` 的 @source",
+      "target": "订阅目标 `::ANCHOR(@source::stage.signal)` 的 @source",
       "constraint": {
         "type": "max_length",
         "params": {
@@ -842,7 +818,7 @@
           "substrings": [
             "."
           ],
-          "reason": "'.' 是 canonical 信号名 task.stage.signal 的分隔符，键是运行期 hook 命名空间"
+          "reason": "'.' 是 canonical 信号名 stage.signal 的分隔符，键是运行期 hook 命名空间"
         }
       },
       "error": {
@@ -856,7 +832,7 @@
       "sources": {
         "rust": "crates/uvp-compiler/src/dock.rs parse_zhixu_executor_config（D006）"
       },
-      "ruling": "signalMap 键禁止携带 '.'——它是 canonical 信号名 task.stage.signal 的分隔符。"
+      "ruling": "signalMap 键禁止携带 '.'——它是 canonical 信号名 stage.signal 的分隔符。"
     },
     {
       "id": "dock-signalmap-key-combined-max-length",
@@ -893,7 +869,7 @@
           "scope": "D013：出生 hook 的条件必须是单一正向 canonical signal atom",
           "details": [
             "判定看去重前的语法结构（cloud AST 根即 kind=signal 节点）：A&A / A|A 等同 atom 组合式不算单 atom（依赖列表是去重产物，计数判定会被伪装绕过）",
-            "input 端口 atom 的 (task, stage) 必须寻址所属 stage：mailbox 地址指向同 source 的其他 stage 同属违规",
+            "input 端口 atom 的 stage 必须寻址所属 stage：mailbox 地址指向同 source 的其他 stage 同属违规",
             "否定/计时/订阅形态一律拒绝"
           ]
         }
@@ -914,7 +890,7 @@
     {
       "id": "file-resource-type-closed-enum",
       "area": "zhixu",
-      "target": "taskPatterns[].stages[].fileResources.<key>.fileType 与 executor.selectableResource.<key>.fileType",
+      "target": "spec.stages[].fileResources.<key>.fileType 与 executor.selectableResource.<key>.fileType",
       "constraint": {
         "type": "closed_enum",
         "params": {
@@ -945,11 +921,11 @@
     {
       "id": "birth-channel-key-union-uniqueness",
       "area": "zhixu",
-      "target": "出生通道键并集：mint 阶段 ANCHOR 订阅的出生事实键 (source, task.stage.signal) ∪ dockInterface entrance 端口（orderModes 含 new 的接口的 input 端口）atom 的事实键",
+      "target": "出生通道键并集：mint 阶段 ANCHOR 订阅的出生事实键 (source, stage.signal) ∪ dockInterface entrance 端口（orderModes 含 new 的接口的 input 端口）atom 的事实键",
       "constraint": {
         "type": "forbidden",
         "params": {
-          "scope": "并集内同一 (source, task.stage.signal) 事实键被重复声明为出生通道",
+          "scope": "并集内同一 (source, stage.signal) 事实键被重复声明为出生通道",
           "arms": {
             "mint-union-dock / dock-union-dock": "三方一致拒绝：跨通道共享键会让任一侧的出生事务把另一侧的出生线一并推 Ready、物化幻影阶段；dock entrance 键按 route 钉死（planHookDependsOn），一键挂两条 entrance 时任一 route 的子单会物化另一 route 的阶段",
             "mint-union-mint": "分叉现状（三线未收敛）：rust 编译期拒绝——一事实多 mint 各铸一单，\"该事实对应哪个订单\"三线发散，一事一单在编译期收口；Solidity 注册门与 TS 编译器放行——一事实扇出多条 mint 出生线是产品现行形态（customs 基准 plan：order::registered 同时出生执行者选择与资源发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段"
@@ -970,34 +946,9 @@
       "ruling": "登记为分叉现状，不宣称三线一致：mint∪dock、dock∪dock 两臂三方（rust 编译期、合约注册门 DuplicateBirthChannelKey、TS 编译器镜像 duplicateBirthChannelKeyIssues）一致拒绝；mint∪mint 臂仅 rust 拒绝，合约（UVPPlanRegistration._registerPlanHook 按 dock 标志分界）与 TS（按 orderTriggerKind=dock 分界）放行。error.rust 两段锚点分属两臂：前段（一事一单…改用 hook 依赖）钉 mint∪mint 臂文案，后段（出生通道键并集查重…不得重复）钉 mint∪dock / dock∪dock 跨通道臂文案。镜像状态另见 rejectionSurfaces 矩阵 duplicate-birth-channel-key 行。"
     },
     {
-      "id": "task-patterns-max-count",
-      "area": "zhixu",
-      "target": "spec.taskPatterns 条目数",
-      "constraint": {
-        "type": "integer_range",
-        "params": {
-          "min": 0,
-          "max": 64,
-          "scope": "单定义计数上限闸；下界（≥1）由独立非空规则承担（spec.taskPatterns must contain at least one task pattern）"
-        }
-      },
-      "error": {
-        "rust": "task patterns, limit is 64",
-        "go": null,
-        "ts": null
-      },
-      "applies": [
-        "rust"
-      ],
-      "sources": {
-        "rust": "crates/uvp-compiler/src/validate/mod.rs MAX_TASK_PATTERNS"
-      },
-      "ruling": "单线登记（编译计数闸）：列宽族只约束单个标识符长度，计数维度无闸时 plan 输入可让编译期校验/产物规模无界增长；64 对真实计划留有余量且不与合约侧同族上限（依赖键 1024）打架。go/ts 编译线无此闸。"
-    },
-    {
       "id": "stage-entries-max-count",
       "area": "zhixu",
-      "target": "单定义摊平后的阶段总数（taskPatterns[].stages[]. 求和）",
+      "target": "spec.stages 条目数",
       "constraint": {
         "type": "integer_range",
         "params": {
@@ -1007,7 +958,7 @@
         }
       },
       "error": {
-        "rust": "stages across taskPatterns, limit is 256",
+        "rust": "spec.stages contains N stages, limit is 256",
         "go": null,
         "ts": null
       },
@@ -1032,7 +983,7 @@
         }
       },
       "error": {
-        "rust": "receiveSignals channels (compiled hooks) across taskPatterns, limit is 512",
+        "rust": "receiveSignals channels (compiled hooks) across spec.stages, limit is 512",
         "go": null,
         "ts": null
       },

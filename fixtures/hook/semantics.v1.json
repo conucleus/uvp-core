@@ -20,17 +20,17 @@
       "name": "single positive signal",
       "profile": "evm_strict",
       "hookName": "START",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.main.cmp",
-        "normalizedExpression": "buyer::task.main.cmp",
+        "runtimeCondition": "main.cmp",
+        "normalizedExpression": "buyer::main.cmp",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.main.cmp"
+            "signalName": "main.cmp"
           }
         ]
       }
@@ -39,27 +39,27 @@
       "name": "delay with monotonic negative guard",
       "profile": "evm_strict",
       "hookName": "TIMEOUT",
-      "hook": "buyer::(task.pay.cmp +5s) & ~task.refund.cmp",
+      "hook": "buyer::(pay.cmp +5s) & ~refund.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.pay.cmp+5s&~task.refund.cmp",
-        "normalizedExpression": "buyer::task.pay.cmp+5s&~task.refund.cmp",
+        "runtimeCondition": "pay.cmp+5s&~refund.cmp",
+        "normalizedExpression": "buyer::pay.cmp+5s&~refund.cmp",
         "dependencies": [
           {
             "kind": "negative",
             "source": "buyer",
-            "signalName": "task.refund.cmp"
+            "signalName": "refund.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.pay.cmp"
+            "signalName": "pay.cmp"
           },
           {
             "kind": "timer",
             "source": "buyer",
-            "signalName": "task.pay.cmp",
+            "signalName": "pay.cmp",
             "delaySeconds": 5
           }
         ]
@@ -69,17 +69,17 @@
       "name": "subscription entry fans class events into executor",
       "profile": "cloud_compat",
       "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "hook": "::ANCHOR(@seller::listing.cmp)",
       "expect": {
         "source": "",
         "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@seller::trade.listing.cmp)",
-        "normalizedExpression": "::ANCHOR(@seller::trade.listing.cmp)",
+        "runtimeCondition": "ANCHOR(@seller::listing.cmp)",
+        "normalizedExpression": "::ANCHOR(@seller::listing.cmp)",
         "dependencies": [
           {
             "kind": "positive",
             "source": "seller",
-            "signalName": "trade.listing.cmp"
+            "signalName": "listing.cmp"
           }
         ]
       }
@@ -88,17 +88,17 @@
       "name": "subscription entry addresses another class in the same domain",
       "profile": "cloud_compat",
       "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@buyer::juice_demand.entry.requested)",
+      "hook": "::ANCHOR(@buyer::juice_demand.requested)",
       "expect": {
         "source": "",
         "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@buyer::juice_demand.entry.requested)",
-        "normalizedExpression": "::ANCHOR(@buyer::juice_demand.entry.requested)",
+        "runtimeCondition": "ANCHOR(@buyer::juice_demand.requested)",
+        "normalizedExpression": "::ANCHOR(@buyer::juice_demand.requested)",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "juice_demand.entry.requested"
+            "signalName": "juice_demand.requested"
           }
         ]
       }
@@ -107,17 +107,17 @@
       "name": "subscription entry tolerates whitespace between ANCHOR and target",
       "profile": "cloud_compat",
       "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR (@seller::t.a.b)",
+      "hook": "::ANCHOR (@seller::a.b)",
       "expect": {
         "source": "",
         "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@seller::t.a.b)",
-        "normalizedExpression": "::ANCHOR(@seller::t.a.b)",
+        "runtimeCondition": "ANCHOR(@seller::a.b)",
+        "normalizedExpression": "::ANCHOR(@seller::a.b)",
         "dependencies": [
           {
             "kind": "positive",
             "source": "seller",
-            "signalName": "t.a.b"
+            "signalName": "a.b"
           }
         ]
       }
@@ -126,33 +126,33 @@
       "name": "cloud delay over grouped operands keeps single parentheses",
       "profile": "cloud_compat",
       "hookName": "TIMEOUT",
-      "hook": "buyer::(task.pay.cmp & task.ship.cmp)+5s",
+      "hook": "buyer::(pay.cmp & ship.cmp)+5s",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "(task.pay.cmp & task.ship.cmp) + 5s",
-        "normalizedExpression": "buyer::(task.pay.cmp&task.ship.cmp)+5s",
+        "runtimeCondition": "(pay.cmp & ship.cmp) + 5s",
+        "normalizedExpression": "buyer::(pay.cmp&ship.cmp)+5s",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.pay.cmp"
+            "signalName": "pay.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.ship.cmp"
+            "signalName": "ship.cmp"
           },
           {
             "kind": "timer",
             "source": "buyer",
-            "signalName": "task.pay.cmp",
+            "signalName": "pay.cmp",
             "delaySeconds": 5
           },
           {
             "kind": "timer",
             "source": "buyer",
-            "signalName": "task.ship.cmp",
+            "signalName": "ship.cmp",
             "delaySeconds": 5
           }
         ]
@@ -162,17 +162,17 @@
       "name": "36-byte subscription target source boundary",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::task.main.cmp)",
+      "hook": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::main.cmp)",
       "expect": {
         "source": "",
         "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@ssssssssssssssssssssssssssssssssssss::task.main.cmp)",
-        "normalizedExpression": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::task.main.cmp)",
+        "runtimeCondition": "ANCHOR(@ssssssssssssssssssssssssssssssssssss::main.cmp)",
+        "normalizedExpression": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::main.cmp)",
         "dependencies": [
           {
             "kind": "positive",
             "source": "ssssssssssssssssssssssssssssssssssss",
-            "signalName": "task.main.cmp"
+            "signalName": "main.cmp"
           }
         ]
       }
@@ -181,27 +181,27 @@
       "name": "and binds tighter than or without parentheses",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.a.cmp & task.b.cmp | task.c.cmp",
+      "hook": "buyer::a.cmp & b.cmp | c.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "(task.a.cmp&task.b.cmp)|task.c.cmp",
-        "normalizedExpression": "buyer::(task.a.cmp&task.b.cmp)|task.c.cmp",
+        "runtimeCondition": "(a.cmp&b.cmp)|c.cmp",
+        "normalizedExpression": "buyer::(a.cmp&b.cmp)|c.cmp",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp"
+            "signalName": "a.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp"
+            "signalName": "b.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.c.cmp"
+            "signalName": "c.cmp"
           }
         ]
       }
@@ -210,27 +210,27 @@
       "name": "or right operand binds and first without parentheses",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.a.cmp | task.b.cmp & task.c.cmp",
+      "hook": "buyer::a.cmp | b.cmp & c.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.a.cmp|(task.b.cmp&task.c.cmp)",
-        "normalizedExpression": "buyer::task.a.cmp|(task.b.cmp&task.c.cmp)",
+        "runtimeCondition": "a.cmp|(b.cmp&c.cmp)",
+        "normalizedExpression": "buyer::a.cmp|(b.cmp&c.cmp)",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp"
+            "signalName": "a.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp"
+            "signalName": "b.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.c.cmp"
+            "signalName": "c.cmp"
           }
         ]
       }
@@ -239,22 +239,22 @@
       "name": "not binds tighter than and without parentheses",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::~task.a.cmp & task.b.cmp",
+      "hook": "buyer::~a.cmp & b.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "~task.a.cmp&task.b.cmp",
-        "normalizedExpression": "buyer::~task.a.cmp&task.b.cmp",
+        "runtimeCondition": "~a.cmp&b.cmp",
+        "normalizedExpression": "buyer::~a.cmp&b.cmp",
         "dependencies": [
           {
             "kind": "negative",
             "source": "buyer",
-            "signalName": "task.a.cmp"
+            "signalName": "a.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp"
+            "signalName": "b.cmp"
           }
         ]
       }
@@ -263,27 +263,27 @@
       "name": "postfix delay binds tighter than and without parentheses",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.a.cmp +5s & task.b.cmp",
+      "hook": "buyer::a.cmp +5s & b.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.a.cmp+5s&task.b.cmp",
-        "normalizedExpression": "buyer::task.a.cmp+5s&task.b.cmp",
+        "runtimeCondition": "a.cmp+5s&b.cmp",
+        "normalizedExpression": "buyer::a.cmp+5s&b.cmp",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp"
+            "signalName": "a.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp"
+            "signalName": "b.cmp"
           },
           {
             "kind": "timer",
             "source": "buyer",
-            "signalName": "task.a.cmp",
+            "signalName": "a.cmp",
             "delaySeconds": 5
           }
         ]
@@ -293,27 +293,27 @@
       "name": "postfix delay binds tighter than or under cloud rendering",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "buyer::task.a.cmp +5s | task.b.cmp",
+      "hook": "buyer::a.cmp +5s | b.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "(task.a.cmp + 5s) | task.b.cmp",
-        "normalizedExpression": "buyer::task.a.cmp+5s|task.b.cmp",
+        "runtimeCondition": "(a.cmp + 5s) | b.cmp",
+        "normalizedExpression": "buyer::a.cmp+5s|b.cmp",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp"
+            "signalName": "a.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp"
+            "signalName": "b.cmp"
           },
           {
             "kind": "timer",
             "source": "buyer",
-            "signalName": "task.a.cmp",
+            "signalName": "a.cmp",
             "delaySeconds": 5
           }
         ]
@@ -323,27 +323,27 @@
       "name": "n-ary and of three operands stays one flat join",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.a.cmp & task.b.cmp & task.c.cmp",
+      "hook": "buyer::a.cmp & b.cmp & c.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.a.cmp&task.b.cmp&task.c.cmp",
-        "normalizedExpression": "buyer::task.a.cmp&task.b.cmp&task.c.cmp",
+        "runtimeCondition": "a.cmp&b.cmp&c.cmp",
+        "normalizedExpression": "buyer::a.cmp&b.cmp&c.cmp",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp"
+            "signalName": "a.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp"
+            "signalName": "b.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.c.cmp"
+            "signalName": "c.cmp"
           }
         ]
       }
@@ -352,27 +352,27 @@
       "name": "n-ary or of three operands stays one flat join",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.a.cmp | task.b.cmp | task.c.cmp",
+      "hook": "buyer::a.cmp | b.cmp | c.cmp",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.a.cmp|task.b.cmp|task.c.cmp",
-        "normalizedExpression": "buyer::task.a.cmp|task.b.cmp|task.c.cmp",
+        "runtimeCondition": "a.cmp|b.cmp|c.cmp",
+        "normalizedExpression": "buyer::a.cmp|b.cmp|c.cmp",
         "dependencies": [
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.a.cmp"
+            "signalName": "a.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.b.cmp"
+            "signalName": "b.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.c.cmp"
+            "signalName": "c.cmp"
           }
         ]
       }
@@ -381,22 +381,22 @@
       "name": "decaying veto as a direct conjunction operand",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "hook": "buyer::ship.cmp & ~(cancel.cmp +14d)",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.ship.cmp&~(task.cancel.cmp+14d)",
-        "normalizedExpression": "buyer::task.ship.cmp&~(task.cancel.cmp+14d)",
+        "runtimeCondition": "ship.cmp&~(cancel.cmp+14d)",
+        "normalizedExpression": "buyer::ship.cmp&~(cancel.cmp+14d)",
         "dependencies": [
           {
             "kind": "negative",
             "source": "buyer",
-            "signalName": "task.cancel.cmp"
+            "signalName": "cancel.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.ship.cmp"
+            "signalName": "ship.cmp"
           }
         ]
       }
@@ -405,22 +405,22 @@
       "name": "cloud rendering of the decaying veto keeps grouped delay parentheses",
       "profile": "cloud_compat",
       "hookName": "WINDOW",
-      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "hook": "buyer::ship.cmp & ~(cancel.cmp +14d)",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.ship.cmp & ~(task.cancel.cmp + 14d)",
-        "normalizedExpression": "buyer::task.ship.cmp&~(task.cancel.cmp+14d)",
+        "runtimeCondition": "ship.cmp & ~(cancel.cmp + 14d)",
+        "normalizedExpression": "buyer::ship.cmp&~(cancel.cmp+14d)",
         "dependencies": [
           {
             "kind": "negative",
             "source": "buyer",
-            "signalName": "task.cancel.cmp"
+            "signalName": "cancel.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.ship.cmp"
+            "signalName": "ship.cmp"
           }
         ]
       }
@@ -430,17 +430,17 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::~(task.cancel.cmp +14d)",
+      "hook": "buyer::~(cancel.cmp +14d)",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "~(task.cancel.cmp+14d)",
-        "normalizedExpression": "buyer::~(task.cancel.cmp+14d)",
+        "runtimeCondition": "~(cancel.cmp+14d)",
+        "normalizedExpression": "buyer::~(cancel.cmp+14d)",
         "dependencies": [
           {
             "kind": "negative",
             "source": "buyer",
-            "signalName": "task.cancel.cmp"
+            "signalName": "cancel.cmp"
           }
         ]
       }
@@ -450,22 +450,22 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::task.ship.cmp | ~(task.cancel.cmp +14d)",
+      "hook": "buyer::ship.cmp | ~(cancel.cmp +14d)",
       "expect": {
         "source": "buyer",
         "mode": "normal",
-        "runtimeCondition": "task.ship.cmp|~(task.cancel.cmp+14d)",
-        "normalizedExpression": "buyer::task.ship.cmp|~(task.cancel.cmp+14d)",
+        "runtimeCondition": "ship.cmp|~(cancel.cmp+14d)",
+        "normalizedExpression": "buyer::ship.cmp|~(cancel.cmp+14d)",
         "dependencies": [
           {
             "kind": "negative",
             "source": "buyer",
-            "signalName": "task.cancel.cmp"
+            "signalName": "cancel.cmp"
           },
           {
             "kind": "positive",
             "source": "buyer",
-            "signalName": "task.ship.cmp"
+            "signalName": "ship.cmp"
           }
         ]
       }
@@ -476,7 +476,7 @@
       "name": "missing signal needs more",
       "profile": "evm_strict",
       "hookName": "START",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [],
       "expect": {
@@ -487,12 +487,12 @@
       "name": "single positive signal ready",
       "profile": "evm_strict",
       "hookName": "START",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.main.cmp",
+          "signalName": "main.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -504,12 +504,12 @@
       "name": "same signal name under another source does not satisfy evm hook",
       "profile": "evm_strict",
       "hookName": "START",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "seller",
-          "signalName": "task.main.cmp",
+          "signalName": "main.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -521,12 +521,12 @@
       "name": "same signal name under another source does not satisfy cloud hook",
       "profile": "cloud_compat",
       "hookName": "START",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "seller",
-          "signalName": "task.main.cmp",
+          "signalName": "main.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -538,12 +538,12 @@
       "name": "source-less signal does not satisfy sourced cloud hook",
       "profile": "cloud_compat",
       "hookName": "START",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "",
-          "signalName": "task.main.cmp",
+          "signalName": "main.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -555,12 +555,12 @@
       "name": "evm delay waits at chain second precision",
       "profile": "evm_strict",
       "hookName": "TIMEOUT",
-      "hook": "buyer::task.pay.cmp +5s",
+      "hook": "buyer::pay.cmp +5s",
       "now": "2026-04-27T00:00:04.999Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.pay.cmp",
+          "signalName": "pay.cmp",
           "receivedAt": "2026-04-27T00:00:00.900Z"
         }
       ],
@@ -573,12 +573,12 @@
       "name": "cloud delay preserves subsecond timestamp",
       "profile": "cloud_compat",
       "hookName": "TIMEOUT",
-      "hook": "buyer::task.pay.cmp +5s",
+      "hook": "buyer::pay.cmp +5s",
       "now": "2026-04-27T00:00:05.899Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.pay.cmp",
+          "signalName": "pay.cmp",
           "receivedAt": "2026-04-27T00:00:00.900Z"
         }
       ],
@@ -591,12 +591,12 @@
       "name": "delay ready after due time",
       "profile": "evm_strict",
       "hookName": "TIMEOUT",
-      "hook": "buyer::task.pay.cmp +5s",
+      "hook": "buyer::pay.cmp +5s",
       "now": "2026-04-27T00:00:05.001Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.pay.cmp",
+          "signalName": "pay.cmp",
           "receivedAt": "2026-04-27T00:00:00.900Z"
         }
       ],
@@ -609,40 +609,40 @@
       "name": "negative guard cancels monotonically",
       "profile": "evm_strict",
       "hookName": "PAY",
-      "hook": "buyer::task.pay.cmp & ~task.refund.cmp",
+      "hook": "buyer::pay.cmp & ~refund.cmp",
       "now": "2026-04-27T00:00:06.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.pay.cmp",
+          "signalName": "pay.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.refund.cmp",
+          "signalName": "refund.cmp",
           "receivedAt": "2026-04-27T00:00:03.000Z"
         }
       ],
       "expect": {
         "state": "impossible",
-        "reasonContains": "negated condition exists: task.refund.cmp"
+        "reasonContains": "negated condition exists: refund.cmp"
       }
     },
     {
       "name": "and waits on latest delayed branch",
       "profile": "evm_strict",
       "hookName": "BOTH",
-      "hook": "buyer::(task.a.cmp +5s) & (task.b.cmp +10s)",
+      "hook": "buyer::(a.cmp +5s) & (b.cmp +10s)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
+          "signalName": "a.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -655,17 +655,17 @@
       "name": "or waits on earliest live delayed branch",
       "profile": "evm_strict",
       "hookName": "ANY",
-      "hook": "buyer::(task.a.cmp +5s) | (task.b.cmp +10s)",
+      "hook": "buyer::(a.cmp +5s) | (b.cmp +10s)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
+          "signalName": "a.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -678,17 +678,17 @@
       "name": "all or branches cancelled",
       "profile": "evm_strict",
       "hookName": "ANY",
-      "hook": "buyer::(task.a.cmp & ~task.cancel.cmp) | (task.b.cmp & ~task.fail.cmp)",
+      "hook": "buyer::(a.cmp & ~cancel.cmp) | (b.cmp & ~fail.cmp)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.cancel.cmp",
+          "signalName": "cancel.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.fail.cmp",
+          "signalName": "fail.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -701,7 +701,7 @@
       "name": "subscription entry defers per-event delivery to state machine",
       "profile": "cloud_compat",
       "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "hook": "::ANCHOR(@seller::listing.cmp)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [],
       "expect": {
@@ -713,12 +713,12 @@
       "name": "subscription stays needs_more even when the target signal is already delivered",
       "profile": "cloud_compat",
       "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "hook": "::ANCHOR(@seller::listing.cmp)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "seller",
-          "signalName": "trade.listing.cmp",
+          "signalName": "listing.cmp",
           "receivedAt": "2026-04-26T00:00:00.000Z"
         }
       ],
@@ -731,22 +731,22 @@
       "name": "or composite delay anchors on earliest maturing branch (waiting)",
       "profile": "evm_strict",
       "hookName": "TRIGGER",
-      "hook": "buyer::((task.a.cmp & task.b.cmp) | task.c.cmp) +10s",
+      "hook": "buyer::((a.cmp & b.cmp) | c.cmp) +10s",
       "now": "2026-04-27T00:00:45.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
+          "signalName": "a.cmp",
           "receivedAt": "2026-04-27T00:00:10.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:01:00.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.c.cmp",
+          "signalName": "c.cmp",
           "receivedAt": "2026-04-27T00:00:40.000Z"
         }
       ],
@@ -759,22 +759,22 @@
       "name": "or composite delay anchors on earliest maturing branch (ready)",
       "profile": "evm_strict",
       "hookName": "TRIGGER",
-      "hook": "buyer::((task.a.cmp & task.b.cmp) | task.c.cmp) +10s",
+      "hook": "buyer::((a.cmp & b.cmp) | c.cmp) +10s",
       "now": "2026-04-27T00:00:55.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
+          "signalName": "a.cmp",
           "receivedAt": "2026-04-27T00:00:10.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:01:00.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.c.cmp",
+          "signalName": "c.cmp",
           "receivedAt": "2026-04-27T00:00:40.000Z"
         }
       ],
@@ -787,12 +787,12 @@
       "name": "or readies on a single live branch",
       "profile": "evm_strict",
       "hookName": "ANY",
-      "hook": "buyer::task.a.cmp | task.b.cmp",
+      "hook": "buyer::a.cmp | b.cmp",
       "now": "2026-04-27T00:00:03.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:00:02.000Z"
         }
       ],
@@ -805,17 +805,17 @@
       "name": "or survives a cancelled branch via the other live branch",
       "profile": "evm_strict",
       "hookName": "ANY",
-      "hook": "buyer::(task.a.cmp & ~task.cancel.cmp) | (task.b.cmp & ~task.fail.cmp)",
+      "hook": "buyer::(a.cmp & ~cancel.cmp) | (b.cmp & ~fail.cmp)",
       "now": "2026-04-27T00:00:05.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.cancel.cmp",
+          "signalName": "cancel.cmp",
           "receivedAt": "2026-04-27T00:00:01.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:00:03.000Z"
         }
       ],
@@ -828,17 +828,17 @@
       "name": "n-ary and of three needs every operand",
       "profile": "evm_strict",
       "hookName": "BOTH",
-      "hook": "buyer::task.a.cmp & task.b.cmp & task.c.cmp",
+      "hook": "buyer::a.cmp & b.cmp & c.cmp",
       "now": "2026-04-27T00:00:05.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
+          "signalName": "a.cmp",
           "receivedAt": "2026-04-27T00:00:01.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.c.cmp",
+          "signalName": "c.cmp",
           "receivedAt": "2026-04-27T00:00:02.000Z"
         }
       ],
@@ -850,22 +850,22 @@
       "name": "n-ary and of three readies at the latest anchor",
       "profile": "evm_strict",
       "hookName": "BOTH",
-      "hook": "buyer::task.a.cmp & task.b.cmp & task.c.cmp",
+      "hook": "buyer::a.cmp & b.cmp & c.cmp",
       "now": "2026-04-27T00:00:05.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
+          "signalName": "a.cmp",
           "receivedAt": "2026-04-27T00:00:01.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:00:03.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.c.cmp",
+          "signalName": "c.cmp",
           "receivedAt": "2026-04-27T00:00:02.000Z"
         }
       ],
@@ -878,12 +878,12 @@
       "name": "n-ary or of three readies on its single live branch",
       "profile": "evm_strict",
       "hookName": "ANY",
-      "hook": "buyer::task.a.cmp | task.b.cmp | task.c.cmp",
+      "hook": "buyer::a.cmp | b.cmp | c.cmp",
       "now": "2026-04-27T00:00:05.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.c.cmp",
+          "signalName": "c.cmp",
           "receivedAt": "2026-04-27T00:00:04.000Z"
         }
       ],
@@ -896,22 +896,22 @@
       "name": "n-ary and waits on the max due while a ready operand contributes its anchor",
       "profile": "cloud_compat",
       "hookName": "BOTH",
-      "hook": "buyer::(task.a.cmp +5s) & (task.b.cmp +10s) & task.c.cmp",
+      "hook": "buyer::(a.cmp +5s) & (b.cmp +10s) & c.cmp",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.a.cmp",
+          "signalName": "a.cmp",
           "receivedAt": "2026-04-27T00:00:00.900Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.b.cmp",
+          "signalName": "b.cmp",
           "receivedAt": "2026-04-27T00:00:00.900Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.c.cmp",
+          "signalName": "c.cmp",
           "receivedAt": "2026-04-27T00:00:00.900Z"
         }
       ],
@@ -924,17 +924,17 @@
       "name": "duplicate fact key reduces to the earliest receivedAt regardless of array order",
       "profile": "cloud_compat",
       "hookName": "TIMEOUT",
-      "hook": "buyer::task.pay.cmp +5s",
+      "hook": "buyer::pay.cmp +5s",
       "now": "2026-04-27T00:00:06.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.pay.cmp",
+          "signalName": "pay.cmp",
           "receivedAt": "2026-04-27T00:00:01.500Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.pay.cmp",
+          "signalName": "pay.cmp",
           "receivedAt": "2026-04-27T00:00:01.000Z"
         }
       ],
@@ -947,12 +947,12 @@
       "name": "subscription channel addressing ignores a same-named fact from another source class",
       "profile": "cloud_compat",
       "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::trade.listing.cmp)",
+      "hook": "::ANCHOR(@seller::listing.cmp)",
       "now": "2026-04-27T00:00:00.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "trade.listing.cmp",
+          "signalName": "listing.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -965,12 +965,12 @@
       "name": "decaying veto passes while the negated signal is absent",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "hook": "buyer::ship.cmp & ~(cancel.cmp +14d)",
       "now": "2026-04-27T00:00:10.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.ship.cmp",
+          "signalName": "ship.cmp",
           "receivedAt": "2026-04-27T00:00:05.000Z"
         }
       ],
@@ -983,17 +983,17 @@
       "name": "decaying veto passes until the negated delay matures",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "hook": "buyer::ship.cmp & ~(cancel.cmp +14d)",
       "now": "2026-04-27T00:00:10.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.ship.cmp",
+          "signalName": "ship.cmp",
           "receivedAt": "2026-04-27T00:00:05.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.cancel.cmp",
+          "signalName": "cancel.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -1007,17 +1007,17 @@
       "name": "decaying veto still passes one millisecond before the negated delay matures",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "hook": "buyer::ship.cmp & ~(cancel.cmp +14d)",
       "now": "2026-05-10T23:59:59.999Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.ship.cmp",
+          "signalName": "ship.cmp",
           "receivedAt": "2026-04-27T00:00:05.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.cancel.cmp",
+          "signalName": "cancel.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -1031,40 +1031,40 @@
       "name": "decaying veto cancels exactly at the negated delay maturity",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)",
+      "hook": "buyer::ship.cmp & ~(cancel.cmp +14d)",
       "now": "2026-05-11T00:00:00.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.ship.cmp",
+          "signalName": "ship.cmp",
           "receivedAt": "2026-04-27T00:00:05.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.cancel.cmp",
+          "signalName": "cancel.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
       "expect": {
         "state": "impossible",
-        "reasonContains": "negated condition exists: task.cancel.cmp+14d"
+        "reasonContains": "negated condition exists: cancel.cmp+14d"
       }
     },
     {
       "name": "and with a live veto still waits only on its positive branch",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::(task.ship.cmp +5s) & ~(task.cancel.cmp +10s)",
+      "hook": "buyer::(ship.cmp +5s) & ~(cancel.cmp +10s)",
       "now": "2026-04-27T00:00:02.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.ship.cmp",
+          "signalName": "ship.cmp",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.cancel.cmp",
+          "signalName": "cancel.cmp",
           "receivedAt": "2026-04-27T00:00:01.000Z"
         }
       ],
@@ -1078,12 +1078,12 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "hook": "buyer::execute.locked & ~(execute.approved +5s) & ~execute.confirm_transfer",
       "now": "2026-04-27T00:00:10.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.execute.locked",
+          "signalName": "execute.locked",
           "receivedAt": "2026-04-27T00:00:02.000Z"
         }
       ],
@@ -1098,12 +1098,12 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "hook": "buyer::execute.locked & ~(execute.approved +5s) & ~execute.confirm_transfer",
       "now": "2026-04-27T00:00:10.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.execute.approved",
+          "signalName": "execute.approved",
           "receivedAt": "2026-04-27T00:00:08.000Z"
         }
       ],
@@ -1117,17 +1117,17 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "hook": "buyer::execute.locked & ~(execute.approved +5s) & ~execute.confirm_transfer",
       "now": "2026-04-27T00:00:04.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.execute.locked",
+          "signalName": "execute.locked",
           "receivedAt": "2026-04-27T00:00:02.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.execute.approved",
+          "signalName": "execute.approved",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
@@ -1142,23 +1142,23 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::task.execute.locked & ~(task.execute.approved +5s) & ~task.execute.confirm_transfer",
+      "hook": "buyer::execute.locked & ~(execute.approved +5s) & ~execute.confirm_transfer",
       "now": "2026-04-27T00:00:05.000Z",
       "signals": [
         {
           "source": "buyer",
-          "signalName": "task.execute.locked",
+          "signalName": "execute.locked",
           "receivedAt": "2026-04-27T00:00:02.000Z"
         },
         {
           "source": "buyer",
-          "signalName": "task.execute.approved",
+          "signalName": "execute.approved",
           "receivedAt": "2026-04-27T00:00:00.000Z"
         }
       ],
       "expect": {
         "state": "impossible",
-        "reasonContains": "negated condition exists: task.execute.approved+5s"
+        "reasonContains": "negated condition exists: execute.approved+5s"
       }
     }
   ],
@@ -1167,14 +1167,14 @@
       "name": "missing source separator",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "task.main.cmp",
+      "hook": "main.cmp",
       "messageContains": "must contain"
     },
     {
       "name": "empty source only allowed for external hooks",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::task.main.cmp",
+      "hook": "::main.cmp",
       "messageContains": "empty source is only allowed"
     },
     {
@@ -1182,55 +1182,55 @@
       "profile": "cloud_compat",
       "hookName": "HOOK",
       "hook": "buyer::cmp",
-      "messageContains": "task.stage.signal"
+      "messageContains": "stage.signal"
     },
     {
-      "name": "two segment short name",
+      "name": "three segment signal name",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::main.cmp",
-      "messageContains": "task.stage.signal"
+      "hook": "buyer::main.cmp.extra",
+      "messageContains": "stage.signal"
     },
     {
       "name": "four segment signal name",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.stage.signal.extra",
-      "messageContains": "task.stage.signal"
+      "hook": "buyer::a.b.c.d",
+      "messageContains": "stage.signal"
     },
     {
       "name": "empty signal segment",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task..cmp",
-      "messageContains": "task.stage.signal"
+      "hook": "buyer::main.",
+      "messageContains": "stage.signal"
     },
     {
       "name": "zero delay is rejected",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.pay.cmp +0s",
+      "hook": "buyer::pay.cmp +0s",
       "messageContains": "invalid duration"
     },
     {
       "name": "outside entry is retired",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::OUTSIDE@(seller::task.main.cmp)",
+      "hook": "::OUTSIDE@(seller::main.cmp)",
       "messageContains": "retired"
     },
     {
       "name": "legacy anchor header form is retired",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR@(farmer.main.settle)",
+      "hook": "::ANCHOR@(main.settle)",
       "messageContains": "retired"
     },
     {
       "name": "bare outsource is retired",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::OUTSOURCE@(seller::task.main.cmp)",
+      "hook": "::OUTSOURCE@(seller::main.cmp)",
       "messageContains": "retired"
     },
     {
@@ -1244,112 +1244,112 @@
       "name": "subscription mixed with operators is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::task.main.cmp) & task.other.cmp",
+      "hook": "::ANCHOR(@seller::main.cmp) & other.cmp",
       "messageContains": "must be the complete hook condition"
     },
     {
       "name": "headed subscription entry is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "buyer::ANCHOR(@seller::task.main.cmp)",
+      "hook": "buyer::ANCHOR(@seller::main.cmp)",
       "messageContains": "empty source header"
     },
     {
       "name": "subscription target requires full signal name",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::listing.cmp)",
-      "messageContains": "task.stage.signal"
+      "hook": "::ANCHOR(@seller::cmp)",
+      "messageContains": "stage.signal"
     },
     {
       "name": "subscription source requires plain identifier",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@::trade.listing.cmp)",
+      "hook": "::ANCHOR(@::listing.cmp)",
       "messageContains": "plain identifier"
     },
     {
       "name": "subscription target with extra separator is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::task.main.cmp::extra)",
-      "messageContains": "task.stage.signal"
+      "hook": "::ANCHOR(@seller::main.cmp::extra)",
+      "messageContains": "stage.signal"
     },
     {
       "name": "subscription target with embedded space is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller names::trade.listing.cmp)",
+      "hook": "::ANCHOR(@seller names::listing.cmp)",
       "messageContains": "plain identifier"
     },
     {
-      "name": "subscription target with four signal segments is rejected",
+      "name": "subscription target with three signal segments is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::task.a.b.c)",
-      "messageContains": "task.stage.signal"
+      "hook": "::ANCHOR(@seller::a.b.c)",
+      "messageContains": "stage.signal"
     },
     {
       "name": "oversized subscription target signal is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::task.main.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)",
+      "hook": "::ANCHOR(@seller::main.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)",
       "messageContains": "maximum length of 100"
     },
     {
       "name": "oversized subscription target source is rejected",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "::ANCHOR(@sssssssssssssssssssssssssssssssssssss::task.main.cmp)",
+      "hook": "::ANCHOR(@sssssssssssssssssssssssssssssssssssss::main.cmp)",
       "messageContains": "maximum length of 36"
     },
     {
       "name": "unparenthesized chained delay is rejected",
       "profile": "evm_strict",
       "hookName": "HOOK",
-      "hook": "buyer::task.a.cmp +5s +10s",
+      "hook": "buyer::a.cmp +5s +10s",
       "messageContains": "unexpected token"
     },
     {
       "name": "decaying veto at the root is rejected",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::~(task.cancel.cmp +14d)",
+      "hook": "buyer::~(cancel.cmp +14d)",
       "messageContains": "only allowed as a direct operand of a conjunction"
     },
     {
       "name": "decaying veto under an OR branch is rejected",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::task.a.cmp | ~(task.cancel.cmp +14d)",
+      "hook": "buyer::a.cmp | ~(cancel.cmp +14d)",
       "messageContains": "only allowed as a direct operand of a conjunction"
     },
     {
       "name": "doubly negated decaying veto is rejected",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::task.a.cmp & ~(~(task.cancel.cmp +14d))",
+      "hook": "buyer::a.cmp & ~(~(cancel.cmp +14d))",
       "messageContains": "negation only supports direct signal references"
     },
     {
       "name": "decaying veto inside a delay operand is rejected",
       "profile": "evm_strict",
       "hookName": "WINDOW",
-      "hook": "buyer::(task.a.cmp & ~(task.cancel.cmp +14d)) +5s",
+      "hook": "buyer::(a.cmp & ~(cancel.cmp +14d)) +5s",
       "messageContains": "no nested delays"
     },
     {
       "name": "channel name containing the signal separator dot is rejected",
       "profile": "evm_strict",
       "hookName": "BAD.KEY",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "messageContains": "must not contain '.' or '#'"
     },
     {
       "name": "channel name containing the hookId separator hash is rejected",
       "profile": "cloud_compat",
       "hookName": "BAD#KEY",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "messageContains": "must not contain '.' or '#'"
     },
     {
@@ -1357,7 +1357,7 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::~(task.a.cmp & task.b.cmp)",
+      "hook": "buyer::~(a.cmp & b.cmp)",
       "messageContains": "negation only supports direct signal references"
     },
     {
@@ -1365,28 +1365,28 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::~(task.a.cmp +31d)",
+      "hook": "buyer::~(a.cmp +31d)",
       "messageContains": "exceeds the maximum allowed delay"
     },
     {
       "name": "double ampersand operator rejected with precise error",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "buyer::task.main.cmp && task2.main.cmp",
+      "hook": "buyer::main.cmp && main.cmp",
       "messageContains": "unsupported operator"
     },
     {
       "name": "double percent operator rejected with precise error",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "buyer::task.main.cmp %% task2.main.cmp",
+      "hook": "buyer::main.cmp %% main.cmp",
       "messageContains": "unsupported operator"
     },
     {
       "name": "veto operand must contain no nested delays (hook gate)",
       "profile": "cloud_compat",
       "hookName": "HOOK",
-      "hook": "buyer::task.b.cmp & ~((task.a.cmp +5s) +10s)",
+      "hook": "buyer::b.cmp & ~((a.cmp +5s) +10s)",
       "messageContains": "nested delay"
     },
     {
@@ -1394,56 +1394,56 @@
       "profile": "cloud_compat",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::~((task.a.cmp +5s) +10s)",
+      "hook": "buyer::~((a.cmp +5s) +10s)",
       "messageContains": "nested delay"
     },
     {
       "name": "nested delay passes inner wait through before inner due (now rejected: nested delay)",
       "profile": "cloud_compat",
       "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "hook": "buyer::(a.cmp +5s) +10s",
       "messageContains": "no nested delays"
     },
     {
       "name": "nested delay waits on the chained outer due after inner due poke (now rejected: nested delay)",
       "profile": "cloud_compat",
       "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "hook": "buyer::(a.cmp +5s) +10s",
       "messageContains": "no nested delays"
     },
     {
       "name": "nested delay readies at the chained outer due (now rejected: nested delay)",
       "profile": "cloud_compat",
       "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "hook": "buyer::(a.cmp +5s) +10s",
       "messageContains": "no nested delays"
     },
     {
       "name": "nested delay still chained when outer window not reached (now rejected: nested delay)",
       "profile": "cloud_compat",
       "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "hook": "buyer::(a.cmp +5s) +10s",
       "messageContains": "no nested delays"
     },
     {
       "name": "evm nested delay waits on the chained outer due after the inner due (now rejected: nested delay)",
       "profile": "evm_strict",
       "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "hook": "buyer::(a.cmp +5s) +10s",
       "messageContains": "no nested delays"
     },
     {
       "name": "evm nested delay readies at the chained outer due on chain second precision (now rejected: nested delay)",
       "profile": "evm_strict",
       "hookName": "NESTED",
-      "hook": "buyer::(task.a.cmp +5s) +10s",
+      "hook": "buyer::(a.cmp +5s) +10s",
       "messageContains": "no nested delays"
     },
     {
       "name": "outer delay over an and operand accumulates per-fact offsets (now rejected: nested delay)",
       "profile": "evm_strict",
       "hookName": "NESTED",
-      "hook": "buyer::((task.a.cmp +5s) & task.b.cmp) +10s",
+      "hook": "buyer::((a.cmp +5s) & b.cmp) +10s",
       "messageContains": "no nested delays"
     },
     {
@@ -1451,14 +1451,14 @@
       "profile": "evm_strict",
       "gate": "filter",
       "hookName": "ADMIT",
-      "hook": "buyer::(task.ship.cmp & ~(task.cancel.cmp +14d)) +5s",
+      "hook": "buyer::(ship.cmp & ~(cancel.cmp +14d)) +5s",
       "messageContains": "no nested delays"
     },
     {
       "name": "channel name containing whitespace is rejected",
       "profile": "evm_strict",
       "hookName": "hook name",
-      "hook": "buyer::task.main.cmp",
+      "hook": "buyer::main.cmp",
       "messageContains": "hook_name must not contain whitespace"
     }
   ],
@@ -1479,7 +1479,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b01",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c01",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "START",
                 "instructions": [
                   {
@@ -1533,7 +1533,7 @@
           "zhixuId": "corpus-replay",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b01",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "START"
         },
         {
@@ -1576,7 +1576,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c02",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "TIMEOUT",
                 "instructions": [
                   {
@@ -1657,7 +1657,7 @@
           "zhixuId": "corpus-replay-timer",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b02",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "TIMEOUT"
         }
       ],
@@ -1696,7 +1696,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b03",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c03",
-                "stageIdentifier": "trade.main",
+                "stageIdentifier": "main",
                 "hookName": "PAY_GUARD",
                 "instructions": [
                   {
@@ -1816,7 +1816,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b04",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c04",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "TIMEOUT_GUARD",
                 "instructions": [
                   {
@@ -1954,7 +1954,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b05",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c05",
-                "stageIdentifier": "task.exec",
+                "stageIdentifier": "exec",
                 "hookName": "READY",
                 "orderTriggerKind": "none",
                 "emitReady": true,
@@ -2008,7 +2008,7 @@
           "zhixuId": "corpus-replay",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b05",
-          "stageIdentifier": "task.exec",
+          "stageIdentifier": "exec",
           "hookName": "READY"
         },
         {
@@ -2057,7 +2057,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b06",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c06",
-                "stageIdentifier": "task.exec",
+                "stageIdentifier": "exec",
                 "hookName": "READY",
                 "orderTriggerKind": "none",
                 "emitReady": false,
@@ -2128,7 +2128,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b07",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c07",
-                "stageIdentifier": "link.stage",
+                "stageIdentifier": "stage",
                 "hookName": "BIRTH",
                 "orderTriggerKind": "mint",
                 "emitReady": true,
@@ -2228,7 +2228,7 @@
           "zhixuId": "corpus-replay",
           "orderId": "link-child-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b07",
-          "stageIdentifier": "link.stage",
+          "stageIdentifier": "stage",
           "hookName": "BIRTH"
         },
         {
@@ -2281,7 +2281,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b08",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c08",
-                "stageIdentifier": "born.stage",
+                "stageIdentifier": "stage",
                 "hookName": "BIRTH",
                 "orderTriggerKind": "mint",
                 "emitReady": true,
@@ -2370,7 +2370,7 @@
           "zhixuId": "corpus-replay",
           "orderId": "born-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b08",
-          "stageIdentifier": "born.stage",
+          "stageIdentifier": "stage",
           "hookName": "BIRTH"
         }
       ],
@@ -2407,7 +2407,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b09",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c09",
-                "stageIdentifier": "docked.stage",
+                "stageIdentifier": "stage",
                 "hookName": "ENTER",
                 "orderTriggerKind": "dock",
                 "emitReady": true,
@@ -2472,7 +2472,7 @@
           "zhixuId": "corpus-replay",
           "orderId": "dock-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b09",
-          "stageIdentifier": "docked.stage",
+          "stageIdentifier": "stage",
           "hookName": "ENTER"
         },
         {
@@ -2529,7 +2529,7 @@
           "zhixuId": "corpus-replay-reorder",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "TIMEOUT"
         },
         {
@@ -2544,7 +2544,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b12",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c12",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "TIMEOUT",
                 "orderTriggerKind": "none",
                 "emitReady": true,
@@ -2641,7 +2641,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b21",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c21",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "ANY",
                 "instructions": [
                   {
@@ -2708,7 +2708,7 @@
           "zhixuId": "corpus-replay-or",
           "orderId": "or-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b21",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "ANY"
         }
       ],
@@ -2745,7 +2745,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b26",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c26",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "ANY",
                 "instructions": [
                   {
@@ -2842,7 +2842,7 @@
           "zhixuId": "corpus-replay-or-shortcircuit",
           "orderId": "or-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b26",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "ANY"
         }
       ],
@@ -2879,7 +2879,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b27",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c27",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "ANY",
                 "instructions": [
                   {
@@ -3028,7 +3028,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b28",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c28",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "BOTH",
                 "instructions": [
                   {
@@ -3164,7 +3164,7 @@
           "zhixuId": "corpus-replay-and3",
           "orderId": "and3-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b28",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "BOTH"
         }
       ],
@@ -3203,7 +3203,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b29",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c29",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "START",
                 "instructions": [
                   {
@@ -3271,7 +3271,7 @@
           "zhixuId": "corpus-replay-dup",
           "orderId": "dup-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b29",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "START"
         }
       ],
@@ -3308,7 +3308,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b22",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c22",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "TIMEOUT",
                 "instructions": [
                   {
@@ -3411,7 +3411,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b23",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c23",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "START",
                 "instructions": [
                   {
@@ -3497,7 +3497,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b31",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c31",
-                "stageIdentifier": "docked.stage",
+                "stageIdentifier": "stage",
                 "hookName": "ENTER",
                 "orderTriggerKind": "dock",
                 "emitReady": true,
@@ -3537,7 +3537,7 @@
           "zhixuId": "corpus-replay-dock-orphan",
           "orderId": "orphan-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b31",
-          "stageIdentifier": "docked.stage",
+          "stageIdentifier": "stage",
           "hookName": "ENTER"
         }
       ],
@@ -3569,7 +3569,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b24",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c24",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "TIMEOUT",
                 "instructions": [
                   {
@@ -3661,7 +3661,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b32",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c32",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "WINDOW",
                 "instructions": [
                   {
@@ -3735,7 +3735,7 @@
           "zhixuId": "corpus-replay-decay-absent",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b32",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "WINDOW"
         }
       ],
@@ -3772,7 +3772,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b33",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c33",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "WINDOW",
                 "instructions": [
                   {
@@ -3860,7 +3860,7 @@
           "zhixuId": "corpus-replay-decay-ready",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b33",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "WINDOW"
         }
       ],
@@ -3897,7 +3897,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b34",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c34",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "WINDOW",
                 "instructions": [
                   {
@@ -4021,7 +4021,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b35",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c35",
-                "stageIdentifier": "task.main",
+                "stageIdentifier": "main",
                 "hookName": "WINDOW",
                 "instructions": [
                   {
@@ -4136,7 +4136,7 @@
           "zhixuId": "corpus-replay-decay-wait",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b35",
-          "stageIdentifier": "task.main",
+          "stageIdentifier": "main",
           "hookName": "WINDOW"
         }
       ],
@@ -4175,7 +4175,7 @@
               {
                 "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b06",
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c06",
-                "stageIdentifier": "task.execute",
+                "stageIdentifier": "execute",
                 "hookName": "OBSERVE",
                 "instructions": [
                   {
@@ -4197,7 +4197,7 @@
             "admissions": [
               {
                 "admissionId": "0x0000000000000000000000000000000000000000000000000000000000000a61",
-                "stageIdentifier": "task.execute",
+                "stageIdentifier": "execute",
                 "signalName": "launch",
                 "instructions": [
                   {
@@ -4249,7 +4249,7 @@
           "zhixuId": "corpus-replay-admission",
           "orderId": "order-1",
           "hookId": "0x0000000000000000000000000000000000000000000000000000000000000b06",
-          "stageIdentifier": "task.execute",
+          "stageIdentifier": "execute",
           "hookName": "OBSERVE"
         }
       ],

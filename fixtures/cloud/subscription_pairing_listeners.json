@@ -16,59 +16,49 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "trade",
-          "stages": [
+          "name": "listing",
+          "source": "seller",
+          "sendSignals": [
             {
-              "name": "listing",
-              "source": "seller",
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "seller-org"
-              }
-            },
-            {
-              "name": "intent",
-              "source": "buyer",
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "buyer-org"
-              }
+              "name": "cmp"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "seller-org"
+          }
         },
         {
-          "name": "juice",
-          "stages": [
+          "name": "intent",
+          "source": "buyer",
+          "sendSignals": [
             {
-              "name": "match",
-              "source": "buyer",
-              "receiveSignals": {
-                "PAIR_SELLER": "::ANCHOR(@seller::trade.listing.cmp)",
-                "PAIR_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
-              },
-              "sendSignals": [
-                {
-                  "name": "paired"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "match-org"
-              }
+              "name": "cmp"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "buyer-org"
+          }
+        },
+        {
+          "name": "match",
+          "source": "buyer",
+          "receiveSignals": {
+            "PAIR_SELLER": "::ANCHOR(@seller::listing.cmp)",
+            "PAIR_BUYER": "::ANCHOR(@buyer::intent.cmp)"
+          },
+          "sendSignals": [
+            {
+              "name": "paired"
+            }
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "match-org"
+          }
         }
       ]
     }

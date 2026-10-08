@@ -23,48 +23,43 @@
           ],
           "inputs": {
             "enter": {
-              "hook": "guest.arrival#DOCK_ENTER"
+              "hook": "arrival#DOCK_ENTER"
             }
           }
         }
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "guest",
-          "stages": [
+          "name": "host",
+          "source": "buyer",
+          "receiveSignals": {
+            "BEGIN": "buyer::host.seed"
+          },
+          "sendSignals": [
             {
-              "name": "host",
-              "source": "buyer",
-              "receiveSignals": {
-                "BEGIN": "buyer::guest.host.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "go"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "selectedStages": [
-                "guest.arrival"
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-host"
-              }
+              "name": "go"
             },
             {
-              "name": "arrival",
-              "source": "buyer",
-              "receiveSignals": {
-                "DOCK_ENTER": "buyer::guest.arrival.enter"
-              },
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                }
-              ]
+              "name": "seed"
+            }
+          ],
+          "selectedStages": [
+            "arrival"
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-host"
+          }
+        },
+        {
+          "name": "arrival",
+          "source": "buyer",
+          "receiveSignals": {
+            "DOCK_ENTER": "buyer::arrival.enter"
+          },
+          "sendSignals": [
+            {
+              "name": "cmp"
             }
           ]
         }
@@ -74,8 +69,8 @@
   "expect": {
     "platform": "evm",
     "hookIds": [
-      "guest.arrival#DOCK_ENTER",
-      "guest.host#BEGIN"
+      "arrival#DOCK_ENTER",
+      "host#BEGIN"
     ]
   }
 }

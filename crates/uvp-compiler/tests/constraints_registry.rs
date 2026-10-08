@@ -139,27 +139,23 @@ fn base_definition() -> Value {
             "spec": {
                 "platform": { "type": "cloud" },
                 "nucleation": { "id": "constraints-core" },
-                "taskPatterns": [
-                    { "name": "main", "stages": [
-                        {
+                "stages": [{
                             "name": "work",
                             "source": "buyer",
-                            "receiveSignals": { "START": "buyer::main.work.cmp" },
+                            "receiveSignals": { "START": "buyer::work.cmp" },
                             "sendSignals": [
     { "name": "str" },
     { "name": "cmp" }
     ],
                             "executor": { "supplierType": "organization", "supplierID": "buyer-app" }
-                        }
-                    ]}
-                ]
+                        }]
             }
         })
 }
 
 fn stage_mut(definition: &mut Value) -> &mut Value {
     definition
-        .pointer_mut("/spec/taskPatterns/0/stages/0")
+        .pointer_mut("/spec/stages/0")
         .expect("base definition has one stage")
 }
 
@@ -175,21 +171,19 @@ fn target_interface_definition() -> Value {
                     "production_service": {
                         "orderModes": ["new"],
                         "inputs": {
-                            "execute": { "hook": "main.work#DOCK_ENTER" }
+                            "execute": { "hook": "work#DOCK_ENTER" }
                         },
                         "outputs": {
-                            "done": { "signal": "buyer::main.work.cmp" }
+                            "done": { "signal": "buyer::work.cmp" }
                         }
                     }
                 },
-                "taskPatterns": [
-                    { "name": "main", "stages": [
-                        {
+                "stages": [{
                             "name": "work",
                             "source": "buyer",
                             "receiveSignals": {
-                                "DOCK_ENTER": "buyer::main.work.enter",
-                                "SELF": "buyer::main.work.seed"
+                                "DOCK_ENTER": "buyer::work.enter",
+                                "SELF": "buyer::work.seed"
                             },
                             "sendSignals": [
     { "name": "str" },
@@ -197,9 +191,7 @@ fn target_interface_definition() -> Value {
     { "name": "seed" }
     ],
                             "executor": { "supplierType": "organization", "supplierID": "target-org" }
-                        }
-                    ]}
-                ]
+                        }]
             }
         })
 }
@@ -220,7 +212,7 @@ fn dock_definition() -> Value {
 fn dock_definition_with(mode: &str) -> Value {
     let mut definition = base_definition();
     let stage = stage_mut(&mut definition);
-    stage["receiveSignals"] = json!({ "START": "buyer::main.work.cmp" });
+    stage["receiveSignals"] = json!({ "START": "buyer::work.cmp" });
     stage["sendSignals"] = json!([{ "name": "str" }, { "name": "cmp" }]);
     stage["executor"] = json!({
         "supplierType": "zhixu",
@@ -237,13 +229,13 @@ fn dock_definition_with(mode: &str) -> Value {
 
 fn dock_config_mut(definition: &mut Value) -> &mut Value {
     definition
-        .pointer_mut("/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig")
+        .pointer_mut("/spec/stages/0/executor/zhixuExecutorConfig")
         .expect("dock definition has a zhixuExecutorConfig")
 }
 
 fn signal_map_mut(definition: &mut Value) -> &mut Value {
     definition
-        .pointer_mut("/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap")
+        .pointer_mut("/spec/stages/0/executor/zhixuExecutorConfig/signalMap")
         .expect("dock definition has a signalMap")
 }
 
@@ -263,7 +255,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    d["spec"]["taskPatterns"][0]["stages"][0]["fileResources"] = json!({
+                    d["spec"]["stages"][0]["fileResources"] = json!({
                         "rule_file": { "fileType": "s3", "localFile": { "path": "/tmp/x" } }
                     });
                     d
@@ -280,54 +272,29 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 probe_compile({
                     let mut d = base_definition();
                     stage_mut(&mut d)["receiveSignals"] = json!({
-                        "START": "buyer::main.work.cmp",
-                        "GO": "buyer::main.work.seed"
+                        "START": "buyer::work.cmp",
+                        "GO": "buyer::work.seed"
                     });
                     d["spec"]["dockInterface"] = json!({
                         "service": {
                             "orderModes": ["new"],
-                            "inputs": { "enter": { "hook": "main.work#GO" } }
+                            "inputs": { "enter": { "hook": "work#GO" } }
                         }
                     });
-                    d["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"] =
+                    d["spec"]["stages"][0]["sendSignals"] =
                         json!([{ "name": "str" }, { "name": "cmp" }, { "name": "seed" }]);
-                    d["spec"]["taskPatterns"][0]["stages"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(json!({
-                            "name": "retail",
-                            "source": "buyer",
-                            "mint": "per-fact",
-                            "receiveSignals": { "SPAWN": "::ANCHOR(@buyer::main.work.seed)" },
-                            "sendSignals": [{ "name": "ack" }],
-                            "executor": { "supplierType": "organization", "supplierID": "mint-org" }
-                        }));
+                    d["spec"]["stages"].as_array_mut().unwrap().push(json!({
+                        "name": "retail",
+                        "source": "buyer",
+                        "mint": "per-fact",
+                        "receiveSignals": { "SPAWN": "::ANCHOR(@buyer::work.seed)" },
+                        "sendSignals": [{ "name": "ack" }],
+                        "executor": { "supplierType": "organization", "supplierID": "mint-org" }
+                    }));
                     d
                 })
             },
             "出生通道键并集查重",
-        ),
-    ));
-    probes.push((
-        "task-patterns-max-count".into(),
-        (
-            || probe_compile(base_definition()),
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    let patterns: Vec<Value> = (0..65)
-                        .map(|i| {
-                            json!({ "name": format!("t{i}"), "stages": [
-                                { "name": "main", "source": "buyer", "executor":
-                                    { "supplierType": "organization", "supplierID": format!("org{i}") } }
-                            ] })
-                        })
-                        .collect();
-                    d["spec"]["taskPatterns"] = json!(patterns);
-                    d
-                })
-            },
-            "task patterns, limit is 64",
         ),
     ));
     probes.push((
@@ -343,11 +310,11 @@ fn rust_probes() -> Vec<(String, Probe)> {
                                 { "supplierType": "organization", "supplierID": format!("org{i}") } })
                         })
                         .collect();
-                    d["spec"]["taskPatterns"] = json!([{ "name": "bulk", "stages": stages }]);
+                    d["spec"]["stages"] = json!(stages);
                     d
                 })
             },
-            "stages across taskPatterns, limit is 256",
+            "spec.stages contains 257 stages, limit is 256",
         ),
     ));
     probes.push((
@@ -365,11 +332,11 @@ fn rust_probes() -> Vec<(String, Probe)> {
                                 "executor": { "supplierType": "organization", "supplierID": format!("org{i}") } })
                         })
                         .collect();
-                    d["spec"]["taskPatterns"] = json!([{ "name": "bulk", "stages": stages }]);
+                    d["spec"]["stages"] = json!(stages);
                     d
                 })
             },
-            "receiveSignals channels (compiled hooks) across taskPatterns, limit is 512",
+            "receiveSignals channels (compiled hooks) across spec.stages, limit is 512",
         ),
     ));
     probes.push((
@@ -380,13 +347,13 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 probe_compile({
                     let mut d = base_definition();
                     let hooks = serde_json::Map::from_iter(
-                        (0..65).map(|i| (format!("GO{i}"), json!(format!("buyer::main.work.cmp")))),
+                        (0..65).map(|i| (format!("GO{i}"), json!(format!("buyer::work.cmp")))),
                     );
                     stage_mut(&mut d)["receiveSignals"] = Value::Object(hooks);
                     let inputs = serde_json::Map::from_iter((0..65).map(|i| {
                         (
                             format!("execute{i}"),
-                            json!({ "hook": format!("main.work#GO{i}") }),
+                            json!({ "hook": format!("work#GO{i}") }),
                         )
                     }));
                     d["spec"]["dockInterface"] = json!({
@@ -420,8 +387,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    d["spec"]["taskPatterns"][0]["stages"][0]["executor"]["supplierID"] =
-                        json!("a".repeat(37));
+                    d["spec"]["stages"][0]["executor"]["supplierID"] = json!("a".repeat(37));
                     d
                 })
             },
@@ -519,7 +485,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    stage_mut(&mut d)["name"] = json!(oversize_ascii(100, b's'));
+                    stage_mut(&mut d)["name"] = json!(oversize_ascii(101, b's'));
                     d
                 })
             },
@@ -569,20 +535,6 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
     probes.push((
-        "task-pattern-name-charset".into(),
-        (
-            || probe_compile(base_definition()),
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    d["spec"]["taskPatterns"][0]["name"] = json!("1main");
-                    d
-                })
-            },
-            "must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'",
-        ),
-    ));
-    probes.push((
         "stage-name-charset".into(),
         (
             || probe_compile(base_definition()),
@@ -617,7 +569,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 let canonical = probe_compile({
                     let mut d = base_definition();
                     stage_mut(&mut d)["sendSignals"] =
-                        json!([{ "name": "cmp" }, { "name": "main.work.".to_string() + &"s".repeat(90) }]);
+                        json!([{ "name": "cmp" }, { "name": "work.".to_string() + &"s".repeat(95) }]);
                     d
                 });
                 assert_satisfy(canonical, "send-signal-combined-max-length(canonical)");
@@ -627,7 +579,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 let canonical_over = probe_compile({
                     let mut d = base_definition();
                     stage_mut(&mut d)["sendSignals"] =
-                        json!([{ "name": "cmp" }, { "name": "main.work.".to_string() + &"s".repeat(91) }]);
+                        json!([{ "name": "cmp" }, { "name": "work.".to_string() + &"s".repeat(96) }]);
                     d
                 });
                 assert_violate(
@@ -650,26 +602,20 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "receive-signals-key-max-length".into(),
         (
-            || probe_hook("evm_strict", "S", "buyer::task.main.cmp"),
-            || {
-                probe_hook(
-                    "evm_strict",
-                    &oversize_ascii(37, b'H'),
-                    "buyer::task.main.cmp",
-                )
-            },
+            || probe_hook("evm_strict", "S", "buyer::main.cmp"),
+            || probe_hook("evm_strict", &oversize_ascii(37, b'H'), "buyer::main.cmp"),
             "hook_name must be 1-36 characters",
         ),
     ));
     probes.push((
         "hook-source-class-max-length".into(),
         (
-            || probe_hook("evm_strict", "HOOK", "buyer::task.main.cmp"),
+            || probe_hook("evm_strict", "HOOK", "buyer::main.cmp"),
             || {
                 probe_hook(
                     "evm_strict",
                     "HOOK",
-                    &format!("{}::task.main.cmp", oversize_ascii(37, b'b')),
+                    &format!("{}::main.cmp", oversize_ascii(37, b'b')),
                 )
             },
             "hook source class exceeds the maximum length of 36",
@@ -678,26 +624,20 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "hook-source-class-charset".into(),
         (
-            || probe_hook("evm_strict", "HOOK", "buyer::task.main.cmp"),
-            || probe_hook("evm_strict", "HOOK", "buy er::task.main.cmp"),
+            || probe_hook("evm_strict", "HOOK", "buyer::main.cmp"),
+            || probe_hook("evm_strict", "HOOK", "buy er::main.cmp"),
             "hook source must be a plain identifier",
         ),
     ));
     probes.push((
         "subscription-target-source-max-length".into(),
         (
+            || probe_hook("cloud_compat", "SUB", "::ANCHOR(@seller::listing.cmp)"),
             || {
                 probe_hook(
                     "cloud_compat",
                     "SUB",
-                    "::ANCHOR(@seller::trade.listing.cmp)",
-                )
-            },
-            || {
-                probe_hook(
-                    "cloud_compat",
-                    "SUB",
-                    &format!("::ANCHOR(@{}::task.main.cmp)", oversize_ascii(37, b's')),
+                    &format!("::ANCHOR(@{}::main.cmp)", oversize_ascii(37, b's')),
                 )
             },
             "subscription source exceeds the maximum length of 36",
@@ -706,18 +646,12 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "subscription-target-signal-max-length".into(),
         (
+            || probe_hook("cloud_compat", "SUB", "::ANCHOR(@seller::listing.cmp)"),
             || {
                 probe_hook(
                     "cloud_compat",
                     "SUB",
-                    "::ANCHOR(@seller::trade.listing.cmp)",
-                )
-            },
-            || {
-                probe_hook(
-                    "cloud_compat",
-                    "SUB",
-                    &format!("::ANCHOR(@seller::task.main.{})", oversize_ascii(101, b'a')),
+                    &format!("::ANCHOR(@seller::main.{})", oversize_ascii(101, b'a')),
                 )
             },
             "subscription target signal exceeds the maximum length of 100",
@@ -726,8 +660,8 @@ fn rust_probes() -> Vec<(String, Probe)> {
     probes.push((
         "hook-delay-seconds-range".into(),
         (
-            || probe_hook("evm_strict", "TIMEOUT", "buyer::(task.pay.cmp +2592000s)"),
-            || probe_hook("evm_strict", "TIMEOUT", "buyer::(task.pay.cmp +2592001s)"),
+            || probe_hook("evm_strict", "TIMEOUT", "buyer::(pay.cmp +2592000s)"),
+            || probe_hook("evm_strict", "TIMEOUT", "buyer::(pay.cmp +2592001s)"),
             "exceeds the maximum allowed delay of 2592000s",
         ),
     ));
@@ -814,11 +748,9 @@ fn rust_probes() -> Vec<(String, Probe)> {
                     stage["name"] = json!(long_stage);
                     stage["sendSignals"] = json!([]);
                     stage["receiveSignals"] =
-                        json!({ "START": format!("buyer::main.{long_stage}.cmp") });
-                    d.pointer_mut(
-                        "/spec/taskPatterns/0/stages/0/executor/zhixuExecutorConfig/signalMap",
-                    )
-                    .expect("signalMap path")["s12345"] = json!("done");
+                        json!({ "START": format!("buyer::{long_stage}.cmp") });
+                    d.pointer_mut("/spec/stages/0/executor/zhixuExecutorConfig/signalMap")
+                        .expect("signalMap path")["s12345"] = json!("done");
                     d
                 })
             },
@@ -849,7 +781,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 probe_compile({
                     let mut d = dock_definition();
                     let stage = stage_mut(&mut d);
-                    stage["receiveSignals"]["ALSO"] = json!("buyer::main.work.cmp");
+                    stage["receiveSignals"]["ALSO"] = json!("buyer::work.cmp");
                     dock_config_mut(&mut d)["inputMap"]["ALSO"] = json!("execute");
                     d
                 })
@@ -905,8 +837,8 @@ fn rust_probes() -> Vec<(String, Probe)> {
             || {
                 probe_compile({
                     let mut d = target_interface_definition();
-                    d["spec"]["taskPatterns"][0]["stages"][0]["receiveSignals"]["DOCK_ENTER"] =
-                        json!("buyer::main.work.enter & buyer::main.work.enter");
+                    d["spec"]["stages"][0]["receiveSignals"]["DOCK_ENTER"] =
+                        json!("buyer::work.enter & buyer::work.enter");
                     d
                 })
             },

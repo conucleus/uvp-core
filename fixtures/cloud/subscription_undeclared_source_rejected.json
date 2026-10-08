@@ -16,45 +16,35 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "orchard",
-          "stages": [
+          "name": "gate",
+          "source": "farmer",
+          "sendSignals": [
             {
-              "name": "gate",
-              "source": "farmer",
-              "sendSignals": [
-                {
-                  "name": "picked"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "farmer-org"
-              }
+              "name": "picked"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "farmer-org"
+          }
         },
         {
-          "name": "market",
-          "stages": [
+          "name": "watch",
+          "source": "buyer",
+          "receiveSignals": {
+            "PICK": "::ANCHOR(@ghost::gate.picked)"
+          },
+          "sendSignals": [
             {
-              "name": "watch",
-              "source": "buyer",
-              "receiveSignals": {
-                "PICK": "::ANCHOR(@ghost::orchard.gate.picked)"
-              },
-              "sendSignals": [
-                {
-                  "name": "seen"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "market-org"
-              }
+              "name": "seen"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "market-org"
+          }
         }
       ]
     }

@@ -342,13 +342,13 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &ZhixuSendSignal
     let target_signal_name = if declared_signal.contains('.') {
         if !valid_signal_declaration(declared_signal) {
             return Err(CompilerError::Issues(format!(
-                "{}.sendSignals contains invalid canonical signal {:?}: expected task.stage.signal with identifier-grammar segments",
+                "{}.sendSignals contains invalid canonical signal {:?}: expected stage.signal with identifier-grammar segments",
                 entry.stage_identifier, declared_signal
             )));
         }
         if !declared_signal.starts_with(&format!("{}.", entry.stage_identifier)) {
             return Err(CompilerError::Issues(format!(
-                "{}.sendSignals contains canonical signal {:?} that does not address the declaring stage: expected {}.<signal> (the three-part form is an explicit self-reference; bare names expand to the same capability)",
+                "{}.sendSignals contains canonical signal {:?} that does not address the declaring stage: expected {}.<signal> (the two-part form is an explicit self-reference; bare names expand to the same capability)",
                 entry.stage_identifier, declared_signal, entry.stage_identifier
             )));
         }

@@ -458,7 +458,7 @@ pub(crate) fn contains_nested_subscription(expr: &Expr) -> bool {
 
 pub(crate) fn is_strict_signal_ref(value: &str) -> bool {
     let parts = value.split('.').collect::<Vec<_>>();
-    parts.len() == 3 && parts.iter().all(|part| !part.is_empty())
+    parts.len() == 2 && parts.iter().all(|part| !part.is_empty())
 }
 
 pub fn valid_signal_identity(value: &str) -> bool {

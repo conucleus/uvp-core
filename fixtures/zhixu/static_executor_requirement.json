@@ -16,71 +16,61 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "trade",
-          "stages": [
+          "name": "listing",
+          "source": "seller",
+          "receiveSignals": {
+            "PUBLISH": "seller::listing.seed"
+          },
+          "sendSignals": [
             {
-              "name": "listing",
-              "source": "seller",
-              "receiveSignals": {
-                "PUBLISH": "seller::trade.listing.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "seller-org"
-              }
+              "name": "cmp"
             },
             {
-              "name": "intent",
-              "source": "buyer",
-              "receiveSignals": {
-                "PUBLISH": "buyer::trade.intent.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "buyer-org"
-              }
+              "name": "seed"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "seller-org"
+          }
         },
         {
-          "name": "market",
-          "stages": [
+          "name": "intent",
+          "source": "buyer",
+          "receiveSignals": {
+            "PUBLISH": "buyer::intent.seed"
+          },
+          "sendSignals": [
             {
-              "name": "pool",
-              "source": "buyer",
-              "receiveSignals": {
-                "MATCH_SELLER": "::ANCHOR(@seller::trade.listing.cmp)",
-                "MATCH_BUYER": "::ANCHOR(@buyer::trade.intent.cmp)"
-              },
-              "sendSignals": [
-                {
-                  "name": "matched"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "market-org"
-              }
+              "name": "cmp"
+            },
+            {
+              "name": "seed"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "buyer-org"
+          }
+        },
+        {
+          "name": "pool",
+          "source": "buyer",
+          "receiveSignals": {
+            "MATCH_SELLER": "::ANCHOR(@seller::listing.cmp)",
+            "MATCH_BUYER": "::ANCHOR(@buyer::intent.cmp)"
+          },
+          "sendSignals": [
+            {
+              "name": "matched"
+            }
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "market-org"
+          }
         }
       ]
     }
@@ -88,16 +78,16 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "market.pool#MATCH_BUYER",
-      "market.pool#MATCH_SELLER",
-      "trade.intent#PUBLISH",
-      "trade.listing#PUBLISH"
+      "intent#PUBLISH",
+      "listing#PUBLISH",
+      "pool#MATCH_BUYER",
+      "pool#MATCH_SELLER"
     ],
     "hookDependencyCounts": {
-      "market.pool#MATCH_BUYER": 1,
-      "market.pool#MATCH_SELLER": 1,
-      "trade.intent#PUBLISH": 1,
-      "trade.listing#PUBLISH": 1
+      "intent#PUBLISH": 1,
+      "listing#PUBLISH": 1,
+      "pool#MATCH_BUYER": 1,
+      "pool#MATCH_SELLER": 1
     }
   }
 }

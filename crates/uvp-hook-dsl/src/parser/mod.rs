@@ -158,7 +158,7 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
     validate_subscription_position(&condition, true)?;
     if matches!(condition, Expr::Subscription { .. }) && !source.is_empty() {
         return Err(HookError::Message(
-            "subscription entries must use an empty source header: ::ANCHOR(@source::task.stage.signal)"
+            "subscription entries must use an empty source header: ::ANCHOR(@source::stage.signal)"
                 .to_string(),
         ));
     }
@@ -337,7 +337,7 @@ impl<'a> Parser<'a> {
             _ => {
                 if !is_strict_signal_ref(&ident) {
                     return Err(HookError::Message(format!(
-                        "signal reference must use task.stage.signal: {ident}"
+                        "signal reference must use stage.signal: {ident}"
                     )));
                 }
                 self.spans
@@ -363,12 +363,12 @@ impl<'a> Parser<'a> {
         let target_raw = self.read_balanced_target()?;
         let target = target_raw.strip_prefix('@').ok_or_else(|| {
             HookError::Message(format!(
-                "subscription target must be @source::task.stage.signal: {target_raw:?}"
+                "subscription target must be @source::stage.signal: {target_raw:?}"
             ))
         })?;
         let (source, signal) = target.split_once("::").ok_or_else(|| {
             HookError::Message(format!(
-                "subscription target must be @source::task.stage.signal: {target_raw:?}"
+                "subscription target must be @source::stage.signal: {target_raw:?}"
             ))
         })?;
         if !is_plain_identifier(source) {
@@ -387,9 +387,9 @@ impl<'a> Parser<'a> {
             )));
         }
         let segments = signal.split('.').collect::<Vec<_>>();
-        if segments.len() != 3 || !segments.iter().all(|part| is_plain_identifier(part)) {
+        if segments.len() != 2 || !segments.iter().all(|part| is_plain_identifier(part)) {
             return Err(HookError::Message(format!(
-                "subscription target must use task.stage.signal: {signal:?}"
+                "subscription target must use stage.signal: {signal:?}"
             )));
         }
         self.spans

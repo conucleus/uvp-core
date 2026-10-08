@@ -16,27 +16,22 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "settle",
-          "stages": [
+          "name": "pay",
+          "source": "buyer",
+          "receiveSignals": {
+            "SETTLE": "buyer::pay.done"
+          },
+          "sendSignals": [
             {
-              "name": "pay",
-              "source": "buyer",
-              "receiveSignals": {
-                "SETTLE": "buyer::settle.pay.done"
-              },
-              "sendSignals": [
-                {
-                  "name": "done"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-a"
-              }
+              "name": "done"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-a"
+          }
         }
       ]
     }
@@ -44,7 +39,7 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "settle.pay#SETTLE"
+      "pay#SETTLE"
     ]
   }
 }

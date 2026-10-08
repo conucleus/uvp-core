@@ -1,11 +1,11 @@
-use serde_json::json;
 use crate::{mc_check, CheckKind, Manifest, McCheckRequest, Status};
+use serde_json::json;
 
 fn demo_definition(with_timer: bool) -> serde_json::Value {
     let release_hook = if with_timer {
-        json!("buyer::deal.escrow.held +5s & ~deal.escrow.returned & ~deal.escrow.released")
+        json!("buyer::escrow.held +5s & ~escrow.returned & ~escrow.released")
     } else {
-        json!("buyer::deal.escrow.release & ~deal.escrow.returned & ~deal.escrow.released")
+        json!("buyer::escrow.release & ~escrow.returned & ~escrow.released")
     };
     json!({
         "apiVersion": "uvp/v0",
@@ -14,33 +14,30 @@ fn demo_definition(with_timer: bool) -> serde_json::Value {
         "spec": {
             "platform": {"type": "cloud"},
             "nucleation": {"id": "core_org"},
-            "taskPatterns": [{
-                "name": "deal",
-                "stages": [{
+            "stages": [{
                     "name": "escrow",
                     "source": "buyer",
                     "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
                     "sendSignals": [
                         {"name": "held"},
                         {"name": "release", "validWhen": [
-                            "buyer::deal.escrow.held",
-                            "buyer::~deal.escrow.released",
-                            "buyer::~deal.escrow.returned"
+                            "buyer::escrow.held",
+                            "buyer::~escrow.released",
+                            "buyer::~escrow.returned"
                         ]},
                         {"name": "released"},
                         {"name": "refund", "validWhen": [
-                            "buyer::deal.escrow.held",
-                            "buyer::~deal.escrow.released",
-                            "buyer::~deal.escrow.returned"
+                            "buyer::escrow.held",
+                            "buyer::~escrow.released",
+                            "buyer::~escrow.returned"
                         ]},
                         {"name": "returned"}
                     ],
                     "receiveSignals": {
                         "AUTO_RELEASE": release_hook,
-                        "RETURN": "buyer::deal.escrow.refund & ~deal.escrow.returned & ~deal.escrow.released"
+                        "RETURN": "buyer::escrow.refund & ~escrow.returned & ~escrow.released"
                     }
                 }]
-            }]
         }
     })
 }
@@ -48,8 +45,8 @@ fn demo_definition(with_timer: bool) -> serde_json::Value {
 fn demo_manifest(with_effects: bool) -> Manifest {
     let effects = if with_effects {
         json!([
-            {"fact": "buyer::deal.escrow.released", "requires_any_guards": ["deal.escrow#AUTO_RELEASE"]},
-            {"fact": "buyer::deal.escrow.returned", "requires_any_guards": ["deal.escrow#RETURN"]}
+            {"fact": "buyer::escrow.released", "requires_any_guards": ["escrow#AUTO_RELEASE"]},
+            {"fact": "buyer::escrow.returned", "requires_any_guards": ["escrow#RETURN"]}
         ])
     } else {
         json!([])
@@ -61,29 +58,29 @@ fn demo_manifest(with_effects: bool) -> Manifest {
             {
                 "id": "terminal-mutex",
                 "kind": "bad_state",
-                "predicate": "buyer::deal.escrow.released & deal.escrow.returned"
+                "predicate": "buyer::escrow.released & escrow.returned"
             },
             {
                 "id": "terminal-closes-intents",
                 "kind": "admission_closed",
-                "when": "buyer::deal.escrow.released | deal.escrow.returned",
-                "intents": ["buyer::deal.escrow.release", "buyer::deal.escrow.refund"]
+                "when": "buyer::escrow.released | escrow.returned",
+                "intents": ["buyer::escrow.release", "buyer::escrow.refund"]
             },
             {
                 "id": "held-can-progress",
                 "kind": "deadlock_free",
-                "when": "buyer::deal.escrow.held & ~deal.escrow.released & ~deal.escrow.returned"
+                "when": "buyer::escrow.held & ~escrow.released & ~escrow.returned"
             },
             {
                 "id": "terminal-reachable",
                 "kind": "coreach",
-                "predicate": "buyer::deal.escrow.released | deal.escrow.returned"
+                "predicate": "buyer::escrow.released | escrow.returned"
             },
             {
                 "id": "time-settles-held",
                 "kind": "time_only_closure",
-                "when": "buyer::deal.escrow.held & ~deal.escrow.released & ~deal.escrow.returned",
-                "predicate": "buyer::deal.escrow.released | deal.escrow.returned"
+                "when": "buyer::escrow.held & ~escrow.released & ~escrow.returned",
+                "predicate": "buyer::escrow.released | escrow.returned"
             }
         ]
     });
@@ -91,7 +88,11 @@ fn demo_manifest(with_effects: bool) -> Manifest {
 }
 
 fn run(definition: serde_json::Value, manifest: Manifest) -> crate::McCheckReport {
-    mc_check(McCheckRequest { definition, manifest }).expect("demo check should run")
+    mc_check(McCheckRequest {
+        definition,
+        manifest,
+    })
+    .expect("demo check should run")
 }
 
 #[test]
@@ -113,8 +114,8 @@ fn sound_demo_passes_all_check_kinds() {
 #[test]
 fn missing_terminal_negative_gate_fails_admission_closure() {
     let mut definition = demo_definition(true);
-    let signals = &mut definition["spec"]["taskPatterns"][0]["stages"][0]["sendSignals"];
-    signals[1]["validWhen"] = json!(["buyer::deal.escrow.held"]);
+    let signals = &mut definition["spec"]["stages"][0]["sendSignals"];
+    signals[1]["validWhen"] = json!(["buyer::escrow.held"]);
     let report = run(definition, demo_manifest(true));
     let outcome = report
         .checks

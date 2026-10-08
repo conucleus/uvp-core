@@ -16,65 +16,60 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "pipeline",
-          "stages": [
+          "name": "one",
+          "source": "buyer",
+          "receiveSignals": {
+            "RUN": "buyer::one.seed"
+          },
+          "sendSignals": [
             {
-              "name": "one",
-              "source": "buyer",
-              "receiveSignals": {
-                "RUN": "buyer::pipeline.one.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "done"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-a"
-              }
+              "name": "done"
             },
             {
-              "name": "two",
-              "source": "buyer",
-              "receiveSignals": {
-                "RUN": "buyer::pipeline.two.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "done"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-b"
-              }
-            },
-            {
-              "name": "three",
-              "source": "buyer",
-              "receiveSignals": {
-                "FINISH": "buyer::(pipeline.one.done & pipeline.two.done)"
-              },
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-c"
-              }
+              "name": "seed"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-a"
+          }
+        },
+        {
+          "name": "two",
+          "source": "buyer",
+          "receiveSignals": {
+            "RUN": "buyer::two.seed"
+          },
+          "sendSignals": [
+            {
+              "name": "done"
+            },
+            {
+              "name": "seed"
+            }
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-b"
+          }
+        },
+        {
+          "name": "three",
+          "source": "buyer",
+          "receiveSignals": {
+            "FINISH": "buyer::(one.done & two.done)"
+          },
+          "sendSignals": [
+            {
+              "name": "cmp"
+            }
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-c"
+          }
         }
       ]
     }
@@ -82,14 +77,14 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "pipeline.one#RUN",
-      "pipeline.three#FINISH",
-      "pipeline.two#RUN"
+      "one#RUN",
+      "three#FINISH",
+      "two#RUN"
     ],
     "hookDependencyCounts": {
-      "pipeline.one#RUN": 1,
-      "pipeline.three#FINISH": 2,
-      "pipeline.two#RUN": 1
+      "one#RUN": 1,
+      "three#FINISH": 2,
+      "two#RUN": 1
     }
   }
 }

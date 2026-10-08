@@ -16,21 +16,16 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "market",
-          "stages": [
+          "name": "loose",
+          "source": "buyer",
+          "receiveSignals": {
+            "MATCH": "buyer::market.pool.matched"
+          },
+          "sendSignals": [
             {
-              "name": "loose",
-              "source": "buyer",
-              "receiveSignals": {
-                "MATCH": "buyer::market.pool.matched"
-              },
-              "sendSignals": [
-                {
-                  "name": "ack"
-                }
-              ]
+              "name": "ack"
             }
           ]
         }

@@ -16,51 +16,41 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "supply",
-          "stages": [
+          "name": "listing",
+          "source": "seller",
+          "receiveSignals": {
+            "PUBLISH": "seller::listing.seed"
+          },
+          "sendSignals": [
             {
-              "name": "listing",
-              "source": "seller",
-              "receiveSignals": {
-                "PUBLISH": "seller::supply.listing.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "listing_ready"
-                },
-                {
-                  "name": "seed"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "seller-org"
-              }
+              "name": "listing_ready"
+            },
+            {
+              "name": "seed"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "seller-org"
+          }
         },
         {
-          "name": "demand",
-          "stages": [
+          "name": "watch",
+          "source": "buyer",
+          "receiveSignals": {
+            "WATCH": "seller::listing.listing_ready"
+          },
+          "sendSignals": [
             {
-              "name": "watch",
-              "source": "buyer",
-              "receiveSignals": {
-                "WATCH": "seller::supply.listing.listing_ready"
-              },
-              "sendSignals": [
-                {
-                  "name": "ack"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "buyer-org"
-              }
+              "name": "ack"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "buyer-org"
+          }
         }
       ]
     }
@@ -68,12 +58,12 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "demand.watch#WATCH",
-      "supply.listing#PUBLISH"
+      "listing#PUBLISH",
+      "watch#WATCH"
     ],
     "hookDependencyCounts": {
-      "demand.watch#WATCH": 1,
-      "supply.listing#PUBLISH": 1
+      "listing#PUBLISH": 1,
+      "watch#WATCH": 1
     }
   }
 }

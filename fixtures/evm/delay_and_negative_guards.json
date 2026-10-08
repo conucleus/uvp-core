@@ -18,30 +18,25 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "settle",
-          "stages": [
+          "name": "pay",
+          "source": "buyer",
+          "receiveSignals": {
+            "PAY": "buyer::(pay.done +5s) & ~pay.refunded"
+          },
+          "sendSignals": [
             {
-              "name": "pay",
-              "source": "buyer",
-              "receiveSignals": {
-                "PAY": "buyer::(settle.pay.done +5s) & ~settle.pay.refunded"
-              },
-              "sendSignals": [
-                {
-                  "name": "done"
-                },
-                {
-                  "name": "refunded"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "chain-org"
-              }
+              "name": "done"
+            },
+            {
+              "name": "refunded"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "chain-org"
+          }
         }
       ]
     }
@@ -49,10 +44,10 @@
   "expect": {
     "platform": "evm",
     "hookIds": [
-      "settle.pay#PAY"
+      "pay#PAY"
     ],
     "hookDependencyCounts": {
-      "settle.pay#PAY": 3
+      "pay#PAY": 3
     }
   }
 }

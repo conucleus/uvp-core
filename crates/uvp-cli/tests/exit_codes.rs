@@ -43,7 +43,7 @@ fn input_side_errors_exit_nonzero_with_envelope() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("panic"), "must not panic: {stderr}");
 
-    let output = run(&["lint-hook", "--profile", "bogus", "buyer::flow.main.a"]);
+    let output = run(&["lint-hook", "--profile", "bogus", "buyer::main.a"]);
     assert!(
         !output.status.success(),
         "unknown profile must exit non-zero"
@@ -58,7 +58,7 @@ fn input_side_errors_exit_nonzero_with_envelope() {
         "lint-hook",
         "--profile",
         "x\", \"hook\": \"y",
-        "buyer::flow.main.a",
+        "buyer::main.a",
     ]);
     assert!(
         !output.status.success(),
@@ -69,12 +69,7 @@ fn input_side_errors_exit_nonzero_with_envelope() {
         serde_json::from_str(stdout.trim()).expect("stdout stays a parseable envelope");
     assert_eq!(envelope["ok"], serde_json::Value::Bool(false));
 
-    let output = run(&[
-        "lint-hook",
-        "--profile",
-        "cloud_compat",
-        "buyer::flow.main.a",
-    ]);
+    let output = run(&["lint-hook", "--profile", "cloud_compat", "buyer::main.a"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"ok\":true"), "{stdout}");
@@ -94,18 +89,16 @@ spec:
     type: cloud
   nucleation:
     id: core
-  taskPatterns:
-    - name: flow
-      stages:
-        - name: main
-          source: buyer
-          sendSignals:
-            - name: a
-          receiveSignals:
-            DUP: "buyer::flow.main.a & flow.main.a"
-          executor:
-            supplierType: organization
-            supplierID: org-lint
+  stages:
+    - name: main
+      source: buyer
+      sendSignals:
+        - name: a
+      receiveSignals:
+        DUP: "buyer::main.a & main.a"
+      executor:
+        supplierType: organization
+        supplierID: org-lint
 "#,
     )
     .expect("write fixture yaml");
@@ -152,11 +145,11 @@ spec:
         serde_json::Value::String("UVP-L001".to_string())
     );
 
-    let output = run(&["lint-hook", "buyer::flow.main.a & flow.main.a"]);
+    let output = run(&["lint-hook", "buyer::main.a & main.a"]);
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("UVP-L001"));
 
-    let output = run(&["lint-hook", "buyer::flow.main.a | ~flow.main.a"]);
+    let output = run(&["lint-hook", "buyer::main.a | ~main.a"]);
     assert!(
         !output.status.success(),
         "semantic rejection must exit non-zero"

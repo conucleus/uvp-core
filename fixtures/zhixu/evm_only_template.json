@@ -18,27 +18,22 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "escrow",
-          "stages": [
+          "name": "hold",
+          "source": "buyer",
+          "receiveSignals": {
+            "LOCK": "buyer::hold.locked"
+          },
+          "sendSignals": [
             {
-              "name": "hold",
-              "source": "buyer",
-              "receiveSignals": {
-                "LOCK": "buyer::escrow.hold.locked"
-              },
-              "sendSignals": [
-                {
-                  "name": "locked"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "chain-org"
-              }
+              "name": "locked"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "chain-org"
+          }
         }
       ]
     }
@@ -46,7 +41,7 @@
   "expect": {
     "platform": "evm",
     "hookIds": [
-      "escrow.hold#LOCK"
+      "hold#LOCK"
     ]
   }
 }

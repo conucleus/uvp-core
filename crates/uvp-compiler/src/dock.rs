@@ -611,7 +611,7 @@ pub fn compile_dock_interface(
                     "D022",
                     format!("{path}.hook"),
                     format!(
-                        "hook must be <task>.<stage>#<receiveHookName>, found {:?}",
+                        "hook must be <stage>#<receiveHookName>, found {:?}",
                         port.hook
                     ),
                 ));
@@ -739,7 +739,7 @@ pub fn compile_dock_interface(
                     "D014",
                     format!("{path}.signal"),
                     format!(
-                        "signal must be <source>::<task>.<stage>.<signal>, found {:?}",
+                        "signal must be <source>::<stage>.<signal>, found {:?}",
                         port.signal
                     ),
                 ));
@@ -846,27 +846,30 @@ pub fn entrance_hook_ids(interfaces: &[InterfaceDeclaration]) -> BTreeSet<String
 }
 
 fn parse_hook_reference(reference: &str) -> Option<(String, String)> {
-    let (stage_part, hook_name) = reference.split_once('#')?;
+    let (stage_identifier, hook_name) = reference.split_once('#')?;
     if hook_name.is_empty() || hook_name.contains('#') || hook_name.contains('.') {
         return None;
     }
-    let parts: Vec<&str> = stage_part.split('.').collect();
-    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+    if stage_identifier.is_empty() || stage_identifier.contains('.') {
         return None;
     }
-    Some((stage_part.to_string(), hook_name.to_string()))
+    Some((stage_identifier.to_string(), hook_name.to_string()))
 }
 
 fn parse_canonical_signal(signal: &str) -> Option<(String, String, String)> {
     let (source, rest) = signal.split_once("::")?;
-    let parts: Vec<&str> = rest.split('.').collect();
-    if parts.len() != 3 || source.is_empty() || parts.iter().any(|part| part.is_empty()) {
+    let (stage_identifier, signal_name) = rest.split_once('.')?;
+    if source.is_empty()
+        || stage_identifier.is_empty()
+        || signal_name.is_empty()
+        || signal_name.contains('.')
+    {
         return None;
     }
     Some((
         source.to_string(),
-        format!("{}.{}", parts[0], parts[1]),
-        parts[2].to_string(),
+        stage_identifier.to_string(),
+        signal_name.to_string(),
     ))
 }
 
@@ -884,21 +887,19 @@ pub struct DockTargets {
 
 fn extract_static_target_uids(definition: &uvp_model::ZhixuDefinition) -> Vec<String> {
     let mut edges = Vec::new();
-    for pattern in &definition.spec.task_patterns {
-        for stage in &pattern.stages {
-            let Some(executor) = &stage.executor else {
-                continue;
-            };
-            let Some(config) = &executor.zhixu_executor_config else {
-                continue;
-            };
-            if let Some(uid) = config
-                .get("target")
-                .and_then(|target| target.get("zhixu"))
-                .and_then(Value::as_str)
-            {
-                edges.push(uid.to_string());
-            }
+    for stage in &definition.spec.stages {
+        let Some(executor) = &stage.executor else {
+            continue;
+        };
+        let Some(config) = &executor.zhixu_executor_config else {
+            continue;
+        };
+        if let Some(uid) = config
+            .get("target")
+            .and_then(|target| target.get("zhixu"))
+            .and_then(Value::as_str)
+        {
+            edges.push(uid.to_string());
         }
     }
     edges
@@ -996,9 +997,16 @@ pub fn parse_dock_targets(value: &Value) -> DockResult<DockTargets> {
         }
 
         let mut stages_by_identifier: BTreeMap<String, &ZhixuStage> = BTreeMap::new();
-        for pattern in &definition.spec.task_patterns {
-            for stage in &pattern.stages {
-                stages_by_identifier.insert(format!("{}.{}", pattern.name, stage.name), stage);
+        for stage in &definition.spec.stages {
+            if stages_by_identifier
+                .insert(stage.name.clone(), stage)
+                .is_some()
+            {
+                issues.push(DockIssue::new(
+                    "D008",
+                    format!("{path}.definition"),
+                    format!("duplicate stage {}", stage.name),
+                ));
             }
         }
         let mut interfaces = Vec::new();
@@ -1043,7 +1051,7 @@ pub fn parse_dock_targets(value: &Value) -> DockResult<DockTargets> {
                         "D008",
                         format!("{interface_path}.inputs.{port_name}.hook"),
                         format!(
-                            "hook must be <task>.<stage>#<receiveHookName>, found {:?}",
+                            "hook must be <stage>#<receiveHookName>, found {:?}",
                             port.hook
                         ),
                     ));
@@ -1081,7 +1089,7 @@ pub fn parse_dock_targets(value: &Value) -> DockResult<DockTargets> {
                         "D008",
                         format!("{interface_path}.outputs.{port_name}.signal"),
                         format!(
-                            "signal must be <source>::<task>.<stage>.<signal>, found {:?}",
+                            "signal must be <source>::<stage>.<signal>, found {:?}",
                             port.signal
                         ),
                     ));
@@ -1454,7 +1462,7 @@ mod tests {
             "spec": {
                 "platform": { "type": "cloud" },
                 "nucleation": { "id": "target-core" },
-                "taskPatterns": [{ "name": "main", "stages": stages }],
+                "stages": stages,
                 "dockInterface": dock_interface,
             }
         })
@@ -1464,7 +1472,7 @@ mod tests {
         json!({ "uid": TARGET_UID, "definition": definition })
     }
 
-    fn two_pattern_document_with_same_stage_names() -> Value {
+    fn duplicate_bare_stage_name_document() -> Value {
         json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
@@ -1472,13 +1480,10 @@ mod tests {
             "spec": {
                 "platform": { "type": "cloud" },
                 "nucleation": { "id": "wwt-core" },
-                "taskPatterns": [
-                    { "name": "treat", "stages": [plain_stage("main", "wwt")] },
-                    { "name": "bc", "stages": [plain_stage("main", "dyeing")] },
-                ],
+                "stages": [plain_stage("main", "wwt"), plain_stage("main", "dyeing")],
                 "dockInterface": { "svc": interface_spec(
                     json!(["existing"]),
-                    json!({ "amend": { "hook": "treat.main#DOCK_AMEND" } }),
+                    json!({ "amend": { "hook": "main#DOCK_AMEND" } }),
                     json!({}),
                 ) },
             }
@@ -1486,14 +1491,15 @@ mod tests {
     }
 
     #[test]
-    fn dock_target_input_source_survives_duplicate_bare_stage_names() {
-        let targets = json!([target_entry(two_pattern_document_with_same_stage_names())]);
-        let parsed = parse_dock_targets(&targets).expect("duplicate bare stage names parse");
-        let inputs = &parsed.targets[0].interfaces[0].inputs;
-        assert_eq!(inputs.len(), 1);
-        assert_eq!(
-            inputs[0].source, "wwt",
-            "seam must follow the qualified owning stage"
+    fn dock_targets_reject_duplicate_bare_stage_names() {
+        let targets = json!([target_entry(duplicate_bare_stage_name_document())]);
+        let issues =
+            parse_dock_targets(&targets).expect_err("duplicate bare stage names must be rejected");
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "D008" && issue.message.contains("duplicate stage main")),
+            "{issues:?}"
         );
     }
 
@@ -1529,7 +1535,7 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["new"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
                     json!({}),
                 )
             }),
@@ -1657,7 +1663,7 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["new"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
                     json!({}),
                 )
             }),
@@ -1674,10 +1680,10 @@ mod tests {
                 "svc": interface_spec(
                     json!(["existing"]),
                     json!({
-                        "execute": { "hook": "main.work#DOCK_ENTER" },
-                        "audit": { "hook": "main.audit#DOCK_AUDIT" },
+                        "execute": { "hook": "work#DOCK_ENTER" },
+                        "audit": { "hook": "audit#DOCK_AUDIT" },
                     }),
-                    json!({ "done": { "signal": "buyer::main.work.cmp" } }),
+                    json!({ "done": { "signal": "buyer::work.cmp" } }),
                 )
             }),
         ))]);
@@ -1695,7 +1701,7 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["existing"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
                     json!({}),
                 )
             }),
@@ -1708,7 +1714,7 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["new"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
                     json!({}),
                 )
             }),
@@ -1734,9 +1740,7 @@ mod tests {
                 "spec": {
                     "platform": { "type": "cloud" },
                     "nucleation": { "id": "target-core" },
-                    "taskPatterns": [
-                        { "name": "main", "stages": [{ "name": "work", "source": "buyer" }] }
-                    ],
+                    "stages": [{ "name": "work", "source": "buyer" }],
                 }
             }
         }]);
@@ -1782,7 +1786,7 @@ mod tests {
     fn dock_targets_reject_invalid_port_names() {
         let mut definition = minimal_definition();
         definition["spec"]["dockInterface"]["svc"]["inputs"]["Bad-Port"] =
-            json!({ "hook": "main.work#DOCK_ENTER" });
+            json!({ "hook": "work#DOCK_ENTER" });
         let issues = parse_dock_targets(&json!([target_entry(definition)])).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
@@ -1795,7 +1799,7 @@ mod tests {
 
         let mut definition = minimal_definition();
         definition["spec"]["dockInterface"]["svc"]["outputs"]["Bad-Port"] =
-            json!({ "signal": "buyer::main.work.cmp" });
+            json!({ "signal": "buyer::work.cmp" });
         let issues = parse_dock_targets(&json!([target_entry(definition)])).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
@@ -1864,7 +1868,7 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["new"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
                     json!({}),
                 )
             }),
@@ -1872,11 +1876,11 @@ mod tests {
         let parsed = parse_dock_targets(&base).expect("derivable source parses");
         let input = &parsed.targets[0].interfaces[0].inputs[0];
         assert_eq!(input.source, "buyer");
-        assert_eq!(input.hook, "main.work#DOCK_ENTER");
+        assert_eq!(input.hook, "work#DOCK_ENTER");
 
         let mut ghost = minimal_definition();
         ghost["spec"]["dockInterface"]["svc"]["inputs"]["execute"]["hook"] =
-            json!("main.ghost#DOCK_ENTER");
+            json!("ghost#DOCK_ENTER");
         let issues = parse_dock_targets(&json!([target_entry(ghost)])).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
@@ -1889,13 +1893,13 @@ mod tests {
         );
 
         let mut malformed = minimal_definition();
-        malformed["spec"]["dockInterface"]["svc"]["inputs"]["execute"]["hook"] = json!("main.work");
+        malformed["spec"]["dockInterface"]["svc"]["inputs"]["execute"]["hook"] = json!("work");
         let issues = parse_dock_targets(&json!([target_entry(malformed)])).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
                 && issue
                     .message
-                    .contains("hook must be <task>.<stage>#<receiveHookName>")),
+                    .contains("hook must be <stage>#<receiveHookName>")),
             "{issues:?}"
         );
 
@@ -1912,7 +1916,7 @@ mod tests {
     #[test]
     fn link_rejects_cross_source_seams_from_both_sides() {
         let unlinked = vec![UnlinkedDockRoute {
-            stage_identifier: "local.stage".to_string(),
+            stage_identifier: "stage".to_string(),
             stage_source: "local-src".to_string(),
             config: ZhixuExecutorConfig {
                 target_uid: Some(TARGET_UID.to_string()),
@@ -1928,7 +1932,7 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["new"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
                     json!({}),
                 )
             }),
@@ -1943,8 +1947,8 @@ mod tests {
                 "svc": interface_spec(
                     json!(["new", "existing"]),
                     json!({
-                        "execute": { "hook": "main.work#DOCK_ENTER" },
-                        "audit": { "hook": "main.audit#DOCK_AUDIT" },
+                        "execute": { "hook": "work#DOCK_ENTER" },
+                        "audit": { "hook": "audit#DOCK_AUDIT" },
                     }),
                     json!({}),
                 )
@@ -1955,7 +1959,7 @@ mod tests {
             .expect("unbound cross-source input port must not join the seam");
 
         let inputs_cross_unlinked = vec![UnlinkedDockRoute {
-            stage_identifier: "local.stage".to_string(),
+            stage_identifier: "stage".to_string(),
             stage_source: "local-src".to_string(),
             config: ZhixuExecutorConfig {
                 target_uid: Some(TARGET_UID.to_string()),
@@ -1978,7 +1982,7 @@ mod tests {
         );
 
         let sides_cross_unlinked = vec![UnlinkedDockRoute {
-            stage_identifier: "local.stage".to_string(),
+            stage_identifier: "stage".to_string(),
             stage_source: "local-src".to_string(),
             config: ZhixuExecutorConfig {
                 target_uid: Some(TARGET_UID.to_string()),
@@ -1993,8 +1997,8 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["new"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
-                    json!({ "done": { "signal": "beta::main.work.cmp" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
+                    json!({ "done": { "signal": "beta::work.cmp" } }),
                 )
             }),
         ))]);
@@ -2012,10 +2016,12 @@ mod tests {
     #[test]
     fn canonical_signal_shapes_reject_empty_segments() {
         for signal in [
-            "buyer::main..cmp",
-            "buyer::main.stage.",
-            "buyer::.stage.cmp",
-            "::main.stage.cmp",
+            "buyer::work..cmp",
+            "buyer::work.cmp.",
+            "buyer::.cmp",
+            "::work.cmp",
+            "buyer::cmp",
+            "buyer::work.stage.cmp",
         ] {
             assert!(
                 parse_canonical_signal(signal).is_none(),
@@ -2023,12 +2029,8 @@ mod tests {
             );
         }
         assert_eq!(
-            parse_canonical_signal("buyer::main.stage.cmp"),
-            Some((
-                "buyer".to_string(),
-                "main.stage".to_string(),
-                "cmp".to_string()
-            ))
+            parse_canonical_signal("buyer::work.cmp"),
+            Some(("buyer".to_string(), "work".to_string(), "cmp".to_string()))
         );
 
         let targets = json!([target_entry(zhixu_document(
@@ -2036,17 +2038,15 @@ mod tests {
             json!({
                 "svc": interface_spec(
                     json!(["new"]),
-                    json!({ "execute": { "hook": "main.work#DOCK_ENTER" } }),
-                    json!({ "done": { "signal": "buyer::main..cmp" } }),
+                    json!({ "execute": { "hook": "work#DOCK_ENTER" } }),
+                    json!({ "done": { "signal": "buyer::work..cmp" } }),
                 )
             }),
         ))]);
         let issues = parse_dock_targets(&targets).unwrap_err();
         assert!(
             issues.iter().any(|issue| issue.code == "D008"
-                && issue
-                    .message
-                    .contains("must be <source>::<task>.<stage>.<signal>")),
+                && issue.message.contains("must be <source>::<stage>.<signal>")),
             "{issues:?}"
         );
     }

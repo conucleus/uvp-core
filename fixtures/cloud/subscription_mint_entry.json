@@ -16,46 +16,36 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "dispatch",
-          "stages": [
+          "name": "main",
+          "source": "test_executor",
+          "sendSignals": [
             {
-              "name": "main",
-              "source": "test_executor",
-              "sendSignals": [
-                {
-                  "name": "smart_contract"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "dispatch-org"
-              }
+              "name": "smart_contract"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "dispatch-org"
+          }
         },
         {
-          "name": "orchard",
-          "stages": [
+          "name": "retail",
+          "source": "buyer",
+          "receiveSignals": {
+            "SPAWN": "::ANCHOR(@test_executor::main.smart_contract)"
+          },
+          "sendSignals": [
             {
-              "name": "retail",
-              "source": "buyer",
-              "receiveSignals": {
-                "SPAWN": "::ANCHOR(@test_executor::dispatch.main.smart_contract)"
-              },
-              "sendSignals": [
-                {
-                  "name": "ack"
-                }
-              ],
-              "mint": "per-fact",
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "orchard-retail-executor"
-              }
+              "name": "ack"
             }
-          ]
+          ],
+          "mint": "per-fact",
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "orchard-retail-executor"
+          }
         }
       ]
     }

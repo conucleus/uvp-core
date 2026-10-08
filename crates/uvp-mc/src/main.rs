@@ -38,13 +38,15 @@ fn main() -> ExitCode {
             manifest,
             json,
         } => run_check(&definition, &manifest, json),
-        Command::Lint { definition, manifest } => run_lint(&definition, &manifest),
+        Command::Lint {
+            definition,
+            manifest,
+        } => run_lint(&definition, &manifest),
     }
 }
 
 fn read_manifest(path: &str) -> Result<Manifest, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("read manifest {path}: {err}"))?;
+    let raw = fs::read_to_string(path).map_err(|err| format!("read manifest {path}: {err}"))?;
     if path.ends_with(".toml") {
         toml::from_str(&raw).map_err(|err| format!("parse manifest {path} as TOML: {err}"))
     } else {
@@ -53,8 +55,7 @@ fn read_manifest(path: &str) -> Result<Manifest, String> {
 }
 
 fn read_definition(path: &str) -> Result<serde_json::Value, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("read definition {path}: {err}"))?;
+    let raw = fs::read_to_string(path).map_err(|err| format!("read definition {path}: {err}"))?;
     serde_json::from_str(&raw).map_err(|err| format!("parse definition {path} as JSON: {err}"))
 }
 
@@ -62,7 +63,11 @@ fn run_check(definition_path: &str, manifest_path: &str, json: bool) -> ExitCode
     let result = (|| {
         let manifest = read_manifest(manifest_path)?;
         let definition = read_definition(definition_path)?;
-        mc_check(McCheckRequest { definition, manifest }).map_err(|err| err.to_string())
+        mc_check(McCheckRequest {
+            definition,
+            manifest,
+        })
+        .map_err(|err| err.to_string())
     })();
     match result {
         Ok(report) => {
@@ -116,8 +121,11 @@ fn run_lint(definition_path: &str, manifest_path: &str) -> ExitCode {
     let result = (|| {
         let manifest = read_manifest(manifest_path)?;
         let definition = read_definition(definition_path)?;
-        serde_json::to_value(McLintPayload { definition, manifest })
-            .map_err(|err| err.to_string())
+        serde_json::to_value(McLintPayload {
+            definition,
+            manifest,
+        })
+        .map_err(|err| err.to_string())
     })();
     match result {
         Ok(payload) => {

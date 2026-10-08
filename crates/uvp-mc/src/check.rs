@@ -113,15 +113,9 @@ fn admission_closed(
         }
         let times = state.signal_times(vocab);
         for intent_name in &check.intents {
-            let fact = vocab
-                .fact_index
-                .get(intent_name)
-                .copied()
-                .ok_or_else(|| {
-                    McError::Message(format!(
-                        "intent {intent_name:?} is not in the vocabulary"
-                    ))
-                })?;
+            let fact = vocab.fact_index.get(intent_name).copied().ok_or_else(|| {
+                McError::Message(format!("intent {intent_name:?} is not in the vocabulary"))
+            })?;
             if state.fact_epochs[fact].is_some() {
                 continue;
             }
@@ -163,10 +157,9 @@ fn deadlock_free(
         let times = state.signal_times(vocab);
         let in_flight = scope.iter().any(|fact| {
             state.fact_epochs[*fact].is_none()
-                && vocab
-                    .effects
-                    .get(fact)
-                    .is_some_and(|effect| effect.env_timed && model::effect_open(vocab, state, *fact))
+                && vocab.effects.get(fact).is_some_and(|effect| {
+                    effect.env_timed && model::effect_open(vocab, state, *fact)
+                })
         });
         let sanctioned = model::next_deadline_epoch(vocab, &times, state.now).is_some()
             || any_sanctioned_intent(vocab, scope, state, &times)
@@ -243,9 +236,7 @@ fn time_only_closure(
     for position in 0..graph.states.len() {
         let state = &graph.states[position];
         let times = state.signal_times(vocab);
-        for action in
-            model::enabled_actions(vocab, &in_scope, state, &times, Mode::TimeOnly)
-        {
+        for action in model::enabled_actions(vocab, &in_scope, state, &times, Mode::TimeOnly) {
             let successor = model::apply_action(vocab, &in_scope, state, &times, action);
             if let Some(target) = graph.state_index(&successor) {
                 restricted_edges[position].push(target);
@@ -407,17 +398,9 @@ pub fn scope_indices(vocab: &Vocabulary, scope: &[String]) -> Result<Vec<usize>>
     }
     let mut out = Vec::with_capacity(scope.len());
     for fact in scope {
-        out.push(
-            vocab
-                .fact_index
-                .get(fact)
-                .copied()
-                .ok_or_else(|| {
-                    McError::Message(format!(
-                        "scope fact {fact:?} is not in the vocabulary"
-                    ))
-                })?,
-        );
+        out.push(vocab.fact_index.get(fact).copied().ok_or_else(|| {
+            McError::Message(format!("scope fact {fact:?} is not in the vocabulary"))
+        })?);
     }
     out.sort_unstable();
     out.dedup();

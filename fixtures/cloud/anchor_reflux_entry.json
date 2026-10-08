@@ -16,45 +16,35 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "farmer",
-          "stages": [
+          "name": "packing",
+          "source": "farmer",
+          "sendSignals": [
             {
-              "name": "packing",
-              "source": "farmer",
-              "sendSignals": [
-                {
-                  "name": "settled"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "farmer-org"
-              }
+              "name": "settled"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "farmer-org"
+          }
         },
         {
-          "name": "harvest",
-          "stages": [
+          "name": "collect",
+          "source": "farmer",
+          "receiveSignals": {
+            "REFLUX": "::ANCHOR(@farmer::packing.settled)"
+          },
+          "sendSignals": [
             {
-              "name": "collect",
-              "source": "farmer",
-              "receiveSignals": {
-                "REFLUX": "::ANCHOR(@farmer::farmer.packing.settled)"
-              },
-              "sendSignals": [
-                {
-                  "name": "collected"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "harvest-org"
-              }
+              "name": "collected"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "harvest-org"
+          }
         }
       ]
     }

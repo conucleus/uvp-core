@@ -54,7 +54,7 @@
 ### 2.1 source 命名空间
 
 - `source` 是 **zhixu 局部**的因果链身份命名空间；多个 stage 可共享同一 source（整条业务线共用一个因果身份类）。
-- 订阅寻址 `@source::task.stage.signal` 只在本域解析：目标的 source 类必须由本 zhixu 定义内的 stage 声明（引用存在性校验，uvp-core `validate_hook_dependency_references` 与 Go 轨编译器校验 §7.5 同款）。**订阅语法没有直接跨秩序形态**——跨秩序协作的合法形态是订阅阶段经 executor 绑定承接投递：同域类订阅配静态 executor（订阅阶段必须静态绑定，禁止运行时 patch）；跨秩序事实级联走 `supplierType: zhixu` 委托 dock + signalMap（见 2.4），resolved route 的 source seam 即接缝处的 source 声明。
+- 订阅寻址 `@source::stage.signal` 只在本域解析：目标的 source 类必须由本 zhixu 定义内的 stage 声明（引用存在性校验，uvp-core `validate_hook_dependency_references` 与 Go 轨编译器校验 §7.5 同款）。**订阅语法没有直接跨秩序形态**——跨秩序协作的合法形态是订阅阶段经 executor 绑定承接投递：同域类订阅配静态 executor（订阅阶段必须静态绑定，禁止运行时 patch）；跨秩序事实级联走 `supplierType: zhixu` 委托 dock + signalMap（见 2.4），resolved route 的 source seam 即接缝处的 source 声明。
 - 乐高原则：秩序之间无父子。被委托方天然存在，不因被委托需要父；可反向委托。无 dock 实例 = 无关系 = 不投递，这是"尚无关系"的正常态，不是孤儿。
 
 ### 2.2 订阅语法（receiveSignals 值）
@@ -62,9 +62,9 @@
 | 表达式 | 语义 | 求值 |
 |---|---|---|
 | `{source}::{condition}` | 同单 hook（布尔/延时），现有语义不变 | 在订阅方自己的订单上下文内求值，判决一次（init/wait/ready/cxl） |
-| `::ANCHOR(@{source}::{task}.{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
+| `::ANCHOR(@{source}::{stage}.{signal})` | 跨源订阅通道：按类寻址，逐事件投递、携带溯源 | 无表达式裁决；路由规则见 2.3 |
 
-`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 不在语法面内：解析器词法识别这三类关键字并**精确拒绝**，报错统一指引入口 `::ANCHOR(@source::task.stage.signal)` 订阅。扇入类标头、k≥2 表达式下限、空标头白名单规则均不在词表内，按通用语法错误拒绝（订阅必须空标头）。
+`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 不在语法面内：解析器词法识别这三类关键字并**精确拒绝**，报错统一指引入口 `::ANCHOR(@source::stage.signal)` 订阅。扇入类标头、k≥2 表达式下限、空标头白名单规则均不在词表内，按通用语法错误拒绝（订阅必须空标头）。
 
 ### 2.3 三种接收方（编译期定死，选项 A）
 
@@ -195,7 +195,7 @@ Stage 字段总表（目标态）：
 |---|---|---|
 | 分馏（汽油/顾客路线） | `::OUTSIDE@(源::t.s.sig)` | 订阅 + `mint: per-fact` |
 | 撮合（k≥2 配对） | 旧扇入标头（k≥2） | 无锚监听 + 多条 `::ANCHOR(@…)`；配对后执行器 str 多父 |
-| 收购回流 | `::ANCHOR@(裸三段)` | 有锚阶段 + `::ANCHOR(@…)`（按单路由） |
+| 收购回流 | `::ANCHOR@(裸两段)` | 有锚阶段 + `::ANCHOR(@…)`（按单路由） |
 | 观察入口（k=1） | 旧扇入标头（k=1） | 无锚监听 + 单条 `::ANCHOR(@…)` |
 | 交易所开门/关门 | 无（外部 trigger + 载体单） | match source 上一个发开门/关门事实的 stage，通道锚定 |
 | 委托 | 目标 dockInterface 端口 + inputMap/signalMap，独立子订单 | 支持：具名接口 + order.mode（new 建子单/existing 接既有单），inputMap/signalMap 对译目标接口端口 |
@@ -214,7 +214,7 @@ Stage 字段总表（目标态）：
 - 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格，语义/AST/语料/部署清单为 v1；云执行产物为结构化复合身份信封，使用 `uvp.cloudArtifact.v5`（Go/Rust/部署矩阵必须一致）。即：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.hookSemanticsCorpus.v1`（语料文件 semantics.v1.json）、`uvp.cloudArtifact.v5`；部署清单 `uvp-eth.addresses.v1`。不存在 0.7/v2/v3/v4 编号制品，无兼容义务。
 - 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住 `hookPlan.v4`、`onchainHookPlan.v3`、`cloudArtifact.v4`、dock 制品（`uvp.dockInterfaceArtifact.v2`、`uvp.dockRoute.v3`、`uvp.dock.resolution.v2`、`uvp.dockRoute.unresolved.v1`——后者以 `dockRouteUnresolved` 键进入矩阵 artifactSchemas，与 uvp-core `DOCK_ROUTE_UNRESOLVED_SCHEMA_VERSION`、Go `DockRouteUnresolvedSchemaVersion` 常量同值互认）、合约 ABI fixture、EIP-712 domains 和 `uvp-eth.addresses.v1`。
 - `UVPStateMachine` 0.12 的六域 PlanCommit（含 capabilitiesRoot）、`SignalSubmitted`/`HookReady` 事件与 `(planId, orderId)` 复合键，以及 `UVPDockingModule` 4.4 的 open/attach/input/output boundary（output 端口叶为 V3：叶直接钉绑定侧的 targetSourceId/targetSignalId 事实键分量）必须由 bindings、bootstrap、indexer、replay 和共享 fixture 一起消费。
-- OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals 不在语法面、两侧语料与两侧文档表述内。其中 trigger 入口表与 externalSignals 零存在；`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 由解析器词法识别并精确拒绝，报错统一指引 `::ANCHOR(@source::task.stage.signal)` 订阅入口，扇入类标头按通用语法错误拒绝（语法面排除的完整口径见 2.2）。
+- OUTSIDE/ANCHOR 标头、OUTSOURCE、trigger 入口表、externalSignals 不在语法面、两侧语料与两侧文档表述内。其中 trigger 入口表与 externalSignals 零存在；`::OUTSIDE@` / `::ANCHOR@` 标头与 `OUTSOURCE` 由解析器词法识别并精确拒绝，报错统一指引 `::ANCHOR(@source::stage.signal)` 订阅入口，扇入类标头按通用语法错误拒绝（语法面排除的完整口径见 2.2）。
 
 ## 8. 决策记录
 

@@ -1,4 +1,4 @@
-//! 定义到目标表示的转换：stage 摊平、platform 归一化、绑定/路由构建与
+//! 定义到目标表示的转换：stage 遍历、platform 归一化、绑定/路由构建与
 //! hook 编译（调用 uvp-hook-dsl 的解析管线）。
 
 use serde_json::{json, Map, Value};
@@ -18,27 +18,18 @@ pub(crate) struct StageEntry {
 
 pub(crate) fn flatten_stages(definition: &ZhixuDefinition) -> Result<Vec<StageEntry>> {
     let mut entries = Vec::new();
-    let mut task_names = BTreeSet::new();
-    for task in &definition.spec.task_patterns {
-        if !task_names.insert(task.name.clone()) {
+    let mut stage_names = BTreeSet::new();
+    for stage in &definition.spec.stages {
+        if !stage_names.insert(stage.name.clone()) {
             return Err(CompilerError::Issues(format!(
-                "duplicate task pattern {}",
-                task.name
+                "duplicate stage {}",
+                stage.name
             )));
         }
-        let mut stage_names = BTreeSet::new();
-        for stage in &task.stages {
-            if !stage_names.insert(stage.name.clone()) {
-                return Err(CompilerError::Issues(format!(
-                    "duplicate stage {}.{}",
-                    task.name, stage.name
-                )));
-            }
-            entries.push(StageEntry {
-                stage: stage.clone(),
-                stage_identifier: format!("{}.{}", task.name, stage.name),
-            });
-        }
+        entries.push(StageEntry {
+            stage: stage.clone(),
+            stage_identifier: stage.name.clone(),
+        });
     }
     Ok(entries)
 }

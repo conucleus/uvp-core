@@ -6,7 +6,7 @@ import { lintHook, parseHook } from "../index.js";
 const request = {
   profile: "cloud_compat",
   hookName: "HOOK",
-  hook: "buyer::task.main.cmp"
+  hook: "buyer::main.cmp"
 };
 
 test("loads the ESM and CommonJS package entry points", () => {
@@ -27,12 +27,12 @@ test("lintHook reports diagnostics without rejecting the legal hook", () => {
   const esmResult = lintHook({
     profile: "evm_strict",
     hookName: "DUP",
-    hook: "buyer::task.main.cmp & task.main.cmp"
+    hook: "buyer::main.cmp & main.cmp"
   });
   const commonjsResult = commonjs.lintHook({
     profile: "evm_strict",
     hookName: "DUP",
-    hook: "buyer::task.main.cmp & task.main.cmp"
+    hook: "buyer::main.cmp & main.cmp"
   });
 
   assert.deepEqual(commonjsResult, esmResult);

@@ -56,7 +56,7 @@ pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOu
     for fact in &request.facts {
         if !valid_signal_identity(&fact.signal_name) {
             return Err(ReplayError::Message(format!(
-                "replay fact signal_name must use task.stage.signal and be at most 100 characters: {:?}",
+                "replay fact signal_name must use stage.signal and be at most 100 characters: {:?}",
                 fact.signal_name
             )));
         }
@@ -170,14 +170,14 @@ mod tests {
         })
     }
 
-    const READY_FIRST: &str = "src::a.b.ready & ~a.b.rejected";
-    const HOLD: &str = "src::a.b.approved + 1h & ~a.b.rejected";
+    const READY_FIRST: &str = "src::b.ready & ~b.rejected";
+    const HOLD: &str = "src::b.approved + 1h & ~b.rejected";
 
     #[test]
     fn terminal_ready_absorbs_late_negative_dependency() {
         let outcome = walk(
             READY_FIRST,
-            &[("a.b.ready", iso(3600)), ("a.b.rejected", iso(1800))],
+            &[("b.ready", iso(3600)), ("b.rejected", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -188,7 +188,7 @@ mod tests {
     fn negative_dependency_wins_when_it_arrives_first() {
         let outcome = walk(
             READY_FIRST,
-            &[("a.b.rejected", iso(3600)), ("a.b.ready", iso(1800))],
+            &[("b.rejected", iso(3600)), ("b.ready", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -199,7 +199,7 @@ mod tests {
     fn maturity_before_late_negative_adjudicates_terminal_ready() {
         let outcome = walk(
             HOLD,
-            &[("a.b.approved", iso(3 * 3600)), ("a.b.rejected", iso(3600))],
+            &[("b.approved", iso(3 * 3600)), ("b.rejected", iso(3600))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -210,10 +210,7 @@ mod tests {
     fn negative_before_maturity_adjudicates_cxl_at_arrival() {
         let outcome = walk(
             HOLD,
-            &[
-                ("a.b.approved", iso(3 * 3600)),
-                ("a.b.rejected", iso(150 * 60)),
-            ],
+            &[("b.approved", iso(3 * 3600)), ("b.rejected", iso(150 * 60))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -223,8 +220,8 @@ mod tests {
     #[test]
     fn unexpired_wait_closes_as_wait_at_now() {
         let outcome = walk(
-            "src::a.b.approved + 1h",
-            &[("a.b.approved", iso(1800))],
+            "src::b.approved + 1h",
+            &[("b.approved", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -234,8 +231,8 @@ mod tests {
     #[test]
     fn matured_wait_without_poke_closes_terminal_at_now() {
         let outcome = walk(
-            "src::a.b.approved + 1h",
-            &[("a.b.approved", iso(3 * 3600))],
+            "src::b.approved + 1h",
+            &[("b.approved", iso(3 * 3600))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -252,7 +249,7 @@ mod tests {
     fn facts_beyond_dependency_set_do_not_change_the_verdict() {
         let outcome = walk(
             READY_FIRST,
-            &[("a.b.ready", iso(3600)), ("a.b.unrelated", iso(1800))],
+            &[("b.ready", iso(3600)), ("b.unrelated", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -262,7 +259,7 @@ mod tests {
     #[test]
     fn subscription_mode_short_circuits_to_ready() {
         let outcome = replay_compiled_hook(CloudReplayRequest {
-            ast: cloud_ast("::ANCHOR(@src::a.b.signal)"),
+            ast: cloud_ast("::ANCHOR(@src::b.signal)"),
             facts: vec![],
             now: iso(0),
         })
@@ -273,8 +270,8 @@ mod tests {
     #[test]
     fn re_arrival_is_inert_for_the_pending_window() {
         let outcome = walk(
-            "src::a.b.approved + 2h",
-            &[("a.b.approved", iso(3600)), ("a.b.approved", iso(1800))],
+            "src::b.approved + 2h",
+            &[("b.approved", iso(3600)), ("b.approved", iso(1800))],
             &iso(0),
         )
         .expect("replay must succeed");
@@ -295,7 +292,7 @@ mod tests {
     fn malformed_fact_identity_fails_loudly() {
         let result = walk(
             READY_FIRST,
-            &[("not-a-three-part-signal", iso(3600))],
+            &[("not-a-two-part-signal", iso(3600))],
             &iso(0),
         );
         assert!(result.is_err());
@@ -305,7 +302,7 @@ mod tests {
     fn malformed_timestamp_fails_loudly() {
         let result = walk(
             READY_FIRST,
-            &[("a.b.ready", "not-a-timestamp".to_string())],
+            &[("b.ready", "not-a-timestamp".to_string())],
             &iso(0),
         );
         assert!(result.is_err());

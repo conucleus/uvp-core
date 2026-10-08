@@ -22,7 +22,10 @@ impl Graph {
         self.index.get(state).copied()
     }
 
-    pub fn trace_from_root(&self, state_index: usize) -> Vec<(usize, crate::model::Action, &McState)> {
+    pub fn trace_from_root(
+        &self,
+        state_index: usize,
+    ) -> Vec<(usize, crate::model::Action, &McState)> {
         let mut path = Vec::new();
         let mut cursor = state_index;
         while let Some((parent, action)) = self.parents[cursor] {

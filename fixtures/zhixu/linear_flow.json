@@ -16,46 +16,41 @@
       "nucleation": {
         "id": "core"
       },
-      "taskPatterns": [
+      "stages": [
         {
-          "name": "flow",
-          "stages": [
+          "name": "start",
+          "source": "buyer",
+          "receiveSignals": {
+            "BEGIN": "buyer::start.seed"
+          },
+          "sendSignals": [
             {
-              "name": "start",
-              "source": "buyer",
-              "receiveSignals": {
-                "BEGIN": "buyer::flow.start.seed"
-              },
-              "sendSignals": [
-                {
-                  "name": "seed"
-                },
-                {
-                  "name": "step_done"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-a"
-              }
+              "name": "seed"
             },
             {
-              "name": "finish",
-              "source": "buyer",
-              "receiveSignals": {
-                "FINISH": "buyer::flow.start.step_done"
-              },
-              "sendSignals": [
-                {
-                  "name": "cmp"
-                }
-              ],
-              "executor": {
-                "supplierType": "organization",
-                "supplierID": "org-b"
-              }
+              "name": "step_done"
             }
-          ]
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-a"
+          }
+        },
+        {
+          "name": "finish",
+          "source": "buyer",
+          "receiveSignals": {
+            "FINISH": "buyer::start.step_done"
+          },
+          "sendSignals": [
+            {
+              "name": "cmp"
+            }
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "org-b"
+          }
         }
       ]
     }
@@ -63,12 +58,12 @@
   "expect": {
     "platform": "cloud",
     "hookIds": [
-      "flow.finish#FINISH",
-      "flow.start#BEGIN"
+      "finish#FINISH",
+      "start#BEGIN"
     ],
     "hookDependencyCounts": {
-      "flow.finish#FINISH": 1,
-      "flow.start#BEGIN": 1
+      "finish#FINISH": 1,
+      "start#BEGIN": 1
     }
   }
 }

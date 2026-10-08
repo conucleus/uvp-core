@@ -40,11 +40,7 @@ fn rejects_deeply_nested_expressions_instead_of_overflowing() {
 
 #[test]
 fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
-    let legal = format!(
-        "buyer::{}task.main.cmp +1s{}",
-        "(".repeat(58),
-        ")".repeat(58)
-    );
+    let legal = format!("buyer::{}main.cmp +1s{}", "(".repeat(58), ")".repeat(58));
     let parsed = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
         gate: Gate::Hook,
@@ -57,7 +53,7 @@ fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
         "ast": parsed.cloud_ast,
         "signals": [{
             "source": "buyer",
-            "signalName": "task.main.cmp",
+            "signalName": "main.cmp",
             "receivedAt": "2026-04-27T00:00:00.000Z"
         }],
         "now": "2026-04-27T00:01:00.000Z"
@@ -68,11 +64,7 @@ fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
         "deepest legal hook must stay evaluable through the JSON entry: {output}"
     );
 
-    let illegal = format!(
-        "buyer::{}task.main.cmp +1s{}",
-        "(".repeat(59),
-        ")".repeat(59)
-    );
+    let illegal = format!("buyer::{}main.cmp +1s{}", "(".repeat(59), ")".repeat(59));
     let err = parse_hook(ParseHookRequest {
         profile: Profile::EvmStrict,
         gate: Gate::Hook,
@@ -85,7 +77,7 @@ fn parse_depth_cap_keeps_parseable_hooks_evaluable_through_json() {
 
 #[test]
 fn rejects_deeply_nested_cloud_ast() {
-    let mut root = json!({ "type": "signal", "signal": "task.main.cmp" });
+    let mut root = json!({ "type": "signal", "signal": "main.cmp" });
     for _ in 0..300 {
         root = json!({ "type": "neg", "expr": root });
     }
@@ -112,7 +104,7 @@ fn rejects_pure_negative_compiled_root() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "buyer",
         "mode": "normal",
-        "root": { "type": "neg", "expr": { "type": "signal", "signal": "task.cancel.cmp" } }
+        "root": { "type": "neg", "expr": { "type": "signal", "signal": "cancel.cmp" } }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::EvmStrict,
@@ -133,7 +125,7 @@ fn cloud_ast_preserves_delay_operand_and_source() {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
-        hook: "buyer::task.receive.cmp +14d".to_string(),
+        hook: "buyer::receive.cmp +14d".to_string(),
     })
     .unwrap();
 
@@ -158,14 +150,14 @@ fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
         hook_name: "SUB".to_string(),
-        hook: "::ANCHOR(@seller::trade.listing.cmp)".to_string(),
+        hook: "::ANCHOR(@seller::listing.cmp)".to_string(),
     })
     .unwrap()
     .cloud_ast;
     ast["subscriptionTarget"]
         .as_object_mut()
         .unwrap()
-        .insert("singal".to_string(), json!("trade.listing.cmp"));
+        .insert("singal".to_string(), json!("listing.cmp"));
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
@@ -180,7 +172,7 @@ fn compiled_subscription_target_rejects_unknown_keys_and_shapes() {
         "unexpected error: {err}"
     );
 
-    ast["subscriptionTarget"] = json!(["seller", "trade.listing.cmp"]);
+    ast["subscriptionTarget"] = json!(["seller", "listing.cmp"]);
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
@@ -204,7 +196,7 @@ fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
         "mode": "normal",
         "root": {
             "type": "delay",
-            "expr": { "type": "signal", "signal": "task.receive.cmp" },
+            "expr": { "type": "signal", "signal": "receive.cmp" },
             "rawDuration": "9223372036854775807s",
             "durationSeconds": i64::MAX
         }
@@ -216,7 +208,7 @@ fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
         ast: poisoned,
         signals: vec![SignalFact {
             source: "buyer".to_string(),
-            signal_name: "task.receive.cmp".to_string(),
+            signal_name: "receive.cmp".to_string(),
             received_at: "2026-04-27T00:00:00.900Z".to_string(),
         }],
         now: "2026-04-27T00:00:01.000Z".to_string(),
@@ -234,7 +226,7 @@ fn compiled_hook_evaluation_requires_schema_version() {
             "source": "buyer",
             "root": {
                 "type": "delay",
-                "expr": {"type": "signal", "signal": "task.receive.cmp"},
+                "expr": {"type": "signal", "signal": "receive.cmp"},
                 "delay": "14d"
             }
         }),
@@ -256,7 +248,7 @@ fn compiled_hook_evaluation_rejects_unknown_node_fields() {
             "mode": "normal",
             "root": {
                 "type": "delay",
-                "expr": {"type": "signal", "signal": "task.receive.cmp"},
+                "expr": {"type": "signal", "signal": "receive.cmp"},
                 "delay": "14d"
             }
         }),
@@ -271,8 +263,8 @@ fn compiled_hook_evaluation_rejects_unknown_node_fields() {
 fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
     let retired_word: String = ["M", "E", "R", "G", "E"].concat();
     for hook in [
-        format!("::{retired_word}X@(seller::task.main.cmp)"),
-        "::ANCHORX(@seller::task.main.cmp)".to_string(),
+        format!("::{retired_word}X@(seller::main.cmp)"),
+        "::ANCHORX(@seller::main.cmp)".to_string(),
         "::OUTSIDER".to_string(),
     ] {
         let err = parse_hook(ParseHookRequest {
@@ -291,7 +283,7 @@ fn pseudo_keyword_prefixes_do_not_bypass_the_empty_source_gate() {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
         hook_name: "HOOK".to_string(),
-        hook: "::OUTSIDE @seller::task.main.cmp".to_string(),
+        hook: "::OUTSIDE @seller::main.cmp".to_string(),
     })
     .unwrap_err();
     assert!(err.to_string().contains("retired"), "unexpected: {err}");
@@ -305,7 +297,7 @@ fn signed_raw_duration_is_rejected_at_decode() {
         "mode": "normal",
         "root": {
             "type": "delay",
-            "expr": { "type": "signal", "signal": "task.receive.cmp" },
+            "expr": { "type": "signal", "signal": "receive.cmp" },
             "rawDuration": "+5s",
             "durationSeconds": 5
         }
@@ -332,33 +324,38 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
         hook_name: "TRIGGER".to_string(),
-        hook: "buyer::task.main.cmp".to_string(),
+        hook: "buyer::main.cmp".to_string(),
     })
     .unwrap();
     for fact in [
         SignalFact {
             source: "has space".to_string(),
-            signal_name: "task.main.cmp".to_string(),
+            signal_name: "main.cmp".to_string(),
             received_at: "2026-04-27T00:00:00Z".to_string(),
         },
         SignalFact {
             source: "buyer.ü".to_string(),
-            signal_name: "task.main.cmp".to_string(),
+            signal_name: "main.cmp".to_string(),
             received_at: "2026-04-27T00:00:00Z".to_string(),
         },
         SignalFact {
             source: "s".repeat(37),
-            signal_name: "task.main.cmp".to_string(),
-            received_at: "2026-04-27T00:00:00Z".to_string(),
-        },
-        SignalFact {
-            source: "buyer".to_string(),
             signal_name: "main.cmp".to_string(),
             received_at: "2026-04-27T00:00:00Z".to_string(),
         },
         SignalFact {
             source: "buyer".to_string(),
-            signal_name: "task..cmp".to_string(),
+            signal_name: "cmp".to_string(),
+            received_at: "2026-04-27T00:00:00Z".to_string(),
+        },
+        SignalFact {
+            source: "buyer".to_string(),
+            signal_name: "main..cmp".to_string(),
+            received_at: "2026-04-27T00:00:00Z".to_string(),
+        },
+        SignalFact {
+            source: "buyer".to_string(),
+            signal_name: "a.b.c".to_string(),
             received_at: "2026-04-27T00:00:00Z".to_string(),
         },
         SignalFact {
@@ -386,7 +383,7 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
         ast: parsed.cloud_ast.clone(),
         signals: vec![SignalFact {
             source: "s".repeat(36),
-            signal_name: "task.main.cmp".to_string(),
+            signal_name: "main.cmp".to_string(),
             received_at: "2026-04-27T00:00:00Z".to_string(),
         }],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -398,7 +395,7 @@ fn eval_rejects_signal_facts_with_invalid_identity() {
         ast: parsed.cloud_ast,
         signals: vec![SignalFact {
             source: String::new(),
-            signal_name: "task.main.cmp".to_string(),
+            signal_name: "main.cmp".to_string(),
             received_at: "2026-04-27T00:00:00Z".to_string(),
         }],
         now: "2026-04-27T00:00:00Z".to_string(),
@@ -413,8 +410,8 @@ fn normal_ast_with_subscription_target_is_rejected_at_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "buyer",
         "mode": "normal",
-        "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
-        "root": { "type": "signal", "signal": "task.main.cmp" }
+        "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
+        "root": { "type": "signal", "signal": "main.cmp" }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -441,7 +438,7 @@ fn unsupported_hook_modes_are_rejected_at_decode() {
                 "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
                 "source": "",
                 "mode": mode,
-                "root": { "type": "signal", "signal": "task.main.cmp" }
+                "root": { "type": "signal", "signal": "main.cmp" }
             }),
             signals: vec![],
             now: "2026-04-27T00:00:00Z".to_string(),
@@ -461,7 +458,7 @@ fn subscription_ast_without_target_is_rejected_at_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
         "mode": "subscription",
-        "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -484,7 +481,7 @@ fn mint_and_route_validation_matches_go_decode() {
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": "buyer",
             "mode": "normal",
-            "root": { "type": "signal", "signal": "task.main.cmp" }
+            "root": { "type": "signal", "signal": "main.cmp" }
         });
         ast[field] = json!(value);
         let err = eval_compiled_hook(EvalCompiledHookRequest {
@@ -505,10 +502,10 @@ fn mint_and_route_validation_matches_go_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
         "mode": "subscription",
-        "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+        "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
         "mint": "per-fact",
         "route": "fanin",
-        "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
     });
     let eval = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -524,9 +521,9 @@ fn mint_and_route_validation_matches_go_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
         "mode": "subscription",
-        "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+        "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
         "mint": "bulk",
-        "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -545,9 +542,9 @@ fn mint_and_route_validation_matches_go_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
         "mode": "subscription",
-        "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+        "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
         "route": "broadcast",
-        "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -566,9 +563,9 @@ fn mint_and_route_validation_matches_go_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
         "mode": "subscription",
-        "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+        "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
         "mint": 5,
-        "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -590,8 +587,8 @@ fn subscription_ast_with_nonempty_source_is_rejected_at_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "buyer",
         "mode": "subscription",
-        "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
-        "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+        "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
+        "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -613,8 +610,8 @@ fn subscription_ast_target_root_mismatch_is_rejected_at_decode() {
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
         "source": "",
         "mode": "subscription",
-        "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
-        "root": { "type": "subscription", "source": "seller", "signal": "trade.intent.cmp" }
+        "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
+        "root": { "type": "subscription", "source": "seller", "signal": "intent.cmp" }
     });
     let err = eval_compiled_hook(EvalCompiledHookRequest {
         profile: Profile::CloudCompat,
@@ -637,7 +634,7 @@ fn rejects_duration_overflow() {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
         hook_name: "TIMEOUT".to_string(),
-        hook: "buyer::task.receive.cmp +9223372036854775807d".to_string(),
+        hook: "buyer::receive.cmp +9223372036854775807d".to_string(),
     })
     .expect_err("duration overflow must be rejected");
     assert!(err.to_string().contains("duration is too large"));
@@ -665,11 +662,11 @@ fn signal_facts_with_unknown_keys_are_rejected() {
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": "buyer",
             "mode": "normal",
-            "root": { "type": "signal", "signal": "task.main.cmp" }
+            "root": { "type": "signal", "signal": "main.cmp" }
         },
         "signals": [{
             "sourse": "buyer",
-            "signalName": "task.main.cmp",
+            "signalName": "main.cmp",
             "receivedAt": "2026-04-27T00:00:00Z"
         }],
         "now": "2026-04-27T00:00:00Z"
@@ -686,10 +683,10 @@ fn signal_facts_with_unknown_keys_are_rejected() {
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": "buyer",
             "mode": "normal",
-            "root": { "type": "signal", "signal": "task.main.cmp" }
+            "root": { "type": "signal", "signal": "main.cmp" }
         },
         "signals": [{
-            "signalName": "task.main.cmp",
+            "signalName": "main.cmp",
             "receivedAt": "2026-04-27T00:00:00Z"
         }],
         "now": "2026-04-27T00:00:00Z"
@@ -712,18 +709,18 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
         })
     };
     let poisoned_atoms = [
-        ast_with_root(json!({ "type": "signal", "signal": "main.cmp" }), "buyer"),
-        ast_with_root(json!({ "type": "signal", "signal": "ta sk.a.b" }), "buyer"),
+        ast_with_root(json!({ "type": "signal", "signal": "cmp" }), "buyer"),
+        ast_with_root(json!({ "type": "signal", "signal": "ta sk.b" }), "buyer"),
         ast_with_root(
-            json!({ "type": "signal", "signal": format!("{}.{}.{}", "a".repeat(40), "b".repeat(30), "c".repeat(31)) }),
+            json!({ "type": "signal", "signal": format!("{}.{}", "a".repeat(60), "s".repeat(50)) }),
             "buyer",
         ),
         ast_with_root(
-            json!({ "type": "signal", "signal": "task.main.cmp" }),
+            json!({ "type": "signal", "signal": "main.cmp" }),
             "has space",
         ),
         ast_with_root(
-            json!({ "type": "signal", "signal": "task.main.cmp" }),
+            json!({ "type": "signal", "signal": "main.cmp" }),
             "s".repeat(37).as_str(),
         ),
     ];
@@ -738,8 +735,7 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
         .unwrap_err();
         let message = err.to_string();
         assert!(
-            message.contains("task.stage.signal")
-                || message.contains("plain identifier of at most 36"),
+            message.contains("stage.signal") || message.contains("plain identifier of at most 36"),
             "unexpected error: {message}"
         );
     }
@@ -749,14 +745,14 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": "",
             "mode": "subscription",
-            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
+            "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
             "root": { "type": "subscription", "source": source, "signal": signal }
         })
     };
     for ast in [
-        subscription_ast("has space", "trade.listing.cmp"),
-        subscription_ast(&"s".repeat(37), "trade.listing.cmp"),
-        subscription_ast("seller", "listing.cmp"),
+        subscription_ast("has space", "listing.cmp"),
+        subscription_ast(&"s".repeat(37), "listing.cmp"),
+        subscription_ast("seller", "cmp"),
     ] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
@@ -768,8 +764,7 @@ fn compiled_ast_atoms_with_invalid_identity_are_rejected_at_decode() {
         .unwrap_err();
         let message = err.to_string();
         assert!(
-            message.contains("plain identifier of at most 36")
-                || message.contains("task.stage.signal"),
+            message.contains("plain identifier of at most 36") || message.contains("stage.signal"),
             "unexpected error: {message}"
         );
     }
@@ -796,7 +791,7 @@ fn top_level_source_identity_is_validated_on_the_raw_text() {
             profile: Profile::CloudCompat,
             gate: Gate::Hook,
             ast: ast_with_root(
-                json!({ "type": "signal", "signal": "task.main.cmp" }),
+                json!({ "type": "signal", "signal": "main.cmp" }),
                 source.clone(),
             ),
             signals: vec![],
@@ -814,7 +809,7 @@ fn top_level_source_identity_is_validated_on_the_raw_text() {
         profile: Profile::CloudCompat,
         gate: Gate::Hook,
         ast: ast_with_root(
-            json!({ "type": "signal", "signal": "task.main.cmp" }),
+            json!({ "type": "signal", "signal": "main.cmp" }),
             Value::Null,
         ),
         signals: vec![],
@@ -835,8 +830,8 @@ fn subscription_mode_rejects_non_string_and_whitespace_source() {
             "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
             "source": source,
             "mode": "subscription",
-            "subscriptionTarget": { "source": "seller", "signal": "trade.listing.cmp" },
-            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+            "subscriptionTarget": { "source": "seller", "signal": "listing.cmp" },
+            "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
         })
     };
     for source in [json!(5), json!(" "), json!("\tbuyer")] {
@@ -864,15 +859,16 @@ fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
             "source": "",
             "mode": "subscription",
             "subscriptionTarget": target,
-            "root": { "type": "subscription", "source": "seller", "signal": "trade.listing.cmp" }
+            "root": { "type": "subscription", "source": "seller", "signal": "listing.cmp" }
         })
     };
     for target in [
-        json!({ "source": " seller", "signal": "trade.listing.cmp" }),
-        json!({ "source": "seller ", "signal": "trade.listing.cmp" }),
-        json!({ "source": "has space", "signal": "trade.listing.cmp" }),
-        json!({ "source": "seller", "signal": " trade.listing.cmp" }),
-        json!({ "source": "seller", "signal": "listing.cmp" }),
+        json!({ "source": " seller", "signal": "listing.cmp" }),
+        json!({ "source": "seller ", "signal": "listing.cmp" }),
+        json!({ "source": "has space", "signal": "listing.cmp" }),
+        json!({ "source": "seller", "signal": " listing.cmp" }),
+        json!({ "source": "seller", "signal": "cmp" }),
+        json!({ "source": "seller", "signal": "a.b.c" }),
     ] {
         let err = eval_compiled_hook(EvalCompiledHookRequest {
             profile: Profile::CloudCompat,
@@ -885,7 +881,7 @@ fn top_level_subscription_target_identity_is_validated_on_the_raw_text() {
         let message = err.to_string();
         assert!(
             message.contains("plain identifier of at most 36")
-                || message.contains("task.stage.signal")
+                || message.contains("stage.signal")
                 || message.contains("does not match"),
             "poison subscriptionTarget {target:?}: {message}"
         );
@@ -901,12 +897,12 @@ fn decaying_veto_expires_at_takes_the_and_minimum() {
     };
     let both_live = evaluate_compiled(
         "WINDOW",
-        "buyer::task.b.cmp & ~(task.a1.cmp +5s) & ~(task.a2.cmp +10s)",
+        "buyer::b.cmp & ~(a1.cmp +5s) & ~(a2.cmp +10s)",
         Profile::EvmStrict,
         vec![
-            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
-            fact("task.a1.cmp", "2026-04-27T00:00:01.000Z"),
-            fact("task.a2.cmp", "2026-04-27T00:00:02.000Z"),
+            fact("b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("a1.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("a2.cmp", "2026-04-27T00:00:02.000Z"),
         ],
         "2026-04-27T00:00:03.000Z",
     );
@@ -919,11 +915,11 @@ fn decaying_veto_expires_at_takes_the_and_minimum() {
 
     let one_unbounded = evaluate_compiled(
         "WINDOW",
-        "buyer::task.b.cmp & ~(task.a1.cmp +5s) & ~task.a2.cmp",
+        "buyer::b.cmp & ~(a1.cmp +5s) & ~a2.cmp",
         Profile::EvmStrict,
         vec![
-            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
-            fact("task.a1.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("a1.cmp", "2026-04-27T00:00:01.000Z"),
         ],
         "2026-04-27T00:00:03.000Z",
     );
@@ -944,11 +940,11 @@ fn decaying_veto_inside_an_or_winning_branch_floats_its_expiry() {
     };
     let veto_branch_wins = evaluate_compiled(
         "ANY",
-        "buyer::(task.b.cmp & ~(task.a.cmp +5s)) | task.d.cmp",
+        "buyer::(b.cmp & ~(a.cmp +5s)) | d.cmp",
         Profile::EvmStrict,
         vec![
-            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
-            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("a.cmp", "2026-04-27T00:00:01.000Z"),
         ],
         "2026-04-27T00:00:03.000Z",
     );
@@ -961,11 +957,11 @@ fn decaying_veto_inside_an_or_winning_branch_floats_its_expiry() {
 
     let plain_branch_wins = evaluate_compiled(
         "ANY",
-        "buyer::(task.b.cmp & ~(task.a.cmp +5s)) | task.d.cmp",
+        "buyer::(b.cmp & ~(a.cmp +5s)) | d.cmp",
         Profile::EvmStrict,
         vec![
-            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
-            fact("task.d.cmp", "2026-04-27T00:00:02.000Z"),
+            fact("a.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("d.cmp", "2026-04-27T00:00:02.000Z"),
         ],
         "2026-04-27T00:00:03.000Z",
     );
@@ -985,11 +981,11 @@ fn decaying_veto_over_a_composite_delay_operand() {
     };
     let eval = evaluate_compiled(
         "WINDOW",
-        "buyer::task.b.cmp & ~((task.a.cmp | task.c.cmp) +5s)",
+        "buyer::b.cmp & ~((a.cmp | c.cmp) +5s)",
         Profile::EvmStrict,
         vec![
-            fact("task.b.cmp", "2026-04-27T00:00:00.000Z"),
-            fact("task.a.cmp", "2026-04-27T00:00:01.000Z"),
+            fact("b.cmp", "2026-04-27T00:00:00.000Z"),
+            fact("a.cmp", "2026-04-27T00:00:01.000Z"),
         ],
         "2026-04-27T00:00:03.000Z",
     );
@@ -1009,7 +1005,7 @@ fn decaying_veto_serializes_expires_at_across_the_json_boundary() {
             profile: Profile::EvmStrict,
             gate: Gate::Hook,
             hook_name: "WINDOW".to_string(),
-            hook: "buyer::task.ship.cmp & ~(task.cancel.cmp +14d)".to_string(),
+            hook: "buyer::ship.cmp & ~(cancel.cmp +14d)".to_string(),
         })
         .unwrap();
         json!({
@@ -1030,8 +1026,8 @@ fn decaying_veto_serializes_expires_at_across_the_json_boundary() {
     let bounded = eval_compiled_hook_json(
         &request_for(
             vec![
-                fact("task.ship.cmp", "2026-04-27T00:00:05.000Z"),
-                fact("task.cancel.cmp", "2026-04-27T00:00:00.000Z"),
+                fact("ship.cmp", "2026-04-27T00:00:05.000Z"),
+                fact("cancel.cmp", "2026-04-27T00:00:00.000Z"),
             ],
             "2026-04-27T00:00:10.000Z",
         )
@@ -1044,7 +1040,7 @@ fn decaying_veto_serializes_expires_at_across_the_json_boundary() {
 
     let unbounded = eval_compiled_hook_json(
         &request_for(
-            vec![fact("task.ship.cmp", "2026-04-27T00:00:05.000Z")],
+            vec![fact("ship.cmp", "2026-04-27T00:00:05.000Z")],
             "2026-04-27T00:00:10.000Z",
         )
         .to_string(),
@@ -1060,7 +1056,7 @@ fn gate_rides_the_json_boundary_and_defaults_to_hook() {
     let request = |gate: Option<&str>| {
         let mut envelope = json!({
             "hookName": "ADMIT",
-            "hook": "buyer::~(task.cancel.cmp +14d)"
+            "hook": "buyer::~(cancel.cmp +14d)"
         });
         if let Some(gate) = gate {
             envelope["gate"] = json!(gate);

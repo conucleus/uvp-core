@@ -201,7 +201,7 @@ pub fn decode_compiled_hook(ast: &Value, gate: Gate) -> Result<DecodedCompiledHo
         }
         if !valid_signal_identity(signal) {
             return Err(HookError::Message(format!(
-                    "compiled subscriptionTarget signal must use task.stage.signal and be at most 100 characters: {signal:?}"
+                    "compiled subscriptionTarget signal must use stage.signal and be at most 100 characters: {signal:?}"
                 )));
         }
         (source.to_string(), signal.to_string())
@@ -316,7 +316,7 @@ fn signal_map(signals: Vec<SignalFact>, profile: Profile) -> Result<BTreeMap<Str
         }
         if !valid_signal_identity(&signal.signal_name) {
             return Err(HookError::Message(format!(
-                "signal fact name must use task.stage.signal and be at most 100 characters: {:?}",
+                "signal fact name must use stage.signal and be at most 100 characters: {:?}",
                 signal.signal_name
             )));
         }
@@ -370,7 +370,7 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                 })?;
             if !valid_signal_identity(signal) {
                 return Err(HookError::Message(format!(
-                    "compiled signal AST node must use task.stage.signal and be at most 100 characters: {signal:?}"
+                    "compiled signal AST node must use stage.signal and be at most 100 characters: {signal:?}"
                 )));
             }
             Ok(Expr::Signal(signal.to_string()))
@@ -410,7 +410,7 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
             }
             if !valid_signal_identity(signal) {
                 return Err(HookError::Message(format!(
-                    "compiled subscription AST node signal must use task.stage.signal and be at most 100 characters: {signal:?}"
+                    "compiled subscription AST node signal must use stage.signal and be at most 100 characters: {signal:?}"
                 )));
             }
             Ok(Expr::Subscription {
