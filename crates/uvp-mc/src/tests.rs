@@ -173,3 +173,81 @@ fn state_cap_is_loud() {
         "error must name the cap: {error}"
     );
 }
+
+#[test]
+fn bare_negative_admissions_are_one_directional() {
+    fn probe(s1_gated: bool) -> crate::McCheckReport {
+        let s1 = if s1_gated {
+            json!({"name": "s1", "validWhen": ["buyer::~pending.s2"]})
+        } else {
+            json!({"name": "s1"})
+        };
+        let definition = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": {"name": "neg_probe"},
+            "spec": {
+                "platform": {"type": "cloud"},
+                "nucleation": {"id": "core_org"},
+                "stages": [
+                    {
+                        "name": "launched",
+                        "source": "buyer",
+                        "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                        "sendSignals": [s1],
+                        "receiveSignals": {"H": "buyer::launched.s1"}
+                    },
+                    {
+                        "name": "pending",
+                        "source": "buyer",
+                        "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                        "sendSignals": [{"name": "s2", "validWhen": ["buyer::~launched.s1"]}],
+                        "receiveSignals": {"H2": "buyer::pending.s2"}
+                    }
+                ]
+            }
+        });
+        let manifest = json!({
+            "schema_version": "uvp.mc.manifest.v1",
+            "effects": [],
+            "checks": [
+                {"id": "mutex", "kind": "bad_state", "predicate": "buyer::launched.s1 & pending.s2"}
+            ]
+        });
+        mc_check(McCheckRequest {
+            definition,
+            manifest: serde_json::from_value(manifest).expect("manifest"),
+        })
+        .expect("probe should run")
+    }
+
+    let one_sided = probe(false);
+    let outcome = one_sided
+        .checks
+        .iter()
+        .find(|outcome| outcome.id == "mutex")
+        .expect("mutex outcome");
+    assert_eq!(
+        outcome.status,
+        Status::Fail,
+        "a one-sided bare negative admission only blocks its own landing order; the ungated side may still land afterwards"
+    );
+    let violation = outcome.violation.as_ref().expect("violation payload");
+    let trace = violation["trace"].as_array().expect("counterexample trace");
+    let lands: Vec<&str> = trace
+        .iter()
+        .filter_map(|step| step.get("land").and_then(|value| value.as_str()))
+        .collect();
+    assert_eq!(
+        lands,
+        vec!["buyer::pending.s2", "buyer::launched.s1"],
+        "the gated order must not be the counterexample path: the admission must hold at s2's landing moment"
+    );
+
+    let mutual = probe(true);
+    assert!(
+        mutual.passed,
+        "mutual bare negative admissions must make the coexistence state unreachable; got {:?}",
+        mutual.checks
+    );
+}
