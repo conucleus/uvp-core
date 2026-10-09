@@ -1462,6 +1462,34 @@
       "messageContains": "hook_name must not contain whitespace"
     }
   ],
+  "delayLiteralCases": [
+    { "name": "one second", "literal": "1s", "seconds": 1 },
+    { "name": "sub-minute seconds", "literal": "59s", "seconds": 59 },
+    { "name": "minute-boundary seconds", "literal": "60s", "seconds": 60 },
+    { "name": "one minute", "literal": "1m", "seconds": 60 },
+    { "name": "minutes", "literal": "90m", "seconds": 5400 },
+    { "name": "minutes at the 30d cap", "literal": "43200m", "seconds": 2592000 },
+    { "name": "one hour", "literal": "1h", "seconds": 3600 },
+    { "name": "hours at the 30d cap", "literal": "720h", "seconds": 2592000 },
+    { "name": "one day", "literal": "1d", "seconds": 86400 },
+    { "name": "observation window", "literal": "14d", "seconds": 1209600 },
+    { "name": "cap in days", "literal": "30d", "seconds": 2592000 },
+    { "name": "cap in seconds", "literal": "2592000s", "seconds": 2592000 },
+    { "name": "empty literal", "literal": "" },
+    { "name": "bare integer", "literal": "1" },
+    { "name": "bare unit", "literal": "s" },
+    { "name": "zero duration", "literal": "0s" },
+    { "name": "leading zero", "literal": "05m" },
+    { "name": "signed duration", "literal": "+5s" },
+    { "name": "fractional duration", "literal": "1.5h" },
+    { "name": "week unit", "literal": "10w" },
+    { "name": "non-ascii unit", "literal": "1ü" },
+    { "name": "one second past the cap", "literal": "2592001s" },
+    { "name": "31 days", "literal": "31d" },
+    { "name": "i64 overflow", "literal": "9223372036854775808d" },
+    { "name": "i64 max days", "literal": "9223372036854775807d" },
+    { "name": "18-digit days", "literal": "999999999999999999d" }
+  ],
   "replayCases": [
     {
       "name": "duplicate signal is first writer wins",

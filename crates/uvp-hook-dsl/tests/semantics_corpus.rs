@@ -14,6 +14,7 @@ struct Corpus {
     parse_cases: Vec<ParseCase>,
     eval_cases: Vec<EvalCase>,
     invalid_cases: Vec<InvalidCase>,
+    delay_literal_cases: Vec<DelayLiteralCase>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +72,14 @@ struct InvalidCase {
     hook_name: String,
     hook: String,
     message_contains: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DelayLiteralCase {
+    name: String,
+    literal: String,
+    seconds: Option<i64>,
 }
 
 fn load_corpus() -> Corpus {
@@ -194,5 +203,42 @@ fn rejects_invalid_semantic_corpus() {
             err.to_string(),
             case.message_contains
         );
+    }
+}
+
+fn find_delay_seconds(node: &Value) -> Option<i64> {
+    match node {
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("delay") {
+                return map.get("durationSeconds").and_then(Value::as_i64);
+            }
+            map.values().find_map(find_delay_seconds)
+        }
+        Value::Array(items) => items.iter().find_map(find_delay_seconds),
+        _ => None,
+    }
+}
+
+#[test]
+fn parses_delay_literal_corpus() {
+    for case in load_corpus().delay_literal_cases {
+        let result = parse_hook(ParseHookRequest {
+            profile: Profile::CloudCompat,
+            gate: Gate::Hook,
+            hook_name: "TIMEOUT".to_string(),
+            hook: format!("buyer::(a.cmp + {})", case.literal),
+        });
+        match case.seconds {
+            Some(expected) => {
+                let output = result
+                    .unwrap_or_else(|err| panic!("{} failed to parse: {err}", case.name));
+                let seconds = find_delay_seconds(&output.cloud_ast)
+                    .unwrap_or_else(|| panic!("{} produced no delay node", case.name));
+                assert_eq!(seconds, expected, "{}", case.name);
+            }
+            None => {
+                assert!(result.is_err(), "{} must be rejected", case.name);
+            }
+        }
     }
 }
