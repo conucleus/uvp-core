@@ -32,8 +32,6 @@ enum Command {
         #[arg(long)]
         definition: String,
         #[arg(long)]
-        max_states: Option<u64>,
-        #[arg(long)]
         json: bool,
     },
 }
@@ -50,11 +48,7 @@ fn main() -> ExitCode {
             definition,
             manifest,
         } => run_lint(&definition, &manifest),
-        Command::LintHooks {
-            definition,
-            max_states,
-            json,
-        } => run_lint_hooks(&definition, max_states, json),
+        Command::LintHooks { definition, json } => run_lint_hooks(&definition, json),
     }
 }
 
@@ -167,11 +161,10 @@ struct McLintPayload {
     manifest: Manifest,
 }
 
-fn run_lint_hooks(definition_path: &str, max_states: Option<u64>, json: bool) -> ExitCode {
+fn run_lint_hooks(definition_path: &str, json: bool) -> ExitCode {
     let result = (|| {
         let definition = read_definition(definition_path)?;
-        uvp_mc::lint_hooks(&definition, max_states.unwrap_or(uvp_mc::DEFAULT_MAX_STATES))
-            .map_err(|err| err.to_string())
+        uvp_mc::lint_hooks(&definition).map_err(|err| err.to_string())
     })();
     match result {
         Ok(report) => {
@@ -183,11 +176,15 @@ fn run_lint_hooks(definition_path: &str, max_states: Option<u64>, json: bool) ->
             } else {
                 println!("zhixu: {}", report.zhixu_name);
                 println!(
-                    "states: {}, guards examined: {} (subscription skipped: {}), conjuncts: {}",
-                    report.states,
+                    "guards examined: {} (subscription skipped: {}), conjuncts: {}{}",
                     report.guards_examined,
                     report.subscription_guards_skipped,
-                    report.conjuncts_examined
+                    report.conjuncts_examined,
+                    if report.search_budget_exhausted {
+                        " [search budget exhausted: unflagged items may hide findings]"
+                    } else {
+                        ""
+                    }
                 );
                 if report.findings.is_empty() {
                     println!("removable conjuncts: none");
