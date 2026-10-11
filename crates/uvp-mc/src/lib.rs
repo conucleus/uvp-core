@@ -1,8 +1,7 @@
 //! uvp-mc：秩序定义的穷举式模型检查器。转移系统的每一步（意图落地、守卫
 //! 触发、时间推进）都经 uvp-hook-dsl 的真求值器裁决——模型即实现，无双
 //! 语义源；不变量与效果门控以 manifest 数据（uvp.mc.manifest.v1）喂入，
-//! 内核业务盲。业务侧 manifest 建模见 backend mcguard 与 uvp-deploy
-//! services/init。
+//! 内核业务盲。业务侧 manifest 单源在 backend mcguard。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,6 +10,7 @@ use thiserror::Error;
 pub mod check;
 pub mod explore;
 pub mod lint;
+pub mod lint_hooks;
 pub mod manifest;
 pub mod model;
 pub mod vocab;
@@ -20,6 +20,7 @@ mod tests;
 
 pub use check::{CheckOutcome, Checker, Status};
 pub use lint::{lint, LintFinding, LintReport, Severity};
+pub use lint_hooks::{lint_hooks, HookConjunctFinding, LintHooksReport};
 pub use manifest::{
     Check, CheckKind, Effect, Manifest, DEFAULT_MAX_STATES, MANIFEST_SCHEMA_VERSION,
 };

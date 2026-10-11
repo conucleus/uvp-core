@@ -28,6 +28,14 @@ enum Command {
         #[arg(long)]
         manifest: String,
     },
+    LintHooks {
+        #[arg(long)]
+        definition: String,
+        #[arg(long)]
+        max_states: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -42,6 +50,11 @@ fn main() -> ExitCode {
             definition,
             manifest,
         } => run_lint(&definition, &manifest),
+        Command::LintHooks {
+            definition,
+            max_states,
+            json,
+        } => run_lint_hooks(&definition, max_states, json),
     }
 }
 
@@ -152,4 +165,42 @@ fn run_lint(definition_path: &str, manifest_path: &str) -> ExitCode {
 struct McLintPayload {
     definition: serde_json::Value,
     manifest: Manifest,
+}
+
+fn run_lint_hooks(definition_path: &str, max_states: Option<u64>, json: bool) -> ExitCode {
+    let result = (|| {
+        let definition = read_definition(definition_path)?;
+        uvp_mc::lint_hooks(&definition, max_states.unwrap_or(uvp_mc::DEFAULT_MAX_STATES))
+            .map_err(|err| err.to_string())
+    })();
+    match result {
+        Ok(report) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).expect("report should serialize")
+                );
+            } else {
+                println!("zhixu: {}", report.zhixu_name);
+                println!(
+                    "states: {}, guards examined: {} (subscription skipped: {}), conjuncts: {}",
+                    report.states,
+                    report.guards_examined,
+                    report.subscription_guards_skipped,
+                    report.conjuncts_examined
+                );
+                if report.findings.is_empty() {
+                    println!("removable conjuncts: none");
+                }
+                for finding in &report.findings {
+                    println!("REMOVABLE\t{}\t{}", finding.hook, finding.conjunct);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("uvp-mc: {message}");
+            ExitCode::FAILURE
+        }
+    }
 }
