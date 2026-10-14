@@ -1,12 +1,8 @@
-use crate::{mc_check, CheckKind, Manifest, McCheckRequest, Status};
 use serde_json::json;
 
-fn demo_definition(with_timer: bool) -> serde_json::Value {
-    let release_hook = if with_timer {
-        json!("buyer::escrow.held +5s & ~escrow.returned & ~escrow.released")
-    } else {
-        json!("buyer::escrow.release & ~escrow.returned & ~escrow.released")
-    };
+use crate::{mc_check, Check, CheckKind, McCheckRequest, Status};
+
+fn demo_definition() -> serde_json::Value {
     json!({
         "apiVersion": "uvp/v0",
         "kind": "Zhixu",
@@ -15,89 +11,91 @@ fn demo_definition(with_timer: bool) -> serde_json::Value {
             "platform": {"type": "cloud"},
             "nucleation": {"id": "core_org"},
             "stages": [{
-                    "name": "escrow",
-                    "source": "buyer",
-                    "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
-                    "sendSignals": [
-                        {"name": "held"},
-                        {"name": "release", "validWhen": [
-                            "buyer::escrow.held",
-                            "buyer::~escrow.released",
-                            "buyer::~escrow.returned"
-                        ]},
-                        {"name": "released"},
-                        {"name": "refund", "validWhen": [
-                            "buyer::escrow.held",
-                            "buyer::~escrow.released",
-                            "buyer::~escrow.returned"
-                        ]},
-                        {"name": "returned"}
-                    ],
-                    "receiveSignals": {
-                        "AUTO_RELEASE": release_hook,
-                        "RETURN": "buyer::escrow.refund & ~escrow.returned & ~escrow.released"
-                    }
-                }]
+                "name": "escrow",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "held"},
+                    {"name": "release", "validWhen": [
+                        "buyer::escrow.held",
+                        "buyer::~escrow.refund",
+                        "buyer::~escrow.released",
+                        "buyer::~escrow.returned"
+                    ]},
+                    {"name": "released"},
+                    {"name": "refund", "validWhen": [
+                        "buyer::escrow.held",
+                        "buyer::~escrow.release",
+                        "buyer::~escrow.released",
+                        "buyer::~escrow.returned"
+                    ]},
+                    {"name": "returned"}
+                ],
+                "receiveSignals": {
+                    "AUTO_RELEASE": "buyer::escrow.held +5s & ~escrow.returned & ~escrow.released"
+                }
+            }]
         }
     })
 }
 
-fn demo_manifest(with_effects: bool) -> Manifest {
-    let effects = if with_effects {
-        json!([
-            {"fact": "buyer::escrow.released", "requires_any_guards": ["escrow#AUTO_RELEASE"]},
-            {"fact": "buyer::escrow.returned", "requires_any_guards": ["escrow#RETURN"]}
-        ])
-    } else {
-        json!([])
-    };
-    let manifest = json!({
-        "schema_version": "uvp.mc.manifest.v1",
-        "effects": effects,
-        "checks": [
-            {
-                "id": "terminal-mutex",
-                "kind": "bad_state",
-                "predicate": "buyer::escrow.released & escrow.returned"
-            },
-            {
-                "id": "terminal-closes-intents",
-                "kind": "admission_closed",
-                "when": "buyer::escrow.released | escrow.returned",
-                "intents": ["buyer::escrow.release", "buyer::escrow.refund"]
-            },
-            {
-                "id": "held-can-progress",
-                "kind": "deadlock_free",
-                "when": "buyer::escrow.held & ~escrow.released & ~escrow.returned"
-            },
-            {
-                "id": "terminal-reachable",
-                "kind": "coreach",
-                "predicate": "buyer::escrow.released | escrow.returned"
-            },
-            {
-                "id": "time-settles-held",
-                "kind": "time_only_closure",
-                "when": "buyer::escrow.held & ~escrow.released & ~escrow.returned",
-                "predicate": "buyer::escrow.released | escrow.returned"
-            }
-        ]
-    });
-    serde_json::from_value(manifest).expect("demo manifest should deserialize")
+fn check_when(id: &str, kind: CheckKind, when: &str) -> Check {
+    Check {
+        id: id.to_string(),
+        kind,
+        description: None,
+        when: Some(when.to_string()),
+        predicate: None,
+        intents: Vec::new(),
+    }
 }
 
-fn run(definition: serde_json::Value, manifest: Manifest) -> crate::McCheckReport {
+fn demo_checks() -> Vec<Check> {
+    vec![
+        check("claim-mutex", CheckKind::BadState, "buyer::escrow.release & escrow.refund"),
+        check_closed("terminal-closes-intents", "buyer::escrow.released | escrow.returned"),
+        check_when("held-can-progress", CheckKind::DeadlockFree, "buyer::escrow.held & ~escrow.released & ~escrow.returned & ~escrow.release & ~escrow.refund"),
+        check("terminal-reachable", CheckKind::CoReach, "buyer::escrow.released | escrow.returned"),
+    ]
+}
+
+fn check(id: &str, kind: CheckKind, predicate: &str) -> Check {
+    Check {
+        id: id.to_string(),
+        kind,
+        description: None,
+        when: None,
+        predicate: Some(predicate.to_string()),
+        intents: Vec::new(),
+    }
+}
+
+fn check_closed(id: &str, when: &str) -> Check {
+    Check {
+        id: id.to_string(),
+        kind: CheckKind::AdmissionClosed,
+        description: None,
+        when: Some(when.to_string()),
+        predicate: None,
+        intents: vec![
+            "buyer::escrow.release".to_string(),
+            "buyer::escrow.refund".to_string(),
+        ],
+    }
+}
+
+fn run(definition: serde_json::Value, checks: Vec<Check>) -> crate::McCheckReport {
     mc_check(McCheckRequest {
         definition,
-        manifest,
+        checks,
+        max_states: None,
     })
     .expect("demo check should run")
 }
 
 #[test]
 fn sound_demo_passes_all_check_kinds() {
-    let report = run(demo_definition(true), demo_manifest(true));
+    let report = run(demo_definition(), demo_checks());
     assert!(
         report.passed,
         "sound demo must pass; lint={:?} checks={:?}",
@@ -108,146 +106,127 @@ fn sound_demo_passes_all_check_kinds() {
             .map(|outcome| (outcome.id.clone(), outcome.violation.clone()))
             .collect::<Vec<_>>()
     );
-    assert_eq!(report.checks.len(), 5);
+    assert_eq!(report.checks.len(), 4);
 }
 
 #[test]
-fn missing_terminal_negative_gate_fails_admission_closure() {
-    let mut definition = demo_definition(true);
+fn one_sided_negative_gate_fails_claim_mutex() {
+    let mut definition = demo_definition();
     let signals = &mut definition["spec"]["stages"][0]["sendSignals"];
-    signals[1]["validWhen"] = json!(["buyer::escrow.held"]);
-    let report = run(definition, demo_manifest(true));
+    // release 丢掉 ~refund：单边负门只挡自己先落，refund 先落仍可共存。
+    signals[1]["validWhen"] = json!(["buyer::escrow.held", "buyer::~escrow.released", "buyer::~escrow.returned"]);
+    let report = run(definition, demo_checks());
     let outcome = report
         .checks
         .iter()
-        .find(|outcome| outcome.kind == CheckKind::AdmissionClosed)
-        .expect("admission_closed outcome");
+        .find(|outcome| outcome.id == "claim-mutex")
+        .expect("claim-mutex outcome");
     assert_eq!(outcome.status, Status::Fail);
     let violation = outcome.violation.as_ref().expect("violation payload");
-    assert_eq!(
-        violation["check_id"], "terminal-closes-intents",
-        "violation must name its check"
-    );
-    let trace = violation["trace"].as_array().expect("counterexample trace");
-    assert!(
-        trace.iter().any(|step| step.get("land").is_some()),
-        "counterexample must carry a fact landing sequence: {trace:?}"
-    );
-}
-
-#[test]
-fn no_timer_starves_both_liveness_kinds() {
-    let report = run(demo_definition(false), demo_manifest(false));
-    for kind in [CheckKind::DeadlockFree, CheckKind::TimeOnlyClosure] {
-        let outcome = report
-            .checks
-            .iter()
-            .find(|outcome| outcome.kind == kind)
-            .expect("liveness outcome");
-        assert_eq!(
-            outcome.status,
-            Status::Fail,
-            "{:?} must fail when neither a deadline nor an in-flight effect can move the state",
-            kind
-        );
-    }
-    let coreach = report
-        .checks
-        .iter()
-        .find(|outcome| outcome.kind == CheckKind::CoReach)
-        .expect("coreach outcome");
-    assert_eq!(coreach.status, Status::Pass);
-}
-
-#[test]
-fn state_cap_is_loud() {
-    let mut manifest = demo_manifest(true);
-    manifest.max_states = Some(1);
-    let error = mc_check(McCheckRequest {
-        definition: demo_definition(true),
-        manifest,
-    })
-    .expect_err("cap must fail loudly");
-    assert!(
-        error.to_string().contains("max_states"),
-        "error must name the cap: {error}"
-    );
-}
-
-#[test]
-fn bare_negative_admissions_are_one_directional() {
-    fn probe(s1_gated: bool) -> crate::McCheckReport {
-        let s1 = if s1_gated {
-            json!({"name": "s1", "validWhen": ["buyer::~pending.s2"]})
-        } else {
-            json!({"name": "s1"})
-        };
-        let definition = json!({
-            "apiVersion": "uvp/v0",
-            "kind": "Zhixu",
-            "metadata": {"name": "neg_probe"},
-            "spec": {
-                "platform": {"type": "cloud"},
-                "nucleation": {"id": "core_org"},
-                "stages": [
-                    {
-                        "name": "launched",
-                        "source": "buyer",
-                        "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
-                        "sendSignals": [s1],
-                        "receiveSignals": {"H": "buyer::launched.s1"}
-                    },
-                    {
-                        "name": "pending",
-                        "source": "buyer",
-                        "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
-                        "sendSignals": [{"name": "s2", "validWhen": ["buyer::~launched.s1"]}],
-                        "receiveSignals": {"H2": "buyer::pending.s2"}
-                    }
-                ]
-            }
-        });
-        let manifest = json!({
-            "schema_version": "uvp.mc.manifest.v1",
-            "effects": [],
-            "checks": [
-                {"id": "mutex", "kind": "bad_state", "predicate": "buyer::launched.s1 & pending.s2"}
-            ]
-        });
-        mc_check(McCheckRequest {
-            definition,
-            manifest: serde_json::from_value(manifest).expect("manifest"),
-        })
-        .expect("probe should run")
-    }
-
-    let one_sided = probe(false);
-    let outcome = one_sided
-        .checks
-        .iter()
-        .find(|outcome| outcome.id == "mutex")
-        .expect("mutex outcome");
-    assert_eq!(
-        outcome.status,
-        Status::Fail,
-        "a one-sided bare negative admission only blocks its own landing order; the ungated side may still land afterwards"
-    );
-    let violation = outcome.violation.as_ref().expect("violation payload");
+    assert_eq!(violation["check_id"], "claim-mutex");
     let trace = violation["trace"].as_array().expect("counterexample trace");
     let lands: Vec<&str> = trace
         .iter()
         .filter_map(|step| step.get("land").and_then(|value| value.as_str()))
         .collect();
-    assert_eq!(
-        lands,
-        vec!["buyer::pending.s2", "buyer::launched.s1"],
-        "the gated order must not be the counterexample path: the admission must hold at s2's landing moment"
-    );
-
-    let mutual = probe(true);
     assert!(
-        mutual.passed,
-        "mutual bare negative admissions must make the coexistence state unreachable; got {:?}",
-        mutual.checks
+        lands.contains(&"buyer::escrow.refund") && lands.contains(&"buyer::escrow.release"),
+        "counterexample must land both claims: {lands:?}"
+    );
+}
+
+#[test]
+fn bare_run_flags_dead_intent_and_reports_coexistence() {
+    // dead: stuck 要求 held 与 ~held 同时成立，任何可达状态都不适格。
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_demo_bare"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "held"},
+                    {"name": "stuck", "validWhen": ["buyer::lane.held", "buyer::~lane.held"]},
+                    {"name": "free_go", "validWhen": ["buyer::lane.held"]},
+                    {"name": "independent", "validWhen": ["buyer::~lane.held"]},
+                    {"name": "done"}
+                ],
+                "receiveSignals": {"H": "buyer::lane.held"}
+            }]
+        }
+    });
+    let report = run(definition, Vec::new());
+    assert!(!report.passed, "dead intent must fail the bare run");
+    let dead = report
+        .checks
+        .iter()
+        .find(|outcome| outcome.id == "dead-intent:buyer::lane.stuck")
+        .expect("dead-intent outcome for stuck");
+    assert_eq!(dead.status, Status::Fail);
+    assert!(
+        report
+            .checks
+            .iter()
+            .all(|outcome| outcome.id == "dead-intent:buyer::lane.stuck" || outcome.status == Status::Pass),
+        "healthy intents must pass: {:?}",
+        report.checks
+    );
+    let pairs = report.intent_pairs.as_ref().expect("coexistence matrix");
+    let lookup = |a: &str, b: &str| {
+        pairs
+            .iter()
+            .find(|pair| {
+                (pair.a == a && pair.b == b) || (pair.a == b && pair.b == a)
+            })
+            .unwrap_or_else(|| panic!("pair {a}/{b} missing"))
+            .coexist
+    };
+    assert!(
+        lookup("buyer::lane.free_go", "buyer::lane.independent"),
+        "no cross-negative pair must coexist"
+    );
+    // demo 的互负门对：共存矩阵必须报 mutex。
+    let demo = run(demo_definition(), Vec::new());
+    let demo_pairs = demo.intent_pairs.as_ref().expect("demo matrix");
+    let pair = demo_pairs
+        .iter()
+        .find(|pair| {
+            (pair.a == "buyer::escrow.release" && pair.b == "buyer::escrow.refund")
+                || (pair.a == "buyer::escrow.refund" && pair.b == "buyer::escrow.release")
+        })
+        .expect("release/refund pair");
+    assert!(!pair.coexist, "mutual negative gates must read as mutex");
+}
+
+#[test]
+fn typo_atom_is_rejected_loudly() {
+    let mut checks = demo_checks();
+    checks.push(check("typo", CheckKind::BadState, "buyer::escrow.ghost & escrow.held"));
+    let report = run(demo_definition(), checks);
+    assert!(!report.passed);
+    assert!(!report.lint["ok"].as_bool().expect("lint ok flag"));
+    let findings = serde_json::to_string(&report.lint).expect("lint json");
+    assert!(
+        findings.contains("escrow.ghost"),
+        "lint must name the undeclared atom: {findings}"
+    );
+}
+
+#[test]
+fn state_cap_is_loud() {
+    let error = mc_check(McCheckRequest {
+        definition: demo_definition(),
+        checks: demo_checks(),
+        max_states: Some(1),
+    })
+    .expect_err("cap must fail loudly");
+    assert!(
+        error.to_string().contains("max_states"),
+        "error must name the cap: {error}"
     );
 }

@@ -1,14 +1,16 @@
 //! 不变量检查：bad_state（坏状态谓词）、admission_closed（终态关断适格
-//! 位）、deadlock_free（有人能动∨截止将至∨在途指令）、coreach（终态可
-//! 达）、time_only_closure（钱不无故沉睡：仅时间推进与在途完成也能收敛）。
-//! 违反给最短事实序列反例。
+//! 位）、deadlock_free（有人能动∨截止将至）、coreach（谓词可达）。违反
+//! 给最短事实序列反例。每项检查的探索宇宙由其原子的适格闭包派生——
+//! 闭包外原子不参与任何相关求值，窄宇宙与全宇宙在性质上等价；意图关
+//! 断按意图逐个独立探索再合并。
 
 use serde_json::{json, Value};
+use uvp_hook_dsl::EvalState;
 
+use crate::checks::{Check, CheckKind};
 use crate::explore::{Explorer, Graph};
-use crate::manifest::{Check, CheckKind};
-use crate::model::{self, Action, McState, Mode, SignalTimes};
-use crate::vocab::Vocabulary;
+use crate::model::{self, Action, McState};
+use crate::vocab::{signal_atoms, Vocabulary};
 use crate::{McError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -45,20 +47,14 @@ impl<'v> Checker<'v> {
 
     pub fn run(&mut self, check: &Check) -> Result<CheckOutcome> {
         validate_shape(check)?;
-        let scope = scope_indices(self.vocab, &check.scope)?;
         let vocab = self.vocab;
         let explorer = &mut self.explorer;
         let max_states = self.max_states;
         let mut outcome = match check.kind {
-            CheckKind::BadState => bad_state(vocab, explorer, max_states, check, &scope)?,
-            CheckKind::AdmissionClosed => {
-                admission_closed(vocab, explorer, max_states, check, &scope)?
-            }
-            CheckKind::DeadlockFree => deadlock_free(vocab, explorer, max_states, check, &scope)?,
-            CheckKind::CoReach => coreach(vocab, explorer, max_states, check, &scope)?,
-            CheckKind::TimeOnlyClosure => {
-                time_only_closure(vocab, explorer, max_states, check, &scope)?
-            }
+            CheckKind::BadState => bad_state(vocab, explorer, max_states, check)?,
+            CheckKind::AdmissionClosed => admission_closed(vocab, explorer, max_states, check)?,
+            CheckKind::DeadlockFree => deadlock_free(vocab, explorer, max_states, check)?,
+            CheckKind::CoReach => coreach(vocab, explorer, max_states, check)?,
         };
         if outcome.status == Status::Fail {
             if let Some(violation) = outcome.violation.as_mut() {
@@ -67,6 +63,71 @@ impl<'v> Checker<'v> {
         }
         Ok(outcome)
     }
+
+    /// 死意图：其适格闭包宇宙内从未适格——适格自相矛盾或依赖永不可落
+    /// 的意图链，信号永不可发。反例不存在（全称失败），报告意图本身。
+    pub fn run_dead_intent(&mut self, fact: usize) -> Result<CheckOutcome> {
+        let name = self.vocab.facts[fact].clone();
+        let &intent = self
+            .vocab
+            .intent_fact
+            .get(&fact)
+            .expect("dead-intent probe is only called on intents");
+        let universe: Vec<usize> = self.vocab.positive_closure(&[fact]).into_iter().collect();
+        let graph = self.explorer.graph(&universe, self.max_states)?;
+        let mut alive = false;
+        for state in &graph.states {
+            if state.fact_epochs[fact].is_some() {
+                continue;
+            }
+            let times = state.signal_times(self.vocab);
+            if model::intent_admissible(self.vocab, intent, &times, state.now)? {
+                alive = true;
+                break;
+            }
+        }
+        let violation = if alive {
+            None
+        } else {
+            Some(json!({
+                "reason": "intent is never admissible in any reachable state: its admission is self-contradictory or depends on intents that can never land",
+                "intent": name,
+            }))
+        };
+        Ok(CheckOutcome {
+            id: format!("dead-intent:{name}"),
+            kind: CheckKind::BadState,
+            status: if violation.is_some() {
+                Status::Fail
+            } else {
+                Status::Pass
+            },
+            states: graph.states.len(),
+            violation,
+        })
+    }
+}
+
+fn predicate_holds(vocab: &Vocabulary, raw: Option<&str>, state: &McState) -> Result<bool> {
+    let Some(raw) = raw else { return Ok(true) };
+    let Some(decoded) = vocab.predicates.get(raw) else {
+        return Err(McError::Message(format!(
+            "predicate {raw:?} was not parsed during vocabulary build"
+        )));
+    };
+    let times = state.signal_times(vocab);
+    Ok(model::eval_state(decoded, &times, state.now)? == EvalState::Ready)
+}
+
+fn predicate_atoms(vocab: &Vocabulary, raw: &str) -> Vec<usize> {
+    vocab
+        .predicates
+        .get(raw)
+        .map(|decoded| signal_atoms(&decoded.expr, &decoded.source))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|atom| vocab.fact_index.get(atom).copied())
+        .collect()
 }
 
 fn bad_state(
@@ -74,17 +135,21 @@ fn bad_state(
     explorer: &mut Explorer,
     max_states: u64,
     check: &Check,
-    scope: &[usize],
 ) -> Result<CheckOutcome> {
-    let graph = explorer.graph(scope, Mode::Full, max_states)?;
     let predicate = check.predicate.as_deref().expect("validated");
     let when = check.when.as_deref();
+    let mut seeds = predicate_atoms(vocab, predicate);
+    if let Some(when) = when {
+        seeds.extend(predicate_atoms(vocab, when));
+    }
+    let universe: Vec<usize> = vocab.positive_closure(&seeds).into_iter().collect();
+    let graph = explorer.graph(&universe, max_states)?;
     let mut violation = None;
     for (position, state) in graph.states.iter().enumerate() {
-        if !predicate_holds(vocab, when, state) {
+        if !predicate_holds(vocab, when, state)? {
             continue;
         }
-        if predicate_holds(vocab, Some(predicate), state) {
+        if predicate_holds(vocab, Some(predicate), state)? {
             violation = Some(violation_json(
                 vocab,
                 graph,
@@ -102,42 +167,45 @@ fn admission_closed(
     explorer: &mut Explorer,
     max_states: u64,
     check: &Check,
-    scope: &[usize],
 ) -> Result<CheckOutcome> {
-    let graph = explorer.graph(scope, Mode::Full, max_states)?;
     let when = check.when.as_deref().expect("validated");
+    let when_atoms = predicate_atoms(vocab, when);
     let mut violation = None;
-    'states: for (position, state) in graph.states.iter().enumerate() {
-        if !predicate_holds(vocab, Some(when), state) {
-            continue;
-        }
-        let times = state.signal_times(vocab);
-        for intent_name in &check.intents {
-            let fact = vocab.fact_index.get(intent_name).copied().ok_or_else(|| {
-                McError::Message(format!("intent {intent_name:?} is not in the vocabulary"))
-            })?;
+    let mut states = 0usize;
+    'intents: for intent_name in &check.intents {
+        let fact = vocab.fact_index.get(intent_name).copied().ok_or_else(|| {
+            McError::Message(format!("intent {intent_name:?} is not in the vocabulary"))
+        })?;
+        let Some(&intent) = vocab.intent_fact.get(&fact) else {
+            return Err(McError::Message(format!(
+                "intent {intent_name:?} has no admission in the compiled artifact; only gated signals can be checked for closure"
+            )));
+        };
+        let mut seeds = when_atoms.clone();
+        seeds.push(fact);
+        let universe: Vec<usize> = vocab.positive_closure(&seeds).into_iter().collect();
+        let graph = explorer.graph(&universe, max_states)?;
+        states = states.max(graph.states.len());
+        for (position, state) in graph.states.iter().enumerate() {
             if state.fact_epochs[fact].is_some() {
                 continue;
             }
-            let Some(intent_index) = vocab.intent_fact.get(&fact).copied() else {
-                return Err(McError::Message(format!(
-                    "intent {intent_name:?} has no admission in the compiled artifact; only gated signals can be checked for closure"
-                )));
-            };
-            if model::intent_admissible(vocab, intent_index, &times, state.now) {
+            if !predicate_holds(vocab, Some(when), state)? {
+                continue;
+            }
+            let times = state.signal_times(vocab);
+            if model::intent_admissible(vocab, intent, &times, state.now)? {
                 violation = Some(violation_json(
                     vocab,
                     graph,
                     position,
-                    format!(
-                        "intent {intent_name} is still admissible at a state the when-clause closed"
-                    ),
+                    format!("intent {intent_name} is still admissible at a state the when-clause closed"),
                 ));
-                break 'states;
+                break 'intents;
             }
         }
     }
-    Ok(outcome(check, graph.states.len(), violation))
+    Ok(outcome(check, states, violation))
 }
 
 fn deadlock_free(
@@ -145,32 +213,37 @@ fn deadlock_free(
     explorer: &mut Explorer,
     max_states: u64,
     check: &Check,
-    scope: &[usize],
 ) -> Result<CheckOutcome> {
-    let graph = explorer.graph(scope, Mode::Full, max_states)?;
     let when = check.when.as_deref().expect("validated");
+    let mut seeds = predicate_atoms(vocab, when);
+    seeds.extend(vocab.intent_facts());
+    let universe: Vec<usize> = vocab.closure(&seeds).into_iter().collect();
+    let graph = explorer.graph(&universe, max_states)?;
     let mut violation = None;
     for (position, state) in graph.states.iter().enumerate() {
-        if !predicate_holds(vocab, Some(when), state) {
+        if !predicate_holds(vocab, Some(when), state)? {
             continue;
         }
         let times = state.signal_times(vocab);
-        let in_flight = scope.iter().any(|fact| {
-            state.fact_epochs[*fact].is_none()
-                && vocab.effects.get(fact).is_some_and(|effect| {
-                    effect.env_timed && model::effect_open(vocab, state, *fact)
-                })
-        });
-        let sanctioned = model::next_deadline_epoch(vocab, &times, state.now).is_some()
-            || any_sanctioned_intent(vocab, scope, state, &times)
-            || in_flight;
+        let mut sanctioned = model::next_deadline_epoch(vocab, &times, state.now)?.is_some();
+        for fact in &universe {
+            if state.fact_epochs[*fact].is_some() {
+                continue;
+            }
+            let Some(&intent) = vocab.intent_fact.get(fact) else {
+                continue;
+            };
+            if model::intent_admissible(vocab, intent, &times, state.now)? {
+                sanctioned = true;
+                break;
+            }
+        }
         if !sanctioned {
             violation = Some(violation_json(
                 vocab,
                 graph,
                 position,
-                "no sanctioned action, no pending deadline and no in-flight relay can move this state"
-                    .to_string(),
+                "no admissible intent and no pending deadline can move this state".to_string(),
             ));
             break;
         }
@@ -178,33 +251,20 @@ fn deadlock_free(
     Ok(outcome(check, graph.states.len(), violation))
 }
 
-fn any_sanctioned_intent(
-    vocab: &Vocabulary,
-    scope: &[usize],
-    state: &McState,
-    times: &SignalTimes,
-) -> bool {
-    scope.iter().any(|fact| {
-        state.fact_epochs[*fact].is_none()
-            && vocab
-                .intent_fact
-                .get(fact)
-                .is_some_and(|intent| model::intent_admissible(vocab, *intent, times, state.now))
-    })
-}
-
 fn coreach(
     vocab: &Vocabulary,
     explorer: &mut Explorer,
     max_states: u64,
     check: &Check,
-    scope: &[usize],
 ) -> Result<CheckOutcome> {
-    let graph = explorer.graph(scope, Mode::Full, max_states)?;
     let predicate = check.predicate.as_deref().expect("validated");
+    let mut seeds = predicate_atoms(vocab, predicate);
+    seeds.extend(vocab.intent_facts());
+    let universe: Vec<usize> = vocab.closure(&seeds).into_iter().collect();
+    let graph = explorer.graph(&universe, max_states)?;
     let covered = backward_cover_edges(graph, &graph.edges, |state| {
         predicate_holds(vocab, Some(predicate), state)
-    });
+    })?;
     let violation = graph
         .states
         .iter()
@@ -219,64 +279,6 @@ fn coreach(
             )
         });
     Ok(outcome(check, graph.states.len(), violation))
-}
-
-fn time_only_closure(
-    vocab: &Vocabulary,
-    explorer: &mut Explorer,
-    max_states: u64,
-    check: &Check,
-    scope: &[usize],
-) -> Result<CheckOutcome> {
-    let graph = explorer.graph(scope, Mode::Full, max_states)?;
-    let when = check.when.as_deref().expect("validated");
-    let predicate = check.predicate.as_deref().expect("validated");
-    let in_scope = scope_mask(vocab, scope);
-    let mut restricted_edges: Vec<Vec<usize>> = vec![Vec::new(); graph.states.len()];
-    for (position, state) in graph.states.iter().enumerate() {
-        let times = state.signal_times(vocab);
-        for action in model::enabled_actions(vocab, &in_scope, state, &times, Mode::TimeOnly) {
-            let successor = model::apply_action(vocab, &in_scope, state, &times, action);
-            if let Some(target) = graph.state_index(&successor) {
-                restricted_edges[position].push(target);
-            }
-        }
-    }
-    let covered = backward_cover_edges(graph, &restricted_edges, |state| {
-        predicate_holds(vocab, Some(predicate), state)
-    });
-    let violation = graph
-        .states
-        .iter()
-        .enumerate()
-        .find(|(position, state)| predicate_holds(vocab, Some(when), state) && !covered[*position])
-        .map(|(position, _)| {
-            violation_json(
-                vocab,
-                graph,
-                position,
-                "time alone (deadline firing plus in-flight completions) never reaches the target from this state"
-                    .to_string(),
-            )
-        });
-    Ok(outcome(check, graph.states.len(), violation))
-}
-
-fn predicate_holds(vocab: &Vocabulary, raw: Option<&str>, state: &McState) -> bool {
-    let Some(raw) = raw else { return true };
-    let Some(decoded) = vocab.predicates.get(raw) else {
-        return false;
-    };
-    let times = state.signal_times(vocab);
-    model::eval_decided_or_default(decoded, &times, state.now)
-}
-
-fn scope_mask(vocab: &Vocabulary, scope: &[usize]) -> Vec<bool> {
-    let mut mask = vec![false; vocab.facts.len()];
-    for fact in scope {
-        mask[*fact] = true;
-    }
-    mask
 }
 
 fn outcome(check: &Check, states: usize, violation: Option<Value>) -> CheckOutcome {
@@ -318,14 +320,18 @@ fn violation_json(vocab: &Vocabulary, graph: &Graph, position: usize, reason: St
     })
 }
 
-fn backward_cover_edges<F>(graph: &Graph, edges: &[Vec<usize>], target: F) -> Vec<bool>
+fn backward_cover_edges<F>(
+    graph: &Graph,
+    edges: &[Vec<usize>],
+    target: F,
+) -> Result<Vec<bool>>
 where
-    F: Fn(&McState) -> bool,
+    F: Fn(&McState) -> Result<bool>,
 {
     let mut covered = vec![false; graph.states.len()];
     let mut queue = std::collections::VecDeque::new();
     for (position, state) in graph.states.iter().enumerate() {
-        if target(state) {
+        if target(state)? {
             covered[position] = true;
             queue.push_back(position);
         }
@@ -344,7 +350,7 @@ where
             }
         }
     }
-    covered
+    Ok(covered)
 }
 
 fn validate_shape(check: &Check) -> Result<()> {
@@ -379,29 +385,6 @@ fn validate_shape(check: &Check) -> Result<()> {
                 return Err(missing("predicate"));
             }
         }
-        CheckKind::TimeOnlyClosure => {
-            if check.predicate.is_none() {
-                return Err(missing("predicate"));
-            }
-            if check.when.is_none() {
-                return Err(missing("when"));
-            }
-        }
     }
     Ok(())
-}
-
-pub fn scope_indices(vocab: &Vocabulary, scope: &[String]) -> Result<Vec<usize>> {
-    if scope.is_empty() {
-        return Ok((0..vocab.facts.len()).collect());
-    }
-    let mut out = Vec::with_capacity(scope.len());
-    for fact in scope {
-        out.push(vocab.fact_index.get(fact).copied().ok_or_else(|| {
-            McError::Message(format!("scope fact {fact:?} is not in the vocabulary"))
-        })?);
-    }
-    out.sort_unstable();
-    out.dedup();
-    Ok(out)
 }

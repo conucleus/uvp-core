@@ -11,10 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::Value;
-use uvp_hook_dsl::{Expr, HookMode};
+use uvp_hook_dsl::{decode_compiled_hook, DecodedCompiledHook, Expr, Gate, HookMode};
 
-use crate::manifest::Manifest;
-use crate::vocab::Vocabulary;
+use crate::vocab::{signal_atoms, Vocabulary};
 use crate::Result;
 
 const BRANCH_CAP: usize = 512;
@@ -235,19 +234,57 @@ impl<'a> Lander<'a> {
     }
 }
 
-pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
-    let manifest = Manifest::default();
-    let vocab = Vocabulary::build(definition_value, &manifest)?;
+struct Guard {
+    key: String,
+    decoded: DecodedCompiledHook,
+}
 
-    let resolve: BTreeMap<String, usize> = vocab
-        .facts
+pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
+    let vocab = Vocabulary::build(definition_value, &[])?;
+    let cloud = uvp_compiler::compile_cloud_artifact(definition_value, None, true)?;
+
+    // 守卫不进检查词表；本面自建解析域：声明与适格原子之外，并入守卫
+    // 原子，否则守卫里的信号在 resolve 中缺席会静默降级分析。
+    let mut guards = Vec::new();
+    let mut atoms: BTreeMap<String, ()> = vocab.facts.iter().map(|fact| (fact.clone(), ())).collect();
+    for hook in cloud
+        .get("hooks")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let stage = hook
+            .get("stageIdentifier")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let hook_name = hook
+            .get("hookName")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let Some(ast) = hook.get("astJson") else {
+            continue;
+        };
+        let Ok(decoded) = decode_compiled_hook(ast, Gate::Hook) else {
+            continue;
+        };
+        for atom in signal_atoms(&decoded.expr, &decoded.source) {
+            atoms.insert(atom, ());
+        }
+        guards.push(Guard {
+            key: format!("{stage}#{hook_name}"),
+            decoded,
+        });
+    }
+
+    let facts: Vec<String> = atoms.into_keys().collect();
+    let resolve: BTreeMap<String, usize> = facts
         .iter()
         .enumerate()
         .map(|(index, fact)| (fact.clone(), index))
         .collect();
     let mut admissions: BTreeMap<usize, Vec<Branch>> = BTreeMap::new();
     for intent in &vocab.intents {
-        let Some(&fact) = vocab.fact_index.get(&intent.fact) else {
+        let Some(&fact) = resolve.get(&intent.fact) else {
             continue;
         };
         let (branches, exhausted) =
@@ -263,7 +300,7 @@ pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
     let mut skipped = 0usize;
     let mut conjuncts = 0usize;
     let mut budget_exhausted = false;
-    for guard in &vocab.guards {
+    for guard in &guards {
         if guard.decoded.mode == HookMode::Subscription {
             skipped += 1;
             continue;
@@ -291,7 +328,7 @@ pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
                 &guard.decoded.source,
                 &resolve,
                 &admissions,
-                vocab.facts.len(),
+                facts.len(),
             ) {
                 Verdict::Removable => findings.push(HookConjunctFinding {
                     hook: guard.key.clone(),
@@ -305,7 +342,7 @@ pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
 
     Ok(LintHooksReport {
         zhixu_name: vocab.zhixu_name.clone(),
-        guards_examined: vocab.guards.len() - skipped,
+        guards_examined: guards.len() - skipped,
         subscription_guards_skipped: skipped,
         conjuncts_examined: conjuncts,
         search_budget_exhausted: budget_exhausted,
@@ -425,12 +462,12 @@ fn render_expr(expr: &Expr) -> String {
         Expr::Not(inner) => format!("~{}", render_expr(inner)),
         Expr::And(terms) => terms
             .iter()
-            .map(|term| render_expr(term))
+            .map(render_expr)
             .collect::<Vec<_>>()
             .join(" & "),
         Expr::Or(terms) => terms
             .iter()
-            .map(|term| render_expr(term))
+            .map(render_expr)
             .collect::<Vec<_>>()
             .join(" | "),
         Expr::Delay {

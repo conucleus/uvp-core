@@ -1,9 +1,9 @@
-//! 产物内省：从秩序定义编译出 cloud artifact 与 hook plan，抽取模型检查
-//! 所需的词表——事实全集、守卫钩子（hook 位求值器）、意图（适格位求值
-//! 器）、延时位点（时间纪元边界）。求值语义单源在 uvp-hook-dsl，本模块
-//! 只做结构提取，不做第二份语义。
+//! 产物内省：编译秩序定义抽取模型检查词表——声明信号全集、意图（适格
+//! 位求值器）、延时位点。守卫不进模型：守卫点火属于执行器与世界的因
+//! 果，不是定义的形式后果。求值语义单源在 uvp-hook-dsl，本模块只做结
+//! 构提取；检查的探索宇宙由原子的适格闭包（closure）机械派生。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use uvp_hook_dsl::{
     decode_compiled_hook, parse_hook, DecodedCompiledHook, Expr, Gate, HookMode, ParseHookRequest,
@@ -11,28 +11,13 @@ use uvp_hook_dsl::{
 };
 use uvp_model::ZhixuDefinition;
 
-use crate::manifest::Manifest;
+use crate::checks::Check;
 use crate::{McError, Result};
-
-#[derive(Debug, Clone)]
-pub struct Guard {
-    pub key: String,
-    pub decoded: DecodedCompiledHook,
-}
 
 #[derive(Debug, Clone)]
 pub struct Intent {
     pub fact: String,
     pub decoded: DecodedCompiledHook,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedEffect {
-    pub any_guards: Vec<usize>,
-    pub all_facts: Vec<usize>,
-    pub any_facts: Vec<usize>,
-    pub unless_facts: Vec<usize>,
-    pub env_timed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -46,11 +31,9 @@ pub struct Vocabulary {
     pub zhixu_name: String,
     pub facts: Vec<String>,
     pub fact_index: BTreeMap<String, usize>,
-    pub guards: Vec<Guard>,
-    pub guard_index: BTreeMap<String, usize>,
+    pub declared: BTreeSet<String>,
     pub intents: Vec<Intent>,
     pub intent_fact: BTreeMap<usize, usize>,
-    pub effects: BTreeMap<usize, ResolvedEffect>,
     pub delay_sites: Vec<DelaySite>,
     pub predicates: BTreeMap<String, DecodedCompiledHook>,
 }
@@ -93,14 +76,33 @@ pub fn signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
     out
 }
 
+pub fn positive_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(expr: &Expr, source: &str, out: &mut Vec<String>) {
+        match expr {
+            Expr::Signal(signal) => out.push(format!("{source}::{signal}")),
+            Expr::Not(_) => {}
+            Expr::Delay { expr, .. } => walk(expr, source, out),
+            Expr::And(terms) | Expr::Or(terms) => {
+                for term in terms {
+                    walk(term, source, out);
+                }
+            }
+            Expr::Subscription { .. } => {}
+        }
+    }
+    walk(expr, source, &mut out);
+    out
+}
+
 impl Vocabulary {
-    pub fn build(definition_value: &serde_json::Value, manifest: &Manifest) -> Result<Self> {
+    pub fn build(definition_value: &serde_json::Value, checks: &[Check]) -> Result<Self> {
         let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
             .map_err(|err| McError::Message(format!("invalid Zhixu definition: {err}")))?;
         let cloud = uvp_compiler::compile_cloud_artifact(definition_value, None, true)?;
         let hook_plan = uvp_compiler::compile_zhixu_hook_plan(definition_value, None, true)?;
 
-        let mut fact_set: BTreeMap<String, ()> = BTreeMap::new();
+        let mut declared: BTreeSet<String> = BTreeSet::new();
         for capability in hook_plan
             .get("signalCapabilities")
             .and_then(|value| value.as_array())
@@ -116,42 +118,15 @@ impl Vocabulary {
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
             if !source.is_empty() && !signal.is_empty() {
-                fact_set.insert(format!("{source}::{signal}"), ());
+                declared.insert(format!("{source}::{signal}"));
             }
         }
 
-        let mut guards = Vec::new();
-        let mut guard_index = BTreeMap::new();
-        let mut delay_sites = Vec::new();
-        for hook in cloud
-            .get("hooks")
-            .and_then(|value| value.as_array())
-            .into_iter()
-            .flatten()
-        {
-            let stage = hook
-                .get("stageIdentifier")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let hook_name = hook
-                .get("hookName")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let ast = hook.get("astJson").ok_or_else(|| {
-                McError::Message(format!("hook {stage}#{hook_name} is missing astJson"))
-            })?;
-            let decoded = decode_compiled_hook(ast, Gate::Hook)
-                .map_err(|err| McError::Message(format!("hook {stage}#{hook_name}: {err}")))?;
-            for atom in signal_atoms(&decoded.expr, &decoded.source) {
-                fact_set.insert(atom, ());
-            }
-            collect_delay_sites(&decoded, &mut delay_sites);
-            let key = format!("{stage}#{hook_name}");
-            guard_index.insert(key.clone(), guards.len());
-            guards.push(Guard { key, decoded });
-        }
+        let mut fact_set: BTreeMap<String, ()> =
+            declared.iter().map(|fact| (fact.clone(), ())).collect();
 
         let mut intents = Vec::new();
+        let mut delay_sites = Vec::new();
         for admission in cloud
             .get("admissions")
             .and_then(|value| value.as_array())
@@ -183,7 +158,7 @@ impl Vocabulary {
         }
 
         let mut predicates = BTreeMap::new();
-        for check in &manifest.checks {
+        for check in checks {
             for raw in [&check.when, &check.predicate] {
                 let Some(raw) = raw else { continue };
                 if predicates.contains_key(raw) {
@@ -216,57 +191,71 @@ impl Vocabulary {
             })
             .collect();
 
-        let mut effects = BTreeMap::new();
-        for effect in &manifest.effects {
-            let fact_id = *fact_index.get(&effect.fact).ok_or_else(|| {
-                McError::Message(format!(
-                    "effect fact {:?} is not in the vocabulary",
-                    effect.fact
-                ))
-            })?;
-            let mut resolved = ResolvedEffect::default();
-            for guard_key in &effect.requires_any_guards {
-                let guard = *guard_index.get(guard_key).ok_or_else(|| {
-                    McError::Message(format!(
-                        "effect on {:?} references unknown guard {guard_key:?}",
-                        effect.fact
-                    ))
-                })?;
-                resolved.any_guards.push(guard);
-            }
-            for fact in &effect.requires_all_facts {
-                resolved.all_facts.push(need_fact(&fact_index, fact)?);
-            }
-            for fact in &effect.requires_any_facts {
-                resolved.any_facts.push(need_fact(&fact_index, fact)?);
-            }
-            for fact in &effect.unless_any_facts {
-                resolved.unless_facts.push(need_fact(&fact_index, fact)?);
-            }
-            resolved.env_timed = effect.env_timed;
-            effects.insert(fact_id, resolved);
-        }
-
         Ok(Vocabulary {
             zhixu_name: definition.metadata.name,
             facts,
             fact_index,
-            guards,
-            guard_index,
+            declared,
             intents,
             intent_fact,
-            effects,
             delay_sites,
             predicates,
         })
     }
-}
 
-fn need_fact(fact_index: &BTreeMap<String, usize>, fact: &str) -> Result<usize> {
-    fact_index
-        .get(fact)
-        .copied()
-        .ok_or_else(|| McError::Message(format!("fact {fact:?} is not in the vocabulary")))
+    /// 适格闭包：种子原子，加上经由意图适格表达式可达的全部原子，传递
+    /// 到底。闭包外原子不参与种子相关求值，故在此宇宙上穷举与在全宇宙
+    /// 上穷举对相关性质等价。
+    pub fn closure(&self, seeds: &[usize]) -> BTreeSet<usize> {
+        let mut out: BTreeSet<usize> = seeds.iter().copied().collect();
+        let mut queue: Vec<usize> = seeds.to_vec();
+        while let Some(fact) = queue.pop() {
+            let Some(&intent) = self.intent_fact.get(&fact) else {
+                continue;
+            };
+            for atom in signal_atoms(
+                &self.intents[intent].decoded.expr,
+                &self.intents[intent].decoded.source,
+            ) {
+                if let Some(index) = self.fact_index.get(&atom) {
+                    if out.insert(*index) {
+                        queue.push(*index);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 正位闭包（存在性检查用）：只收适格表达式里不被 Not 压住的原子。
+    /// 负位原子是阻断项——见证路径永不落地它们，排除出宇宙后求值只会
+    /// 更宽松，违反若存在必仍可见，通过则全宇宙亦通过。
+    pub fn positive_closure(&self, seeds: &[usize]) -> BTreeSet<usize> {
+        let mut out: BTreeSet<usize> = seeds.iter().copied().collect();
+        let mut queue: Vec<usize> = seeds.to_vec();
+        while let Some(fact) = queue.pop() {
+            let Some(&intent) = self.intent_fact.get(&fact) else {
+                continue;
+            };
+            for atom in positive_signal_atoms(
+                &self.intents[intent].decoded.expr,
+                &self.intents[intent].decoded.source,
+            ) {
+                if let Some(index) = self.fact_index.get(&atom) {
+                    if out.insert(*index) {
+                        queue.push(*index);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub fn intent_facts(&self) -> Vec<usize> {
+        let mut out: Vec<usize> = self.intent_fact.keys().copied().collect();
+        out.sort_unstable();
+        out
+    }
 }
 
 fn collect_delay_sites(decoded: &DecodedCompiledHook, sites: &mut Vec<DelaySite>) {

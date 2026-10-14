@@ -1,9 +1,9 @@
-//! 穷举探索器：按（scope, mode）做带记忆化的 BFS，产出全状态图与父指针
-//! （反例最短路径）。超上限响亮报错，不静默截断。
+//! 穷举探索器：按探索宇宙（事实子集）做带记忆化的 BFS，产出全状态图与
+//! 父指针（反例最短路径）。超上限响亮报错，不静默截断。
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::model::{apply_action, enabled_actions, McState, Mode};
+use crate::model::{apply_action, enabled_actions, McState};
 use crate::vocab::Vocabulary;
 use crate::{McError, Result};
 
@@ -13,8 +13,6 @@ pub struct Graph {
     pub parents: Vec<Option<(usize, crate::model::Action)>>,
     index: HashMap<McState, usize>,
     pub edges: Vec<Vec<usize>>,
-    pub scope_key: BTreeSet<usize>,
-    pub mode: Mode,
 }
 
 impl Graph {
@@ -39,7 +37,7 @@ impl Graph {
 
 pub struct Explorer<'v> {
     vocab: &'v Vocabulary,
-    cache: BTreeMap<(BTreeSet<usize>, Mode), Graph>,
+    cache: BTreeMap<BTreeSet<usize>, Graph>,
 }
 
 impl<'v> Explorer<'v> {
@@ -50,39 +48,36 @@ impl<'v> Explorer<'v> {
         }
     }
 
-    pub fn graph(&mut self, scope_facts: &[usize], mode: Mode, max_states: u64) -> Result<&Graph> {
-        use std::collections::btree_map::Entry;
-        let scope_key: BTreeSet<usize> = scope_facts.iter().copied().collect();
-        match self.cache.entry((scope_key.clone(), mode)) {
-            Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => {
-                let graph = explore(self.vocab, &scope_key, mode, max_states)?;
-                Ok(entry.insert(graph))
-            }
+    pub fn graph(&mut self, universe: &[usize], max_states: u64) -> Result<&Graph> {
+        let key: BTreeSet<usize> = universe.iter().copied().collect();
+        if !self.cache.contains_key(&key) {
+            let graph = explore(self.vocab, &key, max_states)?;
+            self.cache.insert(key.clone(), graph);
         }
+        Ok(self
+            .cache
+            .get(&key)
+            .expect("graph was just inserted or present"))
     }
 }
 
 fn explore(
     vocab: &Vocabulary,
-    scope_key: &BTreeSet<usize>,
-    mode: Mode,
+    universe_key: &BTreeSet<usize>,
     max_states: u64,
 ) -> Result<Graph> {
-    let scope: Vec<bool> = (0..vocab.facts.len())
-        .map(|index| scope_key.contains(&index))
+    let universe: Vec<bool> = (0..vocab.facts.len())
+        .map(|index| universe_key.contains(&index))
         .collect();
 
-    let mut initial = McState::initial(vocab);
-    let mut initial_times = initial.signal_times(vocab);
-    crate::model::settle(vocab, &scope, &mut initial, &mut initial_times);
+    let initial = McState::initial(vocab);
 
     let mut states = Vec::new();
     let mut parents = Vec::new();
     let mut index: HashMap<McState, usize> = HashMap::new();
     let mut edges: Vec<Vec<usize>> = Vec::new();
 
-    let mut queue = std::collections::VecDeque::new();
+    let mut queue = VecDeque::new();
     index.insert(initial.clone(), 0);
     states.push(initial.clone());
     parents.push(None);
@@ -92,17 +87,16 @@ fn explore(
     while let Some(current) = queue.pop_front() {
         let state = states[current].clone();
         let times = state.signal_times(vocab);
-        for action in enabled_actions(vocab, &scope, &state, &times, mode) {
-            let successor = apply_action(vocab, &scope, &state, &times, action);
+        for action in enabled_actions(vocab, &universe, &state, &times)? {
+            let successor = apply_action(&state, action);
             let next = match index.get(&successor) {
                 Some(existing) => *existing,
                 None => {
                     let next = states.len() as u64;
                     if next >= max_states {
                         return Err(McError::Message(format!(
-                            "state space exceeded max_states={max_states} while exploring scope of {} facts (mode {:?}); raise max_states or narrow the check scope",
-                            scope_key.len(),
-                            mode
+                            "state space exceeded max_states={max_states} while exploring a universe of {} facts; raise max_states or narrow the check",
+                            universe_key.len(),
                         )));
                     }
                     index.insert(successor.clone(), states.len());
@@ -122,7 +116,5 @@ fn explore(
         parents,
         index,
         edges,
-        scope_key: scope_key.clone(),
-        mode,
     })
 }
