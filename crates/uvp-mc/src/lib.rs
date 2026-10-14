@@ -116,12 +116,12 @@ fn bare_run(vocab: &Vocabulary, max_states: u64) -> Result<(Vec<CheckOutcome>, O
 
 fn intent_coexistence(vocab: &Vocabulary, max_states: u64) -> Result<Vec<IntentPair>> {
     let intents = vocab.intent_facts();
-    let mut explorer = explore::Explorer::new(vocab);
     let mut pairs = Vec::new();
     for (position, &a) in intents.iter().enumerate() {
         for &b in &intents[position + 1..] {
             let universe: Vec<usize> = vocab.positive_closure(&[a, b]).into_iter().collect();
-            let graph = explorer.explore_with(
+            let graph = explore::explore_universe(
+                vocab,
                 &universe,
                 max_states,
                 Some(&|state| {

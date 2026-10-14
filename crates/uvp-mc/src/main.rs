@@ -27,10 +27,6 @@ enum Command {
         request: Option<String>,
         #[arg(long = "bad-state", value_name = "EXPR")]
         bad_states: Vec<String>,
-        #[arg(long, value_name = "EXPR")]
-        reach: Vec<String>,
-        #[arg(long = "deadlock-when", value_name = "WHEN")]
-        deadlock_whens: Vec<String>,
         #[arg(long = "closed-when", value_name = "WHEN", requires = "close_intents")]
         closed_when: Option<String>,
         #[arg(long = "close-intents", value_name = "A,B", requires = "closed_when")]
@@ -59,28 +55,22 @@ fn main() -> ExitCode {
             definition,
             request,
             bad_states,
-            reach,
-            deadlock_whens,
             closed_when,
             close_intents,
             max_states,
             json,
         } => run_check(
-            definition, request, bad_states, reach, deadlock_whens, closed_when,
-            close_intents, max_states, json,
+            definition, request, bad_states, closed_when, close_intents, max_states, json,
         ),
         Command::Lint { definition } => run_lint(&definition),
         Command::LintHooks { definition, json } => run_lint_hooks(&definition, json),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_check(
     definition_path: Option<String>,
     request_path: Option<String>,
     bad_states: Vec<String>,
-    reach: Vec<String>,
-    deadlock_whens: Vec<String>,
     closed_when: Option<String>,
     close_intents: Option<String>,
     max_states: Option<u64>,
@@ -103,26 +93,6 @@ fn run_check(
                 description: None,
                 when: None,
                 predicate: Some(predicate.clone()),
-                intents: Vec::new(),
-            });
-        }
-        for (index, predicate) in reach.iter().enumerate() {
-            checks.push(Check {
-                id: format!("reach:{}", index + 1),
-                kind: CheckKind::CoReach,
-                description: None,
-                when: None,
-                predicate: Some(predicate.clone()),
-                intents: Vec::new(),
-            });
-        }
-        for (index, when) in deadlock_whens.iter().enumerate() {
-            checks.push(Check {
-                id: format!("deadlock-when:{}", index + 1),
-                kind: CheckKind::DeadlockFree,
-                description: None,
-                when: Some(when.clone()),
-                predicate: None,
                 intents: Vec::new(),
             });
         }

@@ -39,23 +39,10 @@ fn demo_definition() -> serde_json::Value {
     })
 }
 
-fn check_when(id: &str, kind: CheckKind, when: &str) -> Check {
-    Check {
-        id: id.to_string(),
-        kind,
-        description: None,
-        when: Some(when.to_string()),
-        predicate: None,
-        intents: Vec::new(),
-    }
-}
-
 fn demo_checks() -> Vec<Check> {
     vec![
         check("claim-mutex", CheckKind::BadState, "buyer::escrow.release & escrow.refund"),
         check_closed("terminal-closes-intents", "buyer::escrow.released | escrow.returned"),
-        check_when("held-can-progress", CheckKind::DeadlockFree, "buyer::escrow.held & ~escrow.released & ~escrow.returned & ~escrow.release & ~escrow.refund"),
-        check("terminal-reachable", CheckKind::CoReach, "buyer::escrow.released | escrow.returned"),
     ]
 }
 
@@ -106,7 +93,7 @@ fn sound_demo_passes_all_check_kinds() {
             .map(|outcome| (outcome.id.clone(), outcome.violation.clone()))
             .collect::<Vec<_>>()
     );
-    assert_eq!(report.checks.len(), 4);
+    assert_eq!(report.checks.len(), 2);
 }
 
 #[test]
@@ -298,8 +285,10 @@ fn irrelevant_epoch_is_invisible_to_evaluation() {
     );
 }
 
-// 时间行为钉：截止推进真实发生在探索里——适格窗口（+10s）过期后意图关
-// 死，卡死违反的反例必须含 advance 步。
+// 时间行为钉：截止推进真实发生在探索里。claim 只能在 held 后 10s 窗口内
+// 落地；落地后时间推进过窗，「claim 已落 ∧ 窗已过」即坏状态，反例必须含
+// advance 步。同一形态也钉住阻断项判定：窗口负位（~(held+10s)）不得被当
+// 成落地位阻断项，否则 held 落地即剪光见证子树，本检查会假绿。
 #[test]
 fn window_closure_advances_time_and_closes_gates() {
     let definition = json!({
@@ -324,21 +313,21 @@ fn window_closure_advances_time_and_closes_gates() {
             }]
         }
     });
-    let checks = vec![check_when(
-        "window-drains",
-        CheckKind::DeadlockFree,
-        "buyer::lane.held & ~lane.claim",
+    let checks = vec![check(
+        "claim-outlives-window",
+        CheckKind::BadState,
+        "buyer::(lane.claim & (lane.held +10s))",
     )];
     let report = run(definition, checks);
     let outcome = report
         .checks
         .iter()
-        .find(|outcome| outcome.id == "window-drains")
+        .find(|outcome| outcome.id == "claim-outlives-window")
         .expect("window outcome");
     assert_eq!(
         outcome.status,
         Status::Fail,
-        "窗口过期后无人能动，卡死必须红：{:?}",
+        "claim 落地后推进过窗即坏状态，必须红：{:?}",
         outcome.violation
     );
     let violation = outcome.violation.as_ref().expect("violation payload");

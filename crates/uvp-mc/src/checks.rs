@@ -1,6 +1,7 @@
-//! 检查项 schema：kind 是性质的量词结构（永远不/总能/门关死），when 与
-//! predicate 是载荷、intents 指名要验关断的适格位。探索宇宙（哪些事实
-//! 参与穷举）由检查原子经适格表达式传递闭包机械派生，不是用户输入。
+//! 检查项 schema：kind 是性质的量词结构（bad_state＝永远不出现，
+//! admission_closed＝门关死），when 与 predicate 是载荷、intents 指名要
+//! 验关断的适格位。探索宇宙（哪些事实参与穷举）由检查原子经适格表达式
+//! 传递闭包机械派生，不是用户输入。
 
 use serde::{Deserialize, Serialize};
 
@@ -27,10 +28,6 @@ pub enum CheckKind {
     BadState,
     #[serde(rename = "admission_closed")]
     AdmissionClosed,
-    #[serde(rename = "deadlock_free")]
-    DeadlockFree,
-    #[serde(rename = "coreach")]
-    CoReach,
 }
 
 impl CheckKind {
@@ -38,8 +35,6 @@ impl CheckKind {
         match self {
             CheckKind::BadState => "bad_state",
             CheckKind::AdmissionClosed => "admission_closed",
-            CheckKind::DeadlockFree => "deadlock_free",
-            CheckKind::CoReach => "coreach",
         }
     }
 }

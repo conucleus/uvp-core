@@ -4,7 +4,7 @@
 //! 满足命中即终止，不必穷尽全图）与剪枝条件（见证必经意图被永久关死的
 //! 子树整枝剪除）。超上限响亮报错，不静默截断。
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use crate::model::{apply_action, enabled_actions, McState};
 use crate::vocab::{signal_atoms, Vocabulary};
@@ -22,16 +22,10 @@ pub enum StopKind {
 pub struct Graph {
     pub states: Vec<McState>,
     pub parents: Vec<Option<(usize, crate::model::Action)>>,
-    index: HashMap<McState, usize>,
-    pub edges: Vec<Vec<usize>>,
     pub stopped: Option<(usize, StopKind)>,
 }
 
 impl Graph {
-    pub fn state_index(&self, state: &McState) -> Option<usize> {
-        self.index.get(state).copied()
-    }
-
     pub fn trace_from_root(
         &self,
         state_index: usize,
@@ -50,43 +44,15 @@ impl Graph {
 pub type StopCondition<'a> = dyn Fn(&McState) -> Result<Option<StopKind>> + 'a;
 pub type PruneCondition<'a> = dyn Fn(&McState) -> bool + 'a;
 
-pub struct Explorer<'v> {
-    vocab: &'v Vocabulary,
-    cache: BTreeMap<BTreeSet<usize>, Graph>,
-}
-
-impl<'v> Explorer<'v> {
-    pub fn new(vocab: &'v Vocabulary) -> Self {
-        Explorer {
-            vocab,
-            cache: BTreeMap::new(),
-        }
-    }
-
-    /// 全图探索（coreach 反向覆盖等需要完整边的检查用），按宇宙缓存。
-    pub fn graph(&mut self, universe: &[usize], max_states: u64) -> Result<&Graph> {
-        let key: BTreeSet<usize> = universe.iter().copied().collect();
-        if !self.cache.contains_key(&key) {
-            let graph = explore(self.vocab, &key, max_states, None, None)?;
-            self.cache.insert(key.clone(), graph);
-        }
-        Ok(self
-            .cache
-            .get(&key)
-            .expect("graph was just inserted or present"))
-    }
-
-    /// 带停机/剪枝的探索：提前终止或剪枝都会使图不完整，不进缓存。
-    pub fn explore_with(
-        &mut self,
-        universe: &[usize],
-        max_states: u64,
-        stop: Option<&StopCondition<'_>>,
-        prune: Option<&PruneCondition<'_>>,
-    ) -> Result<Graph> {
-        let key: BTreeSet<usize> = universe.iter().copied().collect();
-        explore(self.vocab, &key, max_states, stop, prune)
-    }
+pub fn explore_universe(
+    vocab: &Vocabulary,
+    universe: &[usize],
+    max_states: u64,
+    stop: Option<&StopCondition<'_>>,
+    prune: Option<&PruneCondition<'_>>,
+) -> Result<Graph> {
+    let universe_key: BTreeSet<usize> = universe.iter().copied().collect();
+    explore(vocab, &universe_key, max_states, stop, prune)
 }
 
 fn explore(
@@ -106,14 +72,12 @@ fn explore(
     let mut states = Vec::new();
     let mut parents = Vec::new();
     let mut index: HashMap<McState, usize> = HashMap::new();
-    let mut edges: Vec<Vec<usize>> = Vec::new();
     let mut stopped = None;
 
     let mut queue = VecDeque::new();
     index.insert(initial.clone(), 0);
     states.push(initial.clone());
     parents.push(None);
-    edges.push(Vec::new());
     queue.push_back(0usize);
 
     'bfs: while let Some(current) = queue.pop_front() {
@@ -132,33 +96,26 @@ fn explore(
                     continue;
                 }
             }
-            let next = match index.get(&successor) {
-                Some(existing) => *existing,
-                None => {
-                    let next = states.len() as u64;
-                    if next >= max_states {
-                        return Err(McError::Message(format!(
-                            "state space exceeded max_states={max_states} while exploring a universe of {} facts; raise max_states or narrow the check",
-                            universe_key.len(),
-                        )));
-                    }
-                    index.insert(successor.clone(), states.len());
-                    states.push(successor.clone());
-                    parents.push(Some((current, action)));
-                    edges.push(Vec::new());
-                    queue.push_back(states.len() - 1);
-                    states.len() - 1
-                }
-            };
-            edges[current].push(next);
+            if index.contains_key(&successor) {
+                continue;
+            }
+            let next = states.len() as u64;
+            if next >= max_states {
+                return Err(McError::Message(format!(
+                    "state space exceeded max_states={max_states} while exploring a universe of {} facts; raise max_states or narrow the check",
+                    universe_key.len(),
+                )));
+            }
+            index.insert(successor.clone(), states.len());
+            states.push(successor.clone());
+            parents.push(Some((current, action)));
+            queue.push_back(states.len() - 1);
         }
     }
 
     Ok(Graph {
         states,
         parents,
-        index,
-        edges,
         stopped,
     })
 }

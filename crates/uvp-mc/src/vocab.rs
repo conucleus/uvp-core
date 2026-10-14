@@ -95,6 +95,9 @@ pub fn positive_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
     out
 }
 
+/// 落地位阻断项的原子集：只认「单个原子恰处一层 Not 之下」的直接负门
+/// （~x）。时间窗负位（~(x+d)）随时间翻转、不随落地关死；复合否定
+/// （~(a&b)）需诸项齐落才为假——二者都不构成落地即永死的阻断项。
 pub fn negative_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
     let mut out = Vec::new();
     fn walk(expr: &Expr, source: &str, negated: bool, out: &mut Vec<String>) {
@@ -105,13 +108,13 @@ pub fn negative_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
                 }
             }
             Expr::Not(inner) => walk(inner, source, !negated, out),
-            Expr::Delay { expr, .. } => walk(expr, source, negated, out),
-            Expr::And(terms) | Expr::Or(terms) => {
+            Expr::Delay { .. } => {}
+            Expr::And(terms) | Expr::Or(terms) if !negated => {
                 for term in terms {
-                    walk(term, source, negated, out);
+                    walk(term, source, false, out);
                 }
             }
-            Expr::Subscription { .. } => {}
+            Expr::And(_) | Expr::Or(_) | Expr::Subscription { .. } => {}
         }
     }
     walk(expr, source, false, &mut out);
