@@ -95,6 +95,29 @@ pub fn positive_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
     out
 }
 
+pub fn negative_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(expr: &Expr, source: &str, negated: bool, out: &mut Vec<String>) {
+        match expr {
+            Expr::Signal(signal) => {
+                if negated {
+                    out.push(format!("{source}::{signal}"));
+                }
+            }
+            Expr::Not(inner) => walk(inner, source, !negated, out),
+            Expr::Delay { expr, .. } => walk(expr, source, negated, out),
+            Expr::And(terms) | Expr::Or(terms) => {
+                for term in terms {
+                    walk(term, source, negated, out);
+                }
+            }
+            Expr::Subscription { .. } => {}
+        }
+    }
+    walk(expr, source, false, &mut out);
+    out
+}
+
 impl Vocabulary {
     pub fn build(definition_value: &serde_json::Value, checks: &[Check]) -> Result<Self> {
         let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
@@ -255,6 +278,21 @@ impl Vocabulary {
         let mut out: Vec<usize> = self.intent_fact.keys().copied().collect();
         out.sort_unstable();
         out
+    }
+
+    /// 意图的落地位阻断项：适格表达式里以负位出现的原子。事实不撤回，
+    /// 阻断项一经落地该意图永久不适格——剪枝与死意图判定的依据。
+    pub fn intent_blockers(&self, fact: usize) -> Vec<usize> {
+        let Some(&intent) = self.intent_fact.get(&fact) else {
+            return Vec::new();
+        };
+        negative_signal_atoms(
+            &self.intents[intent].decoded.expr,
+            &self.intents[intent].decoded.source,
+        )
+        .iter()
+        .filter_map(|atom| self.fact_index.get(atom).copied())
+        .collect()
     }
 }
 

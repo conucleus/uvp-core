@@ -230,3 +230,121 @@ fn state_cap_is_loud() {
         "error must name the cap: {error}"
     );
 }
+
+// 互模拟引理钉：不被任何延时位点读取纪元的事实，其纪元对一切求值不可
+// 见——规范化（折算为 0）前后 enabled_actions 与截止推进完全一致。
+#[test]
+fn irrelevant_epoch_is_invisible_to_evaluation() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_demo_epoch"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "held"},
+                    {"name": "approved"},
+                    {"name": "claim", "validWhen": [
+                        "buyer::lane.approved",
+                        "buyer::~lane.held",
+                        "buyer::~(lane.approved +10s)"
+                    ]},
+                    {"name": "done"}
+                ],
+                "receiveSignals": {"H": "buyer::lane.approved"}
+            }]
+        }
+    });
+    let vocab = crate::vocab::Vocabulary::build(&definition, &[]).expect("vocab builds");
+    let held = vocab
+        .fact_index
+        .get("buyer::lane.held")
+        .copied()
+        .expect("held interned");
+    let approved = vocab
+        .fact_index
+        .get("buyer::lane.approved")
+        .copied()
+        .expect("approved interned");
+    assert!(
+        !vocab.delay_sites.is_empty(),
+        "demo must carry a delay site on approved"
+    );
+
+    let universe = vec![true; vocab.facts.len()];
+    let mut with_early_noise = crate::model::McState::initial(&vocab);
+    let mut with_late_noise = with_early_noise.clone();
+    with_early_noise.fact_epochs[held] = Some(0);
+    with_early_noise.fact_epochs[approved] = Some(0);
+    with_late_noise.fact_epochs[held] = Some(7);
+    with_late_noise.fact_epochs[approved] = Some(0);
+    with_late_noise.now = 0;
+
+    let times_a = with_early_noise.signal_times(&vocab);
+    let times_b = with_late_noise.signal_times(&vocab);
+    assert_eq!(
+        crate::model::enabled_actions(&vocab, &universe, &with_early_noise, &times_a).unwrap(),
+        crate::model::enabled_actions(&vocab, &universe, &with_late_noise, &times_b).unwrap(),
+        "held 的纪元无位点读取，落地时刻差异不得改变任何可行动作"
+    );
+    assert_eq!(
+        crate::model::next_deadline_epoch(&vocab, &times_a, with_early_noise.now).unwrap(),
+        crate::model::next_deadline_epoch(&vocab, &times_b, with_late_noise.now).unwrap(),
+    );
+}
+
+// 时间行为钉：截止推进真实发生在探索里——适格窗口（+10s）过期后意图关
+// 死，卡死违反的反例必须含 advance 步。
+#[test]
+fn window_closure_advances_time_and_closes_gates() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_demo_window"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "held"},
+                    {"name": "claim", "validWhen": [
+                        "buyer::lane.held",
+                        "buyer::~(lane.held +10s)"
+                    ]}
+                ],
+                "receiveSignals": {"H": "buyer::lane.held"}
+            }]
+        }
+    });
+    let checks = vec![check_when(
+        "window-drains",
+        CheckKind::DeadlockFree,
+        "buyer::lane.held & ~lane.claim",
+    )];
+    let report = run(definition, checks);
+    let outcome = report
+        .checks
+        .iter()
+        .find(|outcome| outcome.id == "window-drains")
+        .expect("window outcome");
+    assert_eq!(
+        outcome.status,
+        Status::Fail,
+        "窗口过期后无人能动，卡死必须红：{:?}",
+        outcome.violation
+    );
+    let violation = outcome.violation.as_ref().expect("violation payload");
+    let trace = violation["trace"].as_array().expect("trace");
+    assert!(
+        trace.iter().any(|step| step.get("advance_to_epoch").is_some()),
+        "反例必须含时间推进步：{trace:?}"
+    );
+}

@@ -1,16 +1,17 @@
 //! 不变量检查：bad_state（坏状态谓词）、admission_closed（终态关断适格
 //! 位）、deadlock_free（有人能动∨截止将至）、coreach（谓词可达）。违反
 //! 给最短事实序列反例。每项检查的探索宇宙由其原子的适格闭包派生——
-//! 闭包外原子不参与任何相关求值，窄宇宙与全宇宙在性质上等价；意图关
-//! 断按意图逐个独立探索再合并。
+//! 闭包外原子不参与任何相关求值，窄宇宙与全宇宙在性质上等价；存在性
+//! 检查用正位闭包（负位原子是阻断项，见证永不落地），并按需携停机与
+//! 见证必经剪枝提前终止；意图关断按意图逐个独立探索再合并。
 
 use serde_json::{json, Value};
 use uvp_hook_dsl::EvalState;
 
 use crate::checks::{Check, CheckKind};
-use crate::explore::{Explorer, Graph};
+use crate::explore::{Explorer, Graph, StopKind};
 use crate::model::{self, Action, McState};
-use crate::vocab::{signal_atoms, Vocabulary};
+use crate::vocab::{positive_signal_atoms, signal_atoms, Vocabulary};
 use crate::{McError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -64,7 +65,7 @@ impl<'v> Checker<'v> {
         Ok(outcome)
     }
 
-    /// 死意图：其适格闭包宇宙内从未适格——适格自相矛盾或依赖永不可落
+    /// 死意图：其正位闭包宇宙内从未适格——适格自相矛盾或依赖永不可落
     /// 的意图链，信号永不可发。反例不存在（全称失败），报告意图本身。
     pub fn run_dead_intent(&mut self, fact: usize) -> Result<CheckOutcome> {
         let name = self.vocab.facts[fact].clone();
@@ -73,19 +74,23 @@ impl<'v> Checker<'v> {
             .intent_fact
             .get(&fact)
             .expect("dead-intent probe is only called on intents");
-        let universe: Vec<usize> = self.vocab.positive_closure(&[fact]).into_iter().collect();
-        let graph = self.explorer.graph(&universe, self.max_states)?;
-        let mut alive = false;
-        for state in &graph.states {
-            if state.fact_epochs[fact].is_some() {
-                continue;
-            }
-            let times = state.signal_times(self.vocab);
-            if model::intent_admissible(self.vocab, intent, &times, state.now)? {
-                alive = true;
-                break;
-            }
-        }
+        let vocab = self.vocab;
+        let explorer = &mut self.explorer;
+        let universe: Vec<usize> = vocab.positive_closure(&[fact]).into_iter().collect();
+        let graph = explorer.explore_with(
+            &universe,
+            self.max_states,
+            Some(&|state| {
+                if state.fact_epochs[fact].is_some() {
+                    return Ok(None);
+                }
+                let times = state.signal_times(vocab);
+                Ok(model::intent_admissible(vocab, intent, &times, state.now)?
+                    .then_some(StopKind::Satisfied))
+            }),
+            None,
+        )?;
+        let alive = matches!(graph.stopped, Some((_, StopKind::Satisfied)));
         let violation = if alive {
             None
         } else {
@@ -143,22 +148,52 @@ fn bad_state(
         seeds.extend(predicate_atoms(vocab, when));
     }
     let universe: Vec<usize> = vocab.positive_closure(&seeds).into_iter().collect();
-    let graph = explorer.graph(&universe, max_states)?;
-    let mut violation = None;
-    for (position, state) in graph.states.iter().enumerate() {
-        if !predicate_holds(vocab, when, state)? {
-            continue;
-        }
-        if predicate_holds(vocab, Some(predicate), state)? {
-            violation = Some(violation_json(
-                vocab,
-                graph,
-                position,
-                "bad-state predicate is ready at this state".to_string(),
-            ));
-            break;
-        }
-    }
+
+    // 见证必经集：谓词正位原子里的意图。意图被落地阻断项关死后永不复
+    // 适格（事实不撤回），该子树不可能再长出见证，整枝剪除。
+    let must: Vec<usize> = vocab
+        .predicates
+        .get(predicate)
+        .map(|decoded| positive_signal_atoms(&decoded.expr, &decoded.source))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|atom| vocab.fact_index.get(atom).copied())
+        .filter(|fact| vocab.intent_fact.contains_key(fact))
+        .collect();
+    let blockers: Vec<Vec<usize>> = must
+        .iter()
+        .map(|&fact| vocab.intent_blockers(fact))
+        .collect();
+    let prune_fn = |state: &McState| {
+        must.iter().zip(blockers.iter()).any(|(&fact, blocks)| {
+            state.fact_epochs[fact].is_none()
+                && blocks
+                    .iter()
+                    .any(|&blocked| state.fact_epochs[blocked].is_some())
+        })
+    };
+    let prune: Option<&crate::explore::PruneCondition<'_>> =
+        (!must.is_empty()).then_some(&prune_fn);
+
+    let graph = explorer.explore_with(
+        &universe,
+        max_states,
+        Some(&|state| {
+            Ok((predicate_holds(vocab, when, state)?
+                && predicate_holds(vocab, Some(predicate), state)?)
+                .then_some(StopKind::Violation))
+        }),
+        prune,
+    )?;
+    let violation = match graph.stopped {
+        Some((position, StopKind::Violation)) => Some(violation_json(
+            vocab,
+            &graph,
+            position,
+            "bad-state predicate is ready at this state".to_string(),
+        )),
+        _ => None,
+    };
     Ok(outcome(check, graph.states.len(), violation))
 }
 
@@ -184,25 +219,42 @@ fn admission_closed(
         let mut seeds = when_atoms.clone();
         seeds.push(fact);
         let universe: Vec<usize> = vocab.positive_closure(&seeds).into_iter().collect();
-        let graph = explorer.graph(&universe, max_states)?;
+
+        // 违反要求该意图未落且仍适格：已落地或被落地阻断项关死的子树不
+        // 可能出违反，整枝剪除。
+        let blockers = vocab.intent_blockers(fact);
+        let prune_fn = |state: &McState| {
+            state.fact_epochs[fact].is_some()
+                || blockers
+                    .iter()
+                    .any(|&blocked| state.fact_epochs[blocked].is_some())
+        };
+
+        let graph = explorer.explore_with(
+            &universe,
+            max_states,
+            Some(&|state| {
+                if state.fact_epochs[fact].is_some() {
+                    return Ok(None);
+                }
+                if !predicate_holds(vocab, Some(when), state)? {
+                    return Ok(None);
+                }
+                let times = state.signal_times(vocab);
+                Ok(model::intent_admissible(vocab, intent, &times, state.now)?
+                    .then_some(StopKind::Violation))
+            }),
+            Some(&prune_fn),
+        )?;
         states = states.max(graph.states.len());
-        for (position, state) in graph.states.iter().enumerate() {
-            if state.fact_epochs[fact].is_some() {
-                continue;
-            }
-            if !predicate_holds(vocab, Some(when), state)? {
-                continue;
-            }
-            let times = state.signal_times(vocab);
-            if model::intent_admissible(vocab, intent, &times, state.now)? {
-                violation = Some(violation_json(
-                    vocab,
-                    graph,
-                    position,
-                    format!("intent {intent_name} is still admissible at a state the when-clause closed"),
-                ));
-                break 'intents;
-            }
+        if let Some((position, StopKind::Violation)) = graph.stopped {
+            violation = Some(violation_json(
+                vocab,
+                &graph,
+                position,
+                format!("intent {intent_name} is still admissible at a state the when-clause closed"),
+            ));
+            break 'intents;
         }
     }
     Ok(outcome(check, states, violation))
@@ -218,36 +270,41 @@ fn deadlock_free(
     let mut seeds = predicate_atoms(vocab, when);
     seeds.extend(vocab.intent_facts());
     let universe: Vec<usize> = vocab.closure(&seeds).into_iter().collect();
-    let graph = explorer.graph(&universe, max_states)?;
-    let mut violation = None;
-    for (position, state) in graph.states.iter().enumerate() {
-        if !predicate_holds(vocab, Some(when), state)? {
-            continue;
-        }
-        let times = state.signal_times(vocab);
-        let mut sanctioned = model::next_deadline_epoch(vocab, &times, state.now)?.is_some();
-        for fact in &universe {
-            if state.fact_epochs[*fact].is_some() {
-                continue;
+    let graph = explorer.explore_with(
+        &universe,
+        max_states,
+        Some(&|state| {
+            if !predicate_holds(vocab, Some(when), state)? {
+                return Ok(None);
             }
-            let Some(&intent) = vocab.intent_fact.get(fact) else {
-                continue;
-            };
-            if model::intent_admissible(vocab, intent, &times, state.now)? {
-                sanctioned = true;
-                break;
+            let times = state.signal_times(vocab);
+            if model::next_deadline_epoch(vocab, &times, state.now)?.is_some() {
+                return Ok(None);
             }
-        }
-        if !sanctioned {
-            violation = Some(violation_json(
-                vocab,
-                graph,
-                position,
-                "no admissible intent and no pending deadline can move this state".to_string(),
-            ));
-            break;
-        }
-    }
+            for fact in &universe {
+                if state.fact_epochs[*fact].is_some() {
+                    continue;
+                }
+                let Some(&intent) = vocab.intent_fact.get(fact) else {
+                    continue;
+                };
+                if model::intent_admissible(vocab, intent, &times, state.now)? {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(StopKind::Violation))
+        }),
+        None,
+    )?;
+    let violation = match graph.stopped {
+        Some((position, StopKind::Violation)) => Some(violation_json(
+            vocab,
+            &graph,
+            position,
+            "no admissible intent and no pending deadline can move this state".to_string(),
+        )),
+        _ => None,
+    };
     Ok(outcome(check, graph.states.len(), violation))
 }
 
@@ -320,11 +377,7 @@ fn violation_json(vocab: &Vocabulary, graph: &Graph, position: usize, reason: St
     })
 }
 
-fn backward_cover_edges<F>(
-    graph: &Graph,
-    edges: &[Vec<usize>],
-    target: F,
-) -> Result<Vec<bool>>
+fn backward_cover_edges<F>(graph: &Graph, edges: &[Vec<usize>], target: F) -> Result<Vec<bool>>
 where
     F: Fn(&McState) -> Result<bool>,
 {

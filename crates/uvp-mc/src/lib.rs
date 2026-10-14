@@ -121,15 +121,19 @@ fn intent_coexistence(vocab: &Vocabulary, max_states: u64) -> Result<Vec<IntentP
     for (position, &a) in intents.iter().enumerate() {
         for &b in &intents[position + 1..] {
             let universe: Vec<usize> = vocab.positive_closure(&[a, b]).into_iter().collect();
-            let graph = explorer.graph(&universe, max_states)?;
-            let coexist = graph
-                .states
-                .iter()
-                .any(|state| state.fact_epochs[a].is_some() && state.fact_epochs[b].is_some());
+            let graph = explorer.explore_with(
+                &universe,
+                max_states,
+                Some(&|state| {
+                    Ok((state.fact_epochs[a].is_some() && state.fact_epochs[b].is_some())
+                        .then_some(explore::StopKind::Satisfied))
+                }),
+                None,
+            )?;
             pairs.push(IntentPair {
                 a: vocab.facts[a].clone(),
                 b: vocab.facts[b].clone(),
-                coexist,
+                coexist: graph.stopped.is_some(),
             });
         }
     }
