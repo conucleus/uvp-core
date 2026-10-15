@@ -212,7 +212,10 @@ impl<'a> Lander<'a> {
         }
         let snapshot = self.landed.clone();
         let unconditional = [Branch::default()];
-        let admissions: &[Branch] = self.admissions.get(&fact).map_or(&unconditional, |v| v.as_slice());
+        let admissions: &[Branch] = self
+            .admissions
+            .get(&fact)
+            .map_or(&unconditional, |v| v.as_slice());
         for admission in admissions {
             self.chain.push(fact);
             let ok = self.land_all_inner(&admission.positives, avoid)
@@ -246,7 +249,8 @@ pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
     // 守卫不进检查词表；本面自建解析域：声明与适格原子之外，并入守卫
     // 原子，否则守卫里的信号在 resolve 中缺席会静默降级分析。
     let mut guards = Vec::new();
-    let mut atoms: BTreeMap<String, ()> = vocab.facts.iter().map(|fact| (fact.clone(), ())).collect();
+    let mut atoms: BTreeMap<String, ()> =
+        vocab.facts.iter().map(|fact| (fact.clone(), ())).collect();
     for hook in cloud
         .get("hooks")
         .and_then(|value| value.as_array())
@@ -471,9 +475,7 @@ fn render_expr(expr: &Expr) -> String {
             .collect::<Vec<_>>()
             .join(" | "),
         Expr::Delay {
-            expr,
-            raw_duration,
-            ..
+            expr, raw_duration, ..
         } => {
             let operand = render_expr(expr);
             if matches!(**expr, Expr::Signal(_)) {

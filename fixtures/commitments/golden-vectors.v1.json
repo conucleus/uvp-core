@@ -1,0 +1,2055 @@
+{
+  "schemaVersion": "uvp.commitmentGoldenVectors.v1",
+  "note": "承诺面（uid/planHash/hooksHash）跨语言金向量：TS compiler（链轨权威，generate:commitment-golden-vectors 生成）、Rust uvp-ir（derive_definition_uid 逐格消费 uid）、Foundry CommitmentGoldenVectors.t.sol（按格重建 CompactHook[] 重算 hooksHash 并经 UVPStateMachine.planRuntimeHash 复算 runtimePlanHash）三方对同一份文件对拍。改本文件必须同跑三侧测试。",
+  "uidVectors": [
+    {
+      "name": "minimal_cloud_definition",
+      "note": "最小云侧定义只钉 uid 派生（无 stage 不可编译，无承诺面格）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "weaving_order"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            }
+          }
+        }
+      },
+      "expected": {
+        "uid": "zx-e906ad47866918682d1e2ed2528682f5"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "friction_wheel_production_target",
+      "note": "dock demo 目标定义（双具名接口发布方，无 zhixu 执行者）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "friction_wheel_production"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            },
+            "nucleation": {
+              "id": "production-core"
+            },
+            "dockInterface": {
+              "production_service": {
+                "orderModes": [
+                  "new"
+                ],
+                "inputs": {
+                  "execute": {
+                    "hook": "intake#EXECUTE"
+                  },
+                  "amend": {
+                    "hook": "produce#DOCK_AMEND"
+                  }
+                },
+                "outputs": {
+                  "started": {
+                    "signal": "factory::intake.str"
+                  },
+                  "completed": {
+                    "signal": "factory::produce.cmp"
+                  }
+                }
+              },
+              "production_evidence": {
+                "orderModes": [
+                  "existing"
+                ],
+                "outputs": {
+                  "scrap_declared": {
+                    "signal": "factory::produce.scrap_created"
+                  }
+                }
+              }
+            },
+            "stages": [
+              {
+                "name": "intake",
+                "source": "factory",
+                "receiveSignals": {
+                  "EXECUTE": "factory::intake.execute"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "friction-factory"
+                }
+              },
+              {
+                "name": "produce",
+                "source": "factory",
+                "receiveSignals": {
+                  "RUN": "factory::intake.str",
+                  "DOCK_AMEND": "factory::produce.amend"
+                },
+                "sendSignals": [
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "scrap_created"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "friction-factory"
+                }
+              }
+            ]
+          }
+        },
+        "hooks": [
+          {
+            "hookId": "0xb9bf3f9212db5cf7d9360d7d02e63ac2b694545e8f0ca379355b04b7b7af68f6",
+            "stageId": "0x813a370b2048e7ce770f602845c84a17799c6daa51abe6eca08fb5ed29d7750f",
+            "hookName": "0xf01aff3887dcbbc6d9dda70848496a58f09b8ed9685ccc694919d99fe742efca",
+            "flags": 6,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                "signalId": "0x3cafc453a97ab2777674dd7f2adf026dd4462b56c4cf321178be59a03778897e",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x84843a868d2d702122ebc95e074572ffb9e95561e571b913a9d108b347a8c208"
+            ]
+          },
+          {
+            "hookId": "0x4cd9690093e76472e864ae6f88e0e89b10157a4619d43f50762f4b3c716edb84",
+            "stageId": "0x40f56ad174e6ec60c0c5ef85d9a9ac49bc85fa25107f97cc2a578ee2dab5022d",
+            "hookName": "0xca258a42b8e412f5432f198e3189842c6d421bb92ff3c1e56bc5a29331ae3866",
+            "flags": 6,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                "signalId": "0xf895eff1788a31957e29a30346b66855798e5ba41c501432907f44d78aea9a39",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x2917c8512c4ab1173b469fe857cf034ba4ab62812b7af141dc157abb980186e2"
+            ]
+          },
+          {
+            "hookId": "0xd9fe05ec99f2b61f239a81613130439843d5fcfd52cfa757a067cdf73e8b2051",
+            "stageId": "0x40f56ad174e6ec60c0c5ef85d9a9ac49bc85fa25107f97cc2a578ee2dab5022d",
+            "hookName": "0xeca1834fef59f6f465ff81a48856b24581b3c76eb0bafc989ff9f6ba85ebf39b",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                "signalId": "0x01181cce357e648ddf8731fa1672ffa44382952666697f8249cfd80c15e209db",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x1ea4d425821cacd3e46b41c3211dd553cefd5086c2d6cbf0b82bcdc1c5aec292"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 3,
+        "instructions": [
+          1,
+          1,
+          1
+        ],
+        "dependencyKeys": [
+          1,
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-d78c0c3d0e8a8d37661ce4cfda373103",
+        "hookPlanHash": "0xba5abfdf448401d31378ed9c89122134dfc58d779d75350f853b66cc69df71b4",
+        "onchainPlanHash": "0x356b15896836c5e6ce2664a7958f60aecbe4e894f137325a40def9feed45e9ec",
+        "runtimePlanHash": "0x58015e9e247cc18f72a108d85363660ee4b7da6a4d16b779b7b0d6f39282529b",
+        "hooksHash": "0x0a8312a86430091cc112690ec3ab74ef48ad1c9a22c715bdd3162c82d2560abf",
+        "capabilitiesRoot": "0x0b71dbe352f848b9e3b3c93ef346a8b1b6ca309c75ad442fffd5369f0a9895d9",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xd6be0319e52c855c043b914d5b24cbb5ebda5f852ffe7ce1dd9c578b4a89a024",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    },
+    {
+      "name": "sourcing_parent_static_dock",
+      "note": "dock demo 父定义：new 模式生产委托 + existing 模式既有事实引用各一条 route（dockRoutesRoot 非空叶）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "sourcing"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            },
+            "nucleation": {
+              "id": "sourcing-core"
+            },
+            "stages": [
+              {
+                "name": "confirm",
+                "source": "purchaser",
+                "receiveSignals": {
+                  "ORDER": "purchaser::confirm.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "seed"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "purchaser-app"
+                }
+              },
+              {
+                "name": "manufacture",
+                "source": "purchaser",
+                "receiveSignals": {
+                  "EXECUTE": "purchaser::confirm.cmp"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  },
+                  {
+                    "name": "cmp"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "zhixu",
+                  "zhixuExecutorConfig": {
+                    "target": {
+                      "zhixu": "zx-d78c0c3d0e8a8d37661ce4cfda373103"
+                    },
+                    "interface": "production_service",
+                    "order": {
+                      "mode": "new"
+                    },
+                    "inputMap": {
+                      "EXECUTE": "execute"
+                    },
+                    "signalMap": {
+                      "str": "started",
+                      "cmp": "completed"
+                    }
+                  }
+                }
+              },
+              {
+                "name": "source_evidence",
+                "source": "recycler",
+                "receiveSignals": {
+                  "READ": "recycler::source_evidence.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "seed"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "zhixu",
+                  "zhixuExecutorConfig": {
+                    "target": {
+                      "zhixu": "zx-d78c0c3d0e8a8d37661ce4cfda373103"
+                    },
+                    "interface": "production_evidence",
+                    "order": {
+                      "mode": "existing"
+                    },
+                    "signalMap": {
+                      "cmp": "scrap_declared"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "dockManifest": {
+          "schemaVersion": "uvp.dock.resolution.v2",
+          "definitions": [
+            {
+              "zhixu": "zx-d78c0c3d0e8a8d37661ce4cfda373103",
+              "definition": {
+                "apiVersion": "uvp/v0",
+                "kind": "Zhixu",
+                "metadata": {
+                  "name": "friction_wheel_production"
+                },
+                "spec": {
+                  "platform": {
+                    "type": "cloud"
+                  },
+                  "nucleation": {
+                    "id": "production-core"
+                  },
+                  "dockInterface": {
+                    "production_service": {
+                      "orderModes": [
+                        "new"
+                      ],
+                      "inputs": {
+                        "execute": {
+                          "hook": "intake#EXECUTE"
+                        },
+                        "amend": {
+                          "hook": "produce#DOCK_AMEND"
+                        }
+                      },
+                      "outputs": {
+                        "started": {
+                          "signal": "factory::intake.str"
+                        },
+                        "completed": {
+                          "signal": "factory::produce.cmp"
+                        }
+                      }
+                    },
+                    "production_evidence": {
+                      "orderModes": [
+                        "existing"
+                      ],
+                      "outputs": {
+                        "scrap_declared": {
+                          "signal": "factory::produce.scrap_created"
+                        }
+                      }
+                    }
+                  },
+                  "stages": [
+                    {
+                      "name": "intake",
+                      "source": "factory",
+                      "receiveSignals": {
+                        "EXECUTE": "factory::intake.execute"
+                      },
+                      "sendSignals": [
+                        {
+                          "name": "str"
+                        }
+                      ],
+                      "executor": {
+                        "supplierType": "organization",
+                        "supplierID": "friction-factory"
+                      }
+                    },
+                    {
+                      "name": "produce",
+                      "source": "factory",
+                      "receiveSignals": {
+                        "RUN": "factory::intake.str",
+                        "DOCK_AMEND": "factory::produce.amend"
+                      },
+                      "sendSignals": [
+                        {
+                          "name": "cmp"
+                        },
+                        {
+                          "name": "scrap_created"
+                        }
+                      ],
+                      "executor": {
+                        "supplierType": "organization",
+                        "supplierID": "friction-factory"
+                      }
+                    }
+                  ]
+                }
+              },
+              "definitionRefHash": "0x333b710fc77c7d9e5a95cd5a259b984d782dd2a778871578faedfd180b1efe75",
+              "artifactHash": "0xba5abfdf448401d31378ed9c89122134dfc58d779d75350f853b66cc69df71b4",
+              "published": true,
+              "interfaces": [
+                {
+                  "name": "production_evidence",
+                  "orderModes": [
+                    "existing"
+                  ],
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "port": "scrap_declared",
+                      "canonicalOutputSignal": "factory::produce.scrap_created",
+                      "canonicalOutputSignalHash": "0x50df28179e2d9c14fda72f079c7e3f8c8d1497d61e346727ed5c880e9fdf942b",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x8b4fff07b8c10ba1f19c8353ee56a2abca859d39323ead7ffa1fc0f70e73f238",
+                      "leafHash": "0x693c26edf4095f6dc271928ae7364e8e69dc305739d849353d2e7c098ba57a5d"
+                    }
+                  ],
+                  "inputsRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+                  "outputsRoot": "0x693c26edf4095f6dc271928ae7364e8e69dc305739d849353d2e7c098ba57a5d",
+                  "interfaceRoot": "0x0cef6a00b2457b36211fdd7fc9d35e494f42d7f2f6af87b2f209b8dd823e6f75"
+                },
+                {
+                  "name": "production_service",
+                  "orderModes": [
+                    "new"
+                  ],
+                  "inputs": [
+                    {
+                      "port": "amend",
+                      "stageIdentifier": "produce",
+                      "hookName": "DOCK_AMEND",
+                      "hookId": "produce#DOCK_AMEND",
+                      "canonicalInputSignal": "factory::produce.amend",
+                      "canonicalInputSignalHash": "0x8b30c37ecaeb8d805605855375ffd5aacea7d3f66e0924b5102be5af0caf88fe",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0xf895eff1788a31957e29a30346b66855798e5ba41c501432907f44d78aea9a39",
+                      "leafHash": "0xf61318ec32093d23b2cb35d731022ab035638835a837ece512ea59623bb62901"
+                    },
+                    {
+                      "port": "execute",
+                      "stageIdentifier": "intake",
+                      "hookName": "EXECUTE",
+                      "hookId": "intake#EXECUTE",
+                      "canonicalInputSignal": "factory::intake.execute",
+                      "canonicalInputSignalHash": "0xd0ebd860ed259e6dcaf9115941328f401a9aafea2d73631d52bb4de269a1aa87",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x3cafc453a97ab2777674dd7f2adf026dd4462b56c4cf321178be59a03778897e",
+                      "leafHash": "0x9ded09b3effc85c8b09af28db5fd4dfa8d31c3ff62a2a4b13106ba6870ce2bc8"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "port": "completed",
+                      "canonicalOutputSignal": "factory::produce.cmp",
+                      "canonicalOutputSignalHash": "0x75a48a58d64fbeec5a7f31ce47d1169723468955af37f3487ff32523a52862a5",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x4e5ad88c74e2500fe8c03fc3e5842a9c5912691e7f0df6b1c00dfe0b374fcb9f",
+                      "leafHash": "0xf3e39043f2c60bde31d363a40c45c18bf1cc785398dead407d7b5600d668e6c2"
+                    },
+                    {
+                      "port": "started",
+                      "canonicalOutputSignal": "factory::intake.str",
+                      "canonicalOutputSignalHash": "0xea54847cb4de3cd8981da9c4e88c014bea49a20826ba20a12516ce0f77bb8606",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x01181cce357e648ddf8731fa1672ffa44382952666697f8249cfd80c15e209db",
+                      "leafHash": "0x4e9823aea8125c4f2dcdafa29f103fb13421890cb696c20f3d308d43f672ddfe"
+                    }
+                  ],
+                  "inputsRoot": "0xfc005bea9f9208e630d8d79de725a264ae2dc5ecf0a7f416025d0859cd984e2d",
+                  "outputsRoot": "0x85419b9a6c0a7aec1ced1882c6ce3e9a50757ef198913aacdbf7965f3bf03995",
+                  "interfaceRoot": "0x59241571ea80dfeb54b1dd40f298c62a1045481f552de4c4341f8b2be59baaa7"
+                }
+              ],
+              "evmPlanId": "0xe0736f52afd6a325b50e24086df3421a1f6581b672b561acbb7da9b73c8811e3",
+              "cloudArtifactId": "artifact://0xba5abfdf448401d31378ed9c89122134dfc58d779d75350f853b66cc69df71b4"
+            }
+          ]
+        },
+        "hooks": [
+          {
+            "hookId": "0x925d78af6e5833bdcccc3af1328f8fbb27de9b8d5353ee006c3b4b6e2bda3fc9",
+            "stageId": "0xaf73a30c1d2422d0e18092aa930404dfd05f0bc488ba9fb71e17c35104c9c5b6",
+            "hookName": "0x5756e942ec1c9fedaa7a23314928b70f53c0e82be2ecfcdaaa069134e9e6245e",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x5cd9763eb0769e05e47a6515df0fedff76d312b6727c9aef2e804b125f56ae63",
+                "signalId": "0xac17eeb71c65215b69ced5ec01f6ea59aacb8aa4e870f7c06c17d5d5678bac2b",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xb37f0435ff4b530fc1e48120b9aa033dc34c9628ab99a176118a9ae3370ed4e9"
+            ]
+          },
+          {
+            "hookId": "0x9593a3cf4aa5b74bf1b05ebbbe1b1cab42e259c6818208f37d25578908d0b9c5",
+            "stageId": "0xcb394534b45420b7dd9c5a326388828a4fc035bdf29fd2776c257cca18c76711",
+            "hookName": "0xf01aff3887dcbbc6d9dda70848496a58f09b8ed9685ccc694919d99fe742efca",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x5cd9763eb0769e05e47a6515df0fedff76d312b6727c9aef2e804b125f56ae63",
+                "signalId": "0x7663532e93869b81bde19d59546acad06b4b4e25373e0e4c112ea48dcb69834e",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x1b4965227c7eedbba0e3d7335acf69ef30e91cc54b10cbc2991349f0065a89e9"
+            ]
+          },
+          {
+            "hookId": "0x497a6cab6f72c4b5bee7d175d1c88a856e8ac724620da2d6ae75edf91dd57e48",
+            "stageId": "0x0c6812992eb8203b802ae2b44a3b8a6486c910ebde54919416e9422f30786338",
+            "hookName": "0x917ec7ea41e5f357223d15148fe9b320af36ca576055af433ea3445b39221799",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x3000db70fbb30dda63c57034bc6e139e0380cf09e7bfbe7485050f735db5f473",
+                "signalId": "0xa526da5b9caf32a8c3cb2b6fc9841fa1f6b4b08bbf2f3a1b1ab2b614d3b4a437",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x407e5d972543913a7f7197b2c4befddcfba093660911294a48f47b2c87318976"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 3,
+        "instructions": [
+          1,
+          1,
+          1
+        ],
+        "dependencyKeys": [
+          1,
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-2d7b96a1d8758c54b27fdc809123aebc",
+        "hookPlanHash": "0x686bb48f78207bd866f76aa00b3e66faa846b1ae4839d796f380efe396b47f3d",
+        "onchainPlanHash": "0x9d3b9cdc586ec967b44a736d3e75712db7a68b42ae610ea020faf8e291620896",
+        "runtimePlanHash": "0x07e060fbd6747f9a27d44037aafd256cc84ecd12d0481fe62e559cc66bba5bc5",
+        "hooksHash": "0xa7e3ea620778f8dcd18272dd4413bd2caaae6cfdfb6bb826b95fcdaff892b6df",
+        "capabilitiesRoot": "0xb074180b5ae3992c539d409003a780f400064218e48192ea6853ce2b59e0cdf6",
+        "dockRoutesRoot": "0xe28c2d63a37004b9fa6e7591755ba338ba6acf98d757d648d4820074b1624562",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    },
+    {
+      "name": "demo_zhixu_production_dock",
+      "note": "onchain-hook-plan / hook-plan 基座定义：main 以 zhixu 执行器委托 production_service[new]（mode=new 出生锚 + selectedStages 绑定表非空）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "demo_zhixu"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            },
+            "nucleation": {
+              "id": "core"
+            },
+            "stages": [
+              {
+                "name": "assign",
+                "source": "buyer",
+                "selectedStages": [
+                  "main"
+                ],
+                "receiveSignals": {
+                  "PLACE": "buyer::assign.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "executor_selected"
+                  },
+                  {
+                    "name": "seed"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "selector-org"
+                }
+              },
+              {
+                "name": "main",
+                "source": "buyer",
+                "receiveSignals": {
+                  "START": "buyer::assign.executor_selected",
+                  "TIMEOUT": "buyer::(assign.executor_selected +5s) & ~main.cmp"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  },
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "err"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "zhixu",
+                  "zhixuExecutorConfig": {
+                    "target": {
+                      "zhixu": "zx-d78c0c3d0e8a8d37661ce4cfda373103"
+                    },
+                    "interface": "production_service",
+                    "order": {
+                      "mode": "new"
+                    },
+                    "inputMap": {
+                      "START": "execute"
+                    },
+                    "signalMap": {
+                      "str": "started",
+                      "cmp": "completed"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "dockManifest": {
+          "schemaVersion": "uvp.dock.resolution.v2",
+          "definitions": [
+            {
+              "zhixu": "zx-d78c0c3d0e8a8d37661ce4cfda373103",
+              "definition": {
+                "apiVersion": "uvp/v0",
+                "kind": "Zhixu",
+                "metadata": {
+                  "name": "friction_wheel_production"
+                },
+                "spec": {
+                  "platform": {
+                    "type": "cloud"
+                  },
+                  "nucleation": {
+                    "id": "production-core"
+                  },
+                  "dockInterface": {
+                    "production_service": {
+                      "orderModes": [
+                        "new"
+                      ],
+                      "inputs": {
+                        "execute": {
+                          "hook": "intake#EXECUTE"
+                        },
+                        "amend": {
+                          "hook": "produce#DOCK_AMEND"
+                        }
+                      },
+                      "outputs": {
+                        "started": {
+                          "signal": "factory::intake.str"
+                        },
+                        "completed": {
+                          "signal": "factory::produce.cmp"
+                        }
+                      }
+                    },
+                    "production_evidence": {
+                      "orderModes": [
+                        "existing"
+                      ],
+                      "outputs": {
+                        "scrap_declared": {
+                          "signal": "factory::produce.scrap_created"
+                        }
+                      }
+                    }
+                  },
+                  "stages": [
+                    {
+                      "name": "intake",
+                      "source": "factory",
+                      "receiveSignals": {
+                        "EXECUTE": "factory::intake.execute"
+                      },
+                      "sendSignals": [
+                        {
+                          "name": "str"
+                        }
+                      ],
+                      "executor": {
+                        "supplierType": "organization",
+                        "supplierID": "friction-factory"
+                      }
+                    },
+                    {
+                      "name": "produce",
+                      "source": "factory",
+                      "receiveSignals": {
+                        "RUN": "factory::intake.str",
+                        "DOCK_AMEND": "factory::produce.amend"
+                      },
+                      "sendSignals": [
+                        {
+                          "name": "cmp"
+                        },
+                        {
+                          "name": "scrap_created"
+                        }
+                      ],
+                      "executor": {
+                        "supplierType": "organization",
+                        "supplierID": "friction-factory"
+                      }
+                    }
+                  ]
+                }
+              },
+              "definitionRefHash": "0x333b710fc77c7d9e5a95cd5a259b984d782dd2a778871578faedfd180b1efe75",
+              "artifactHash": "0xba5abfdf448401d31378ed9c89122134dfc58d779d75350f853b66cc69df71b4",
+              "published": true,
+              "interfaces": [
+                {
+                  "name": "production_evidence",
+                  "orderModes": [
+                    "existing"
+                  ],
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "port": "scrap_declared",
+                      "canonicalOutputSignal": "factory::produce.scrap_created",
+                      "canonicalOutputSignalHash": "0x50df28179e2d9c14fda72f079c7e3f8c8d1497d61e346727ed5c880e9fdf942b",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x8b4fff07b8c10ba1f19c8353ee56a2abca859d39323ead7ffa1fc0f70e73f238",
+                      "leafHash": "0x693c26edf4095f6dc271928ae7364e8e69dc305739d849353d2e7c098ba57a5d"
+                    }
+                  ],
+                  "inputsRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+                  "outputsRoot": "0x693c26edf4095f6dc271928ae7364e8e69dc305739d849353d2e7c098ba57a5d",
+                  "interfaceRoot": "0x0cef6a00b2457b36211fdd7fc9d35e494f42d7f2f6af87b2f209b8dd823e6f75"
+                },
+                {
+                  "name": "production_service",
+                  "orderModes": [
+                    "new"
+                  ],
+                  "inputs": [
+                    {
+                      "port": "amend",
+                      "stageIdentifier": "produce",
+                      "hookName": "DOCK_AMEND",
+                      "hookId": "produce#DOCK_AMEND",
+                      "canonicalInputSignal": "factory::produce.amend",
+                      "canonicalInputSignalHash": "0x8b30c37ecaeb8d805605855375ffd5aacea7d3f66e0924b5102be5af0caf88fe",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0xf895eff1788a31957e29a30346b66855798e5ba41c501432907f44d78aea9a39",
+                      "leafHash": "0xf61318ec32093d23b2cb35d731022ab035638835a837ece512ea59623bb62901"
+                    },
+                    {
+                      "port": "execute",
+                      "stageIdentifier": "intake",
+                      "hookName": "EXECUTE",
+                      "hookId": "intake#EXECUTE",
+                      "canonicalInputSignal": "factory::intake.execute",
+                      "canonicalInputSignalHash": "0xd0ebd860ed259e6dcaf9115941328f401a9aafea2d73631d52bb4de269a1aa87",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x3cafc453a97ab2777674dd7f2adf026dd4462b56c4cf321178be59a03778897e",
+                      "leafHash": "0x9ded09b3effc85c8b09af28db5fd4dfa8d31c3ff62a2a4b13106ba6870ce2bc8"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "port": "completed",
+                      "canonicalOutputSignal": "factory::produce.cmp",
+                      "canonicalOutputSignalHash": "0x75a48a58d64fbeec5a7f31ce47d1169723468955af37f3487ff32523a52862a5",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x4e5ad88c74e2500fe8c03fc3e5842a9c5912691e7f0df6b1c00dfe0b374fcb9f",
+                      "leafHash": "0xf3e39043f2c60bde31d363a40c45c18bf1cc785398dead407d7b5600d668e6c2"
+                    },
+                    {
+                      "port": "started",
+                      "canonicalOutputSignal": "factory::intake.str",
+                      "canonicalOutputSignalHash": "0xea54847cb4de3cd8981da9c4e88c014bea49a20826ba20a12516ce0f77bb8606",
+                      "source": "factory",
+                      "sourceId": "0xe366a98476020cb9ff8cc566d0cdeac414e546d2e7ede445f4e7032a4272c771",
+                      "signalId": "0x01181cce357e648ddf8731fa1672ffa44382952666697f8249cfd80c15e209db",
+                      "leafHash": "0x4e9823aea8125c4f2dcdafa29f103fb13421890cb696c20f3d308d43f672ddfe"
+                    }
+                  ],
+                  "inputsRoot": "0xfc005bea9f9208e630d8d79de725a264ae2dc5ecf0a7f416025d0859cd984e2d",
+                  "outputsRoot": "0x85419b9a6c0a7aec1ced1882c6ce3e9a50757ef198913aacdbf7965f3bf03995",
+                  "interfaceRoot": "0x59241571ea80dfeb54b1dd40f298c62a1045481f552de4c4341f8b2be59baaa7"
+                }
+              ],
+              "evmPlanId": "0xe0736f52afd6a325b50e24086df3421a1f6581b672b561acbb7da9b73c8811e3",
+              "cloudArtifactId": "artifact://0xba5abfdf448401d31378ed9c89122134dfc58d779d75350f853b66cc69df71b4"
+            }
+          ]
+        },
+        "hooks": [
+          {
+            "hookId": "0xc04b87f873ad87ab715a6832a137ec6385d144adb11f87bb75fc74af7252f365",
+            "stageId": "0xa84ee7c312c693d5fd369fd50d88125ca04fdcaeaf97e8d5a4922ff9777164ea",
+            "hookName": "0x6b03e63bac5911ba3d6eaf1a681916e2504ff4b0a95213c2c696a11402a27d72",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x7f1e19ffd07a3224d55fd3b0b3132da2491354985d8f78abdfcaaca30d1b8105",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xb54bec63127fe06ab8c13d6946d6ebcccf61559e49a9fcf8b44e77c15cc990fc"
+            ]
+          },
+          {
+            "hookId": "0xba0b51c636886102cf9187a49d54f74059f630f8a08c22a301144b7bf0a06a64",
+            "stageId": "0xb8e2054f8a912367e38a22ce773328ff8aabf8082c4120bad9ef085e1dbf29a7",
+            "hookName": "0xbe3c26a64d88239991ba164ff2b468dd1f37dd3d8107c4c763966a7a0402c73f",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0xa5deb3301e6adb05d817001102db90a89e616cbb0b973d8c2d9804de3c9023ee",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x1b1de81020b6a7096a0b9065a7794434b919e4672276725e9db798cf42be930d"
+            ]
+          },
+          {
+            "hookId": "0x06bd2f15baa717eaf5dd21f3fe27553dfdf46b39fba3ec0307af57fa21e12b5b",
+            "stageId": "0xb8e2054f8a912367e38a22ce773328ff8aabf8082c4120bad9ef085e1dbf29a7",
+            "hookName": "0x557bc7dd98b058bb9f53e4df97129792526574a4717818cdf9803f6b16290a31",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0xa5deb3301e6adb05d817001102db90a89e616cbb0b973d8c2d9804de3c9023ee",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 4,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 5
+              },
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0xfc048ed71eb35af7cf07cd3fd924feda583a9c3fb1bef1ad593f2472956ca060",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 1,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 2,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 2,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x1b1de81020b6a7096a0b9065a7794434b919e4672276725e9db798cf42be930d",
+              "0x25414fc8fc1bb291d8a071f2578468f9e877eb0d5a9feca914c77e8371f87d2f"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 3,
+        "instructions": [
+          1,
+          1,
+          5
+        ],
+        "dependencyKeys": [
+          1,
+          1,
+          2
+        ]
+      },
+      "expected": {
+        "uid": "zx-943a96529b3814c512bf32a1f6e52528",
+        "hookPlanHash": "0x7beb96855778f4d28854d7a1f6f60acf2efca7578e1d7baca04737c2d1bd28dd",
+        "onchainPlanHash": "0x8261a65a85db85b70945fa8417ba9cafd81630f123a75535007c41b3bf5df511",
+        "runtimePlanHash": "0x50962ff67fdcdf2de758615027dc2965f946a06613e317ec34ddb074128403a7",
+        "hooksHash": "0x93c198fe39dfa9ab68e6f27adf922b9b13e913c1baa16aff7c536a88487857d9",
+        "capabilitiesRoot": "0x76fb8ce722d40eecf190b71fa0fff923eb9de0073dabd9b4657b57100b21c208",
+        "dockRoutesRoot": "0xd0b604744f22bf349b168fcd51325e16517cefdac93f1adc9aa8deb0cd58767c",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    },
+    {
+      "name": "candidates_blackbox_two_stage",
+      "note": "候选集黑盒双阶段基座（blockchain/eth 平台，无候选集输入）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "candidates_blackbox"
+          },
+          "spec": {
+            "platform": {
+              "type": "blockchain",
+              "provider": "eth"
+            },
+            "nucleation": {
+              "id": "core_org"
+            },
+            "stages": [
+              {
+                "name": "main",
+                "source": "buyer",
+                "receiveSignals": {
+                  "START": "buyer::main.kickoff"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  },
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "kickoff"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "patchable-org"
+                }
+              },
+              {
+                "name": "deal",
+                "source": "trading",
+                "receiveSignals": {
+                  "PLACE": "trading::deal.kickoff"
+                },
+                "sendSignals": [
+                  {
+                    "name": "closed"
+                  },
+                  {
+                    "name": "kickoff"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "trading-org"
+                }
+              }
+            ]
+          }
+        },
+        "hooks": [
+          {
+            "hookId": "0x8f7f56b474aa16c9036006ba7e3b652684162f9ca7213cde9f5313ec80d0ccff",
+            "stageId": "0xe064fb3e72b2ec70782ecb932d7660de8155cfb2be5f0e925f55e7a33274bf5b",
+            "hookName": "0x6b03e63bac5911ba3d6eaf1a681916e2504ff4b0a95213c2c696a11402a27d72",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x7c13c718f2166ffb5a40117ed95c445804369557a818bab5f163c7a0a95a4de5",
+                "signalId": "0x4e44ddf9aa514caf700ed879b64bb3f78318478ddceaa3cbfc4ba3b0455d40aa",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xe4167d7fbab2416dc27b9389a37a5dc5f3108597590a45e3bed8fc4f450831cb"
+            ]
+          },
+          {
+            "hookId": "0xba0b51c636886102cf9187a49d54f74059f630f8a08c22a301144b7bf0a06a64",
+            "stageId": "0xb8e2054f8a912367e38a22ce773328ff8aabf8082c4120bad9ef085e1dbf29a7",
+            "hookName": "0xbe3c26a64d88239991ba164ff2b468dd1f37dd3d8107c4c763966a7a0402c73f",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x186d0dc6e08cf18624a4e47630093a2d803578d0795b999cc9366e955a18aa3f",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xdda5daac38d84e514ff65f6cc2a704eb5358ce53ababdbd479320764bfd073e0"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 2,
+        "instructions": [
+          1,
+          1
+        ],
+        "dependencyKeys": [
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-50bb3590d841a02ac7658b1288561298",
+        "hookPlanHash": "0xe06a94e17c4b0620e2ed957a1e9cbc8a6982e8af41a48a4f7a185485c0f94a10",
+        "onchainPlanHash": "0xe25b24d23d08c974c788f30ef7c52be513eea4cc615f70b0ca457d81e8826779",
+        "runtimePlanHash": "0xf631a0c7d959c085745f523126993b7b6b26f53e2ca0ddda2a5cd923c1227478",
+        "hooksHash": "0x26d11371df77c654da20054a43c60ef0d7617fcafec8ec9686acdd27f7681377",
+        "capabilitiesRoot": "0xfe125adba1117770f4f10aab4147b288d17a0f991f7efd56c74bde6fb5095a48",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    },
+    {
+      "name": "candidates_blackbox_with_candidates",
+      "note": "同上定义 + 两阶段候选集输入（executorCandidatesRoot 非 EMPTY）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "candidates_blackbox"
+          },
+          "spec": {
+            "platform": {
+              "type": "blockchain",
+              "provider": "eth"
+            },
+            "nucleation": {
+              "id": "core_org"
+            },
+            "stages": [
+              {
+                "name": "main",
+                "source": "buyer",
+                "receiveSignals": {
+                  "START": "buyer::main.kickoff"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  },
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "kickoff"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "patchable-org"
+                }
+              },
+              {
+                "name": "deal",
+                "source": "trading",
+                "receiveSignals": {
+                  "PLACE": "trading::deal.kickoff"
+                },
+                "sendSignals": [
+                  {
+                    "name": "closed"
+                  },
+                  {
+                    "name": "kickoff"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "trading-org"
+                }
+              }
+            ]
+          }
+        },
+        "executorCandidates": [
+          {
+            "stageIdentifier": "main",
+            "executor": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          },
+          {
+            "stageIdentifier": "deal",
+            "executor": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
+          }
+        ],
+        "hooks": [
+          {
+            "hookId": "0x8f7f56b474aa16c9036006ba7e3b652684162f9ca7213cde9f5313ec80d0ccff",
+            "stageId": "0xe064fb3e72b2ec70782ecb932d7660de8155cfb2be5f0e925f55e7a33274bf5b",
+            "hookName": "0x6b03e63bac5911ba3d6eaf1a681916e2504ff4b0a95213c2c696a11402a27d72",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x7c13c718f2166ffb5a40117ed95c445804369557a818bab5f163c7a0a95a4de5",
+                "signalId": "0x4e44ddf9aa514caf700ed879b64bb3f78318478ddceaa3cbfc4ba3b0455d40aa",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xe4167d7fbab2416dc27b9389a37a5dc5f3108597590a45e3bed8fc4f450831cb"
+            ]
+          },
+          {
+            "hookId": "0xba0b51c636886102cf9187a49d54f74059f630f8a08c22a301144b7bf0a06a64",
+            "stageId": "0xb8e2054f8a912367e38a22ce773328ff8aabf8082c4120bad9ef085e1dbf29a7",
+            "hookName": "0xbe3c26a64d88239991ba164ff2b468dd1f37dd3d8107c4c763966a7a0402c73f",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x186d0dc6e08cf18624a4e47630093a2d803578d0795b999cc9366e955a18aa3f",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xdda5daac38d84e514ff65f6cc2a704eb5358ce53ababdbd479320764bfd073e0"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 2,
+        "instructions": [
+          1,
+          1
+        ],
+        "dependencyKeys": [
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-50bb3590d841a02ac7658b1288561298",
+        "hookPlanHash": "0xe06a94e17c4b0620e2ed957a1e9cbc8a6982e8af41a48a4f7a185485c0f94a10",
+        "onchainPlanHash": "0x7fe384a91f7f98b1b366caf8a932a256f68478e470f8ab66da2c56f842b511f0",
+        "runtimePlanHash": "0xa0464aab42496924c83cd8377853129982a02e8b1329abce33bc0d6a71de97d3",
+        "hooksHash": "0x26d11371df77c654da20054a43c60ef0d7617fcafec8ec9686acdd27f7681377",
+        "capabilitiesRoot": "0xfe125adba1117770f4f10aab4147b288d17a0f991f7efd56c74bde6fb5095a48",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0x6e4dba3df7a6d83d6224b8ec15e36ab8ce0abd3b0908bab4a4a6de74c20985e1"
+      }
+    },
+    {
+      "name": "candidates_blackbox_birth",
+      "note": "出生（mint）阶段形态 + deal 候选（出生阶段执行者终生不可变）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "candidates_blackbox_birth"
+          },
+          "spec": {
+            "platform": {
+              "type": "blockchain",
+              "provider": "eth"
+            },
+            "nucleation": {
+              "id": "core_org"
+            },
+            "stages": [
+              {
+                "name": "main",
+                "source": "buyer",
+                "mint": "per-fact",
+                "receiveSignals": {
+                  "ON_DEAL": "::ANCHOR(@trading::deal.closed)"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  },
+                  {
+                    "name": "cmp"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "birth-org"
+                }
+              },
+              {
+                "name": "deal",
+                "source": "trading",
+                "receiveSignals": {
+                  "PLACE": "trading::deal.kickoff"
+                },
+                "sendSignals": [
+                  {
+                    "name": "closed"
+                  },
+                  {
+                    "name": "kickoff"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "trading-org"
+                }
+              }
+            ]
+          }
+        },
+        "executorCandidates": [
+          {
+            "stageIdentifier": "deal",
+            "executor": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          }
+        ],
+        "hooks": [
+          {
+            "hookId": "0x8f7f56b474aa16c9036006ba7e3b652684162f9ca7213cde9f5313ec80d0ccff",
+            "stageId": "0xe064fb3e72b2ec70782ecb932d7660de8155cfb2be5f0e925f55e7a33274bf5b",
+            "hookName": "0x6b03e63bac5911ba3d6eaf1a681916e2504ff4b0a95213c2c696a11402a27d72",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x7c13c718f2166ffb5a40117ed95c445804369557a818bab5f163c7a0a95a4de5",
+                "signalId": "0x4e44ddf9aa514caf700ed879b64bb3f78318478ddceaa3cbfc4ba3b0455d40aa",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xe4167d7fbab2416dc27b9389a37a5dc5f3108597590a45e3bed8fc4f450831cb"
+            ]
+          },
+          {
+            "hookId": "0xdde298adb7b89c621695dc2d90d1ef5e986acb3182d701c9007bb058d7c8dd7f",
+            "stageId": "0xb8e2054f8a912367e38a22ce773328ff8aabf8082c4120bad9ef085e1dbf29a7",
+            "hookName": "0x49b7c26c450dccb863ce33b4c7bb7ca3371599eef0b4c15397d3860222a79bd1",
+            "flags": 5,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x7c13c718f2166ffb5a40117ed95c445804369557a818bab5f163c7a0a95a4de5",
+                "signalId": "0x15f155880803b4ae003518d12517eba59615bf839150752b5e86c4846863538a",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x3181d16e8dfd5ae2e1019ac46edb074958d4bc96d89060ddccad82d82e12e8f1"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 2,
+        "instructions": [
+          1,
+          1
+        ],
+        "dependencyKeys": [
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-d5d9d097f1d30bba0030dc8a4d5c6106",
+        "hookPlanHash": "0x13bf5b8d72deff4d10aa9965fc97fb419c167b0df0909ac7640904faab2af952",
+        "onchainPlanHash": "0x65242a4c5633edf01dc41e968db3c1d3ae331a97540b2ba6e000e494e8271bdb",
+        "runtimePlanHash": "0xa3401e721da46bd46ef7fa85be89b4d291cc368981fe7d3361a8b26552d8887a",
+        "hooksHash": "0x69ef09ed8c7f21bc6817eff62bbf917e98719bcf4098704e7a2373f8ddfe9421",
+        "capabilitiesRoot": "0x6f81bf4e3cb094487cd5f2da50e2d002ea85838c12e276c5906f88d80ce4149b",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0x4baee4951843a094f49896c62341c9be1baf81a13dc817c0ddfea4bfcf63ec61"
+      }
+    },
+    {
+      "name": "admission_demo_declared_valid_when",
+      "note": "发射适格面：declared validWhen 编译出 flags=8 admission 槽进 hooksHash",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "admission_demo"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            },
+            "nucleation": {
+              "id": "core"
+            },
+            "stages": [
+              {
+                "name": "gate",
+                "source": "buyer",
+                "receiveSignals": {
+                  "BEGIN": "buyer::gate.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "seed"
+                  },
+                  {
+                    "name": "ready"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "gate-org"
+                }
+              },
+              {
+                "name": "work",
+                "source": "buyer",
+                "receiveSignals": {
+                  "RUN": "buyer::gate.ready"
+                },
+                "sendSignals": [
+                  {
+                    "name": "cmp",
+                    "validWhen": [
+                      "buyer::gate.seed & ~(work.cmp_err +14d)"
+                    ]
+                  },
+                  {
+                    "name": "cmp_err"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "work-org"
+                }
+              }
+            ]
+          }
+        },
+        "hooks": [
+          {
+            "hookId": "0x61b68a7d0a983ac9e8cf21b7551df29f77cc679af730f36ff03fe2240275fe9e",
+            "stageId": "0xe8905d90899652c3e8c6dcafbac24e798be1f1b7e6e4dad28b4cbf776d0b66e9",
+            "hookName": "0x3b813d0f2fefdd2384ffa043cc10772090b9209153f701782e4a34d0e61991b3",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x986a7ce65a9e426cf811887352eb16421062b0f9e886e7238a92481282c1ca92",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x14a5dbcfb9f5cec27044b199c624ed934abe900e4730fb76024f9c63baa46866"
+            ]
+          },
+          {
+            "hookId": "0xec50a9628092bae850125f7284658b120adab0bf510b91accdac2b1f75a33094",
+            "stageId": "0x48a8a3976076ce0ce569b92496ab44d5fa5c4612c47a1447cee89b689ad9af5e",
+            "hookName": "0xeca1834fef59f6f465ff81a48856b24581b3c76eb0bafc989ff9f6ba85ebf39b",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x58c9ed73cbf6cdfe5e1bb0d8dc0c4c7267aaec03afa728b2615233a078b88e9b",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x0069660cffd56ec8f6e6729a0308fa5c3484a9d53e170a3d093ff7404326fea9"
+            ]
+          },
+          {
+            "hookId": "0xc6687a7c861362a061d5141c534336f97b06063bd014ca8a55982444d5dd671a",
+            "stageId": "0x48a8a3976076ce0ce569b92496ab44d5fa5c4612c47a1447cee89b689ad9af5e",
+            "hookName": "0xd0bfd65b6b87fb8a736d0494782ce70c646ab0f559096a36092b53be689409a7",
+            "flags": 8,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x986a7ce65a9e426cf811887352eb16421062b0f9e886e7238a92481282c1ca92",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x5902521f99890eb6a0655272fe8ca78f9837a4c5bce87c4601f94099db359bca",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 4,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 1209600
+              },
+              {
+                "op": 1,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 2,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 2,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x14a5dbcfb9f5cec27044b199c624ed934abe900e4730fb76024f9c63baa46866",
+              "0x828ea633d2a33dbcdeacbe02241e202eb0cf5721db952718f8cb380e37fc0978"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 3,
+        "instructions": [
+          1,
+          1,
+          5
+        ],
+        "dependencyKeys": [
+          1,
+          1,
+          2
+        ]
+      },
+      "expected": {
+        "uid": "zx-bd5de1930ed9eb24c841a7344d07c372",
+        "hookPlanHash": "0xda61d361f4227454164096aecec5c2ed59d40682e2d8f3d5babf1a9c627f70ff",
+        "onchainPlanHash": "0xa9b65bd3c89ca9c7b8ef8ffac2b7f7717ba33b9c489fdf56724ffe4555f60bed",
+        "runtimePlanHash": "0xdb60a706e5cc07dc42aa0529e688af8d1fd4dec52a2e6e448aa44d45f2c7e583",
+        "hooksHash": "0x3894923d3d56313142bb505ad3a62e5b3c69384f0699f62ce6a3ff45fad22afb",
+        "capabilitiesRoot": "0xa273bc49f5b2b722ed08f3acd196e2a2fc39310d7fa918c08822e988fe62db3f",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    },
+    {
+      "name": "admission_demo_bare_root_veto",
+      "note": "发射适格面：裸根否决（filter 档合法、hook 档非法的形态）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "admission_demo"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            },
+            "nucleation": {
+              "id": "core"
+            },
+            "stages": [
+              {
+                "name": "gate",
+                "source": "buyer",
+                "receiveSignals": {
+                  "BEGIN": "buyer::gate.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "seed"
+                  },
+                  {
+                    "name": "ready"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "gate-org"
+                }
+              },
+              {
+                "name": "work",
+                "source": "buyer",
+                "receiveSignals": {
+                  "RUN": "buyer::gate.ready"
+                },
+                "sendSignals": [
+                  {
+                    "name": "cmp",
+                    "validWhen": [
+                      "buyer::~(work.cmp_err +14d)"
+                    ]
+                  },
+                  {
+                    "name": "cmp_err"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "work-org"
+                }
+              }
+            ]
+          }
+        },
+        "hooks": [
+          {
+            "hookId": "0x61b68a7d0a983ac9e8cf21b7551df29f77cc679af730f36ff03fe2240275fe9e",
+            "stageId": "0xe8905d90899652c3e8c6dcafbac24e798be1f1b7e6e4dad28b4cbf776d0b66e9",
+            "hookName": "0x3b813d0f2fefdd2384ffa043cc10772090b9209153f701782e4a34d0e61991b3",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x986a7ce65a9e426cf811887352eb16421062b0f9e886e7238a92481282c1ca92",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x14a5dbcfb9f5cec27044b199c624ed934abe900e4730fb76024f9c63baa46866"
+            ]
+          },
+          {
+            "hookId": "0xec50a9628092bae850125f7284658b120adab0bf510b91accdac2b1f75a33094",
+            "stageId": "0x48a8a3976076ce0ce569b92496ab44d5fa5c4612c47a1447cee89b689ad9af5e",
+            "hookName": "0xeca1834fef59f6f465ff81a48856b24581b3c76eb0bafc989ff9f6ba85ebf39b",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x58c9ed73cbf6cdfe5e1bb0d8dc0c4c7267aaec03afa728b2615233a078b88e9b",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x0069660cffd56ec8f6e6729a0308fa5c3484a9d53e170a3d093ff7404326fea9"
+            ]
+          },
+          {
+            "hookId": "0xc6687a7c861362a061d5141c534336f97b06063bd014ca8a55982444d5dd671a",
+            "stageId": "0x48a8a3976076ce0ce569b92496ab44d5fa5c4612c47a1447cee89b689ad9af5e",
+            "hookName": "0xd0bfd65b6b87fb8a736d0494782ce70c646ab0f559096a36092b53be689409a7",
+            "flags": 8,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x5902521f99890eb6a0655272fe8ca78f9837a4c5bce87c4601f94099db359bca",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 4,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 1209600
+              },
+              {
+                "op": 1,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x828ea633d2a33dbcdeacbe02241e202eb0cf5721db952718f8cb380e37fc0978"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 3,
+        "instructions": [
+          1,
+          1,
+          3
+        ],
+        "dependencyKeys": [
+          1,
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-ab2d0f704f3d2805ba3956fb5c1df567",
+        "hookPlanHash": "0xe0e379f2cad41fe81924de9fc5daa9e92294fb7138fa0f1f15c611ba4caabe48",
+        "onchainPlanHash": "0xf0ee06ecd5827e222d3848c2b78d49172f23386d894d129dc13b9ca0062b4482",
+        "runtimePlanHash": "0x2be68e885bda4fa41307de88ab21cc9b1b3130c25083d9bb187243d3e5d242aa",
+        "hooksHash": "0x28b550ee8c095bc25a5df740d13cfcbce370dad86c38b7ce67920cc4439f9d16",
+        "capabilitiesRoot": "0xa273bc49f5b2b722ed08f3acd196e2a2fc39310d7fa918c08822e988fe62db3f",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    },
+    {
+      "name": "shared_key_order_demo",
+      "note": "同键双 hook 的 dependencyIndex calldata 序钉（keccak 序与 calldata 序分叉形态）",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "shared_key_order_demo"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            },
+            "nucleation": {
+              "id": "core"
+            },
+            "stages": [
+              {
+                "name": "stage",
+                "source": "buyer",
+                "receiveSignals": {
+                  "FIRST": "buyer::stage.seed",
+                  "SECOND": "buyer::stage.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "seed"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "watcher-org"
+                }
+              }
+            ]
+          }
+        },
+        "hooks": [
+          {
+            "hookId": "0x3a4921f72ddf121bd93d70fc79b3fc835d3eaa0bc21c9f9353032384781b82a6",
+            "stageId": "0x2b5002d845b2c8893d165fefbe58347d4fd2d6795114a04f31209f53c3d9f52e",
+            "hookName": "0x42cd9f60f3f65c2070aa32043d8ac7ddaa9c97b48b932c3e283f07edabe2dd7e",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x9e62c41ec596a55ff9ab2f2e753bf818c622ca54044eee25ebe3bb202b7fbfcc",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x140a03119f2f99c6dd2b5fcafc0e713557d7f4ba3225e06f0cce4809795ad7a1"
+            ]
+          },
+          {
+            "hookId": "0x1bf092bea817cc04def555da57851937d8fc42b8e47d614694ac1a9ad07ae9cd",
+            "stageId": "0x2b5002d845b2c8893d165fefbe58347d4fd2d6795114a04f31209f53c3d9f52e",
+            "hookName": "0x7fd7e54047fe0bd1d7ad925b03cb57f95b081c0b2949a64ca99e267ac268727e",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x9e62c41ec596a55ff9ab2f2e753bf818c622ca54044eee25ebe3bb202b7fbfcc",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x140a03119f2f99c6dd2b5fcafc0e713557d7f4ba3225e06f0cce4809795ad7a1"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 2,
+        "instructions": [
+          1,
+          1
+        ],
+        "dependencyKeys": [
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-218381c36f44dd2ac54e4dfdd9357684",
+        "hookPlanHash": "0xf12380e91d11ca613ac71033124058a229d39b24a629493d348644152ac33103",
+        "onchainPlanHash": "0xd43ab6ff656cfe8606f7b7e03fe3abd1b5c03ba1947c5097776c727f4f3f275b",
+        "runtimePlanHash": "0x18d026d5637c29c7aab2dfe384f486bffb972b16a90b56b435eeca277ceef995",
+        "hooksHash": "0x6828aef87197ae6791e8b9efa266c5d2e2f023c204ae798be64d4b915321bf2b",
+        "capabilitiesRoot": "0x6c935f79f63adb42c9dc842c4c2f759b871266ae2e0171cb10dfc4358567ef49",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    },
+    {
+      "name": "mint_birth_subscription",
+      "note": "出生订阅（::ANCHOR）编译为 mint 触发 SIGNAL 钩子的多阶段形态",
+      "input": {
+        "definition": {
+          "apiVersion": "uvp/v0",
+          "kind": "Zhixu",
+          "metadata": {
+            "name": "demo_zhixu"
+          },
+          "spec": {
+            "platform": {
+              "type": "cloud"
+            },
+            "nucleation": {
+              "id": "core"
+            },
+            "stages": [
+              {
+                "name": "assign",
+                "source": "buyer",
+                "receiveSignals": {
+                  "PLACE": "buyer::assign.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "executor_selected"
+                  },
+                  {
+                    "name": "seed"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "selector-org"
+                }
+              },
+              {
+                "name": "main",
+                "source": "buyer",
+                "receiveSignals": {
+                  "START": "buyer::assign.executor_selected"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  },
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "err"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "work-org"
+                }
+              },
+              {
+                "name": "post",
+                "source": "buyer",
+                "receiveSignals": {
+                  "PUBLISH": "buyer::post.seed"
+                },
+                "sendSignals": [
+                  {
+                    "name": "posted"
+                  },
+                  {
+                    "name": "seed"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "intake-exec"
+                }
+              },
+              {
+                "name": "birth",
+                "source": "fulfiller",
+                "mint": "per-fact",
+                "receiveSignals": {
+                  "BIRTH": "::ANCHOR(@buyer::post.posted)"
+                },
+                "sendSignals": [
+                  {
+                    "name": "str"
+                  },
+                  {
+                    "name": "cmp"
+                  },
+                  {
+                    "name": "err"
+                  }
+                ],
+                "executor": {
+                  "supplierType": "organization",
+                  "supplierID": "fulfiller-exec"
+                }
+              }
+            ]
+          }
+        },
+        "hooks": [
+          {
+            "hookId": "0xc04b87f873ad87ab715a6832a137ec6385d144adb11f87bb75fc74af7252f365",
+            "stageId": "0xa84ee7c312c693d5fd369fd50d88125ca04fdcaeaf97e8d5a4922ff9777164ea",
+            "hookName": "0x6b03e63bac5911ba3d6eaf1a681916e2504ff4b0a95213c2c696a11402a27d72",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x7f1e19ffd07a3224d55fd3b0b3132da2491354985d8f78abdfcaaca30d1b8105",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xb54bec63127fe06ab8c13d6946d6ebcccf61559e49a9fcf8b44e77c15cc990fc"
+            ]
+          },
+          {
+            "hookId": "0x72e9034147c7005c4919ec2705708adef3d14ea2e7757f3b5c8015e10a8d2b50",
+            "stageId": "0x0f3fe971129295ad98fb77108128ec4c94083ec495d6ae9d7f14797c097eba91",
+            "hookName": "0x9146ae7c1a4141a9688fd320ef1337663752a3b820077a857d6bfde76f22190a",
+            "flags": 5,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x9f993b2dfbc546ce935cfcd5b4f9e85ee93e0e302cd18a07f5fd9c06ea930098",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x0ab0b32626a7ea6a8f8df993f0542f2547ea4ce8565a983c380a5f724f188cd1"
+            ]
+          },
+          {
+            "hookId": "0xba0b51c636886102cf9187a49d54f74059f630f8a08c22a301144b7bf0a06a64",
+            "stageId": "0xb8e2054f8a912367e38a22ce773328ff8aabf8082c4120bad9ef085e1dbf29a7",
+            "hookName": "0xbe3c26a64d88239991ba164ff2b468dd1f37dd3d8107c4c763966a7a0402c73f",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0xa5deb3301e6adb05d817001102db90a89e616cbb0b973d8c2d9804de3c9023ee",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x1b1de81020b6a7096a0b9065a7794434b919e4672276725e9db798cf42be930d"
+            ]
+          },
+          {
+            "hookId": "0xcd1ec8b14458d3bc58533fcf29f230ca38612e2cb3959bfbda9ddf4adb5af289",
+            "stageId": "0xcb023f17c6c151428a83e388ec4de34e239b102d8cb4b01068f4cdc2ed6b83b6",
+            "hookName": "0x1836ad0ca84a8261c2bc7d80cbd3f14a7d29e671e033b9cdf463572f33884a3a",
+            "flags": 4,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x9c1bfc34ea7e295ac684c026c6d4de765734cb6b37fa07330bcfc241743ebbaf",
+                "signalId": "0x0cd329737fd348ee77860b337f63ea75189150972c0ab0100f529428282c0f22",
+                "arity": 0,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0xd06c1eccd1cc9999df06ef732649bf03e6e4764af51399068174113bb3a78643"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 4,
+        "instructions": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "dependencyKeys": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "uid": "zx-b777a0e99591ea97c0c40ff126b4887b",
+        "hookPlanHash": "0x7582e431e6bf1ad8e9c8eaf9d21569281abe501e52b6537682a03111bb48cce1",
+        "onchainPlanHash": "0xc577314bc98b04f3946c482d68db6359a2db80ab9535d4fb02c257580dfbd328",
+        "runtimePlanHash": "0x2360de9b5d44b69bfb6b7184b19d84589325959816364a2fd0223f1a51190d8d",
+        "hooksHash": "0x3dc30affb262ba7b90d50f669a1d83c283880fe279c2d29171342ec210c7a7d8",
+        "capabilitiesRoot": "0x3f5d9d59e922ccd31aff96426442ff36556425f815972304ccb115564d1c7765",
+        "dockRoutesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "dockInterfaceRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "executorCandidatesRoot": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+      }
+    }
+  ],
+  "registerHooksVectors": [
+    {
+      "name": "register_hooks_zero_word_fill",
+      "note": "非 SIGNAL 指令的 sourceId/signalId 填 Solidity 零字、arity/delaySeconds 未用位填 0 的冻结向量（commitPlan 对 calldata 重算本哈希）",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "0x0000000000000000000000000000000000000000000000000000000000001001",
+            "stageId": "0x0000000000000000000000000000000000000000000000000000000000002001",
+            "hookName": "0x0000000000000000000000000000000000000000000000000000000000003001",
+            "flags": 5,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000004001",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000005001",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 1,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 4,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 0,
+                "delaySeconds": 30
+              }
+            ],
+            "dependencyKeys": [
+              "0x0000000000000000000000000000000000000000000000000000000000006001"
+            ]
+          },
+          {
+            "hookId": "0x0000000000000000000000000000000000000000000000000000000000001002",
+            "stageId": "0x0000000000000000000000000000000000000000000000000000000000002002",
+            "hookName": "0x0000000000000000000000000000000000000000000000000000000000003002",
+            "flags": 0,
+            "instructions": [
+              {
+                "op": 0,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000004002",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000005002",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 0,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000004001",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000005001",
+                "arity": 0,
+                "delaySeconds": 0
+              },
+              {
+                "op": 2,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 2,
+                "delaySeconds": 0
+              },
+              {
+                "op": 3,
+                "sourceId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "signalId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "arity": 2,
+                "delaySeconds": 0
+              }
+            ],
+            "dependencyKeys": [
+              "0x0000000000000000000000000000000000000000000000000000000000006002",
+              "0x0000000000000000000000000000000000000000000000000000000000006001"
+            ]
+          }
+        ]
+      },
+      "counts": {
+        "hooks": 2,
+        "instructions": [
+          3,
+          4
+        ],
+        "dependencyKeys": [
+          1,
+          2
+        ]
+      },
+      "expected": {
+        "hooksHash": "0xe71cb5f3a4e16b4498c9d0ccd126cfcc63b6275039635cb94190bf5dcec486df"
+      }
+    }
+  ]
+}

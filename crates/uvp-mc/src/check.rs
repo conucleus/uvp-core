@@ -10,7 +10,7 @@ use uvp_hook_dsl::EvalState;
 use crate::checks::{Check, CheckKind};
 use crate::explore::{self, explore_universe, Graph, StopKind};
 use crate::model::{self, Action, McState};
-use crate::vocab::{positive_signal_atoms, signal_atoms, Vocabulary};
+use crate::vocab::{conjunctive_positive_atoms, signal_atoms, Vocabulary};
 use crate::{McError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -124,11 +124,7 @@ fn predicate_atoms(vocab: &Vocabulary, raw: &str) -> Vec<usize> {
         .collect()
 }
 
-fn bad_state(
-    vocab: &Vocabulary,
-    max_states: u64,
-    check: &Check,
-) -> Result<CheckOutcome> {
+fn bad_state(vocab: &Vocabulary, max_states: u64, check: &Check) -> Result<CheckOutcome> {
     let predicate = check.predicate.as_deref().expect("validated");
     let when = check.when.as_deref();
     let mut seeds = predicate_atoms(vocab, predicate);
@@ -137,12 +133,14 @@ fn bad_state(
     }
     let universe: Vec<usize> = vocab.positive_closure(&seeds).into_iter().collect();
 
-    // 见证必经集：谓词正位原子里的意图。意图被落地阻断项关死后永不复
-    // 适格（事实不撤回），该子树不可能再长出见证，整枝剪除。
+    // 见证必经集：谓词合取语境正位原子里的意图（不下降 Or——析取臂的原
+    // 子不是必要条件，剪它会把仍能经另一臂长出见证的子树误判为死枝）。
+    // 意图被落地阻断项关死后永不复适格（事实不撤回），该子树不可能再长
+    // 出见证，整枝剪除。
     let must: Vec<usize> = vocab
         .predicates
         .get(predicate)
-        .map(|decoded| positive_signal_atoms(&decoded.expr, &decoded.source))
+        .map(|decoded| conjunctive_positive_atoms(&decoded.expr, &decoded.source))
         .unwrap_or_default()
         .iter()
         .filter_map(|atom| vocab.fact_index.get(atom).copied())
@@ -160,8 +158,7 @@ fn bad_state(
                     .any(|&blocked| state.fact_epochs[blocked].is_some())
         })
     };
-    let prune: Option<&explore::PruneCondition<'_>> =
-        (!must.is_empty()).then_some(&prune_fn);
+    let prune: Option<&explore::PruneCondition<'_>> = (!must.is_empty()).then_some(&prune_fn);
 
     let graph = explore_universe(
         vocab,
@@ -170,7 +167,7 @@ fn bad_state(
         Some(&|state| {
             Ok((predicate_holds(vocab, when, state)?
                 && predicate_holds(vocab, Some(predicate), state)?)
-                .then_some(StopKind::Violation))
+            .then_some(StopKind::Violation))
         }),
         prune,
     )?;
@@ -186,11 +183,7 @@ fn bad_state(
     Ok(outcome(check, graph.states.len(), violation))
 }
 
-fn admission_closed(
-    vocab: &Vocabulary,
-    max_states: u64,
-    check: &Check,
-) -> Result<CheckOutcome> {
+fn admission_closed(vocab: &Vocabulary, max_states: u64, check: &Check) -> Result<CheckOutcome> {
     let when = check.when.as_deref().expect("validated");
     let when_atoms = predicate_atoms(vocab, when);
     let mut violation = None;
@@ -241,7 +234,9 @@ fn admission_closed(
                 vocab,
                 &graph,
                 position,
-                format!("intent {intent_name} is still admissible at a state the when-clause closed"),
+                format!(
+                    "intent {intent_name} is still admissible at a state the when-clause closed"
+                ),
             ));
             break 'intents;
         }

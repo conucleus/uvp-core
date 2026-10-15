@@ -95,6 +95,28 @@ pub fn positive_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
     out
 }
 
+/// 合取语境正位原子（见证必经集用）：与 `positive_signal_atoms` 的差别只在
+/// 不下降 Or——析取语境里没有任何单个原子是见证的必要条件（`(a|b)` 的见证
+/// 可只经 b），把析取臂的原子当必经项剪枝会误剪仍能长出见证的子树。
+pub fn conjunctive_positive_atoms(expr: &Expr, source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(expr: &Expr, source: &str, out: &mut Vec<String>) {
+        match expr {
+            Expr::Signal(signal) => out.push(format!("{source}::{signal}")),
+            Expr::Not(_) => {}
+            Expr::Delay { expr, .. } => walk(expr, source, out),
+            Expr::And(terms) => {
+                for term in terms {
+                    walk(term, source, out);
+                }
+            }
+            Expr::Or(_) | Expr::Subscription { .. } => {}
+        }
+    }
+    walk(expr, source, &mut out);
+    out
+}
+
 /// 落地位阻断项的原子集：只认「单个原子恰处一层 Not 之下」的直接负门
 /// （~x）。时间窗负位（~(x+d)）随时间翻转、不随落地关死；复合否定
 /// （~(a&b)）需诸项齐落才为假——二者都不构成落地即永死的阻断项。

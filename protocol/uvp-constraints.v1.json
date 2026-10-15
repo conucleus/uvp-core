@@ -1,7 +1,7 @@
 {
   "version": "uvp.constraints.v1",
   "title": "UVP 跨语言验证约束注册表",
-  "description": "跨轨接受面约束的单一出处。三线 validator（Rust: uvp-core crates/uvp-compiler + uvp-hook-dsl；Go: pkg/compiler/validator + pkg/compiler；TS: uvp-protocol packages/compiler）共用的长度/枚举/字符集/取值域规则在此登记；params 一律从各线代码实测抄录。三线一致性 harness（uvp-protocol packages/compiler/test、uvp-core crates/uvp-compiler/tests、Go pkg/compiler/validator）钉住本文件的 version 与 sha256 并逐 rule 生成边界探针打真 validator：任何一处改表，三线测试同声报警。",
+  "description": "跨轨接受面约束的单一出处。三线 validator（Rust: uvp-core crates/uvp-compiler + uvp-hook-dsl；Go: uvp 仓 pkg/compiler + uvp-utils pkg/uvpcore/ffi（经 uvp-core FFI 继承）；TS: uvp-protocol packages/compiler）共用的长度/枚举/字符集/取值域规则在此登记；params 一律从各线代码实测抄录。三线一致性 harness（Rust: uvp-core crates/uvp-compiler/tests；TS: uvp-protocol packages/compiler/test；Go: uvp-utils pkg/uvpcore/ffi constraints_meta_test.go）钉住本文件：Rust/TS 钉 version 与 sha256 并逐 rule 生成边界探针打真 validator，Go 钉 meta schemaVersion 与内容 sha256；任何一处改表，三线测试同声报警。",
   "constraintTypes": [
     "max_length",
     "min_length",
@@ -15,7 +15,7 @@
     "error.<line> 存真实错误码/错误名/错误消息锚点（harness 断言用子串匹配）；line 未实现时为 null 且不出现在 applies。",
     "lineParams 只在某线实测参数与 ruling 参数不一致时登记（不对称登记，漂移现场存档）；缺省表示该线与 constraint.params 一致。",
     "go 线的 hook DSL 约束经 pkg/hookdsl → uvp-core FFI 继承（uvpcore.ParseHook），Go 本地另有防御纵深校验，两者都登记在 error.go / notes。",
-    "rejectionSurfaces 是合约拒绝面×实现线镜像状态矩阵（雏形）：登记 Solidity 拒绝面真源与 rust/go/ts 三线镜像状态（mirrored / inherit-ffi / none），供镜像债对账；矩阵不驱动探针，改表由三线 sha256 钉报警。"
+    "rejectionSurfaces 是合约拒绝面×实现线镜像状态矩阵（雏形）：登记 Solidity 拒绝面真源与 rust/go/ts 三线镜像状态（mirrored / inherit-ffi / none），供镜像债对账；矩阵不驱动探针，改表由三线 sha256 钉（Rust uvp-core crates/uvp-compiler/tests、TS uvp-protocol packages/compiler/test、Go uvp-utils pkg/uvpcore/ffi）报警。"
   ],
   "rules": [
     {
@@ -742,13 +742,14 @@
       "area": "dock",
       "target": "executor.zhixuExecutorConfig.target.zhixu",
       "constraint": {
-        "type": "required_non_empty",
+        "type": "pattern",
         "params": {
-          "note": "target 必填键：值为 {zhixu: <目标定义 metadata.name>}（slug，^[a-z][a-z0-9_-]{0,99}$）或显式 null（动态选择，运行时由选择记录补齐）；target 只携带 zhixu，残留键按未知字段确定性拒绝"
+          "regex": "^zx-[0-9a-f]{32}$",
+          "note": "target 必填键：值为 {zhixu: <目标定义内容派生 uid>}（zx-<32hex>）或显式 null（动态选择，运行时由选择记录补齐）；target 只携带 zhixu，残留键按未知字段确定性拒绝"
         }
       },
       "error": {
-        "rust": "D003 target.zhixu must be the target definition's metadata.name, matching ^[a-z][a-z0-9_-]{0,99}$",
+        "rust": "D003 target.zhixu must be the target definition's content-derived uid, matching ^zx-[0-9a-f]{32}$",
         "go": null,
         "ts": null
       },
@@ -756,9 +757,9 @@
         "rust"
       ],
       "sources": {
-        "rust": "crates/uvp-compiler/src/dock.rs parse_zhixu_executor_config（D003，name slug 形态校验；target 可为 null）"
+        "rust": "crates/uvp-compiler/src/dock.rs parse_zhixu_executor_config（D003，is_definition_uid 形态校验；target 可为 null）"
       },
-      "ruling": "跨秩序引用填写目标定义的 metadata.name（slug，与 metadata.name 同规则）；名字到实体的解析由各轨权威承担（链轨内容派生 uid、云轨 DB 唯一名）。target:null 表示运行时选择补齐。"
+      "ruling": "跨秩序引用填写目标定义的内容派生 uid（zx-<32hex>，与定义身份派生同源）；uid 是唯一寻址面，name 是纯展示标签（合法 slug 形态但非 zx-uid 的值按 D003 拒绝，三线消费测试同款负例）。target:null 表示运行时选择补齐。"
     },
     {
       "id": "dock-port-name-pattern",

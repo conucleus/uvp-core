@@ -1,8 +1,10 @@
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uvp_replay::{replay_chain_events, ReplayOptions};
 
 const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
+const CORPUS_META: &str = include_str!("../../../fixtures/hook/semantics.v1.meta.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +57,27 @@ struct MismatchDetail {
     reason: String,
     hook: String,
     occurrence: i64,
+}
+
+#[test]
+fn corpus_is_pinned_by_content_sha256() {
+    let meta: Value =
+        serde_json::from_str(CORPUS_META).expect("semantic corpus meta fixture should decode");
+    assert_eq!(
+        meta["algorithm"], "sha256",
+        "本钉只实现 sha256；改算法须三线 harness 同批迁移"
+    );
+    let declared = meta["contentSha256"]
+        .as_str()
+        .expect("meta 携带 contentSha256");
+    let digest = Sha256::digest(CORPUS.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(
+        hex, declared,
+        "语义语料内容与 fixtures/hook/semantics.v1.meta.json 声明的 sha256 不一致：\
+         语料改动必须在同一提交里重算并更新 meta 的 contentSha256，\
+         否则三线（Rust/TS/链轨）任一检出旧语料都无人报警"
+    );
 }
 
 #[test]

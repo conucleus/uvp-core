@@ -84,7 +84,11 @@ pub fn intent_admissible(
     Ok(eval_state(&vocab.intents[intent_index].decoded, times, now)? == EvalState::Ready)
 }
 
-pub fn next_deadline_epoch(vocab: &Vocabulary, times: &SignalTimes, now: i64) -> Result<Option<i64>> {
+pub fn next_deadline_epoch(
+    vocab: &Vocabulary,
+    times: &SignalTimes,
+    now: i64,
+) -> Result<Option<i64>> {
     let mut best: Option<i64> = None;
     let now_dt = epoch_to_dt(now);
     for site in &vocab.delay_sites {

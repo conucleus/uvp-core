@@ -97,8 +97,8 @@ fn run(command: Command) -> Result<String, String> {
 }
 
 fn run_lint(path: &str, format: &str, deny: &[String]) -> ExitCode {
-    let definition = match read_definition(path) {
-        Ok(definition) => definition,
+    let (definition, raw, is_yaml) = match read_definition_with_source(path) {
+        Ok(result) => result,
         Err(err) => {
             eprintln!("failed to read {path}: {err}");
             return ExitCode::FAILURE;
@@ -106,7 +106,7 @@ fn run_lint(path: &str, format: &str, deny: &[String]) -> ExitCode {
     };
     let request = serde_json::json!({ "definition": definition }).to_string();
     let envelope = uvp_compiler::lint::lint_zhixu_json(&request);
-    let value: serde_json::Value = match serde_json::from_str(&envelope) {
+    let mut value: serde_json::Value = match serde_json::from_str(&envelope) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("unparseable lint envelope: {err}: {envelope}");
@@ -131,9 +131,22 @@ fn run_lint(path: &str, format: &str, deny: &[String]) -> ExitCode {
         }
         return ExitCode::FAILURE;
     }
+    if is_yaml {
+        if let Some(diagnostics) = value
+            .get_mut("value")
+            .and_then(|report| report.get_mut("diagnostics"))
+            .and_then(|item| item.as_array_mut())
+        {
+            diagnostics.extend(
+                uvp_hook_dsl::lint_yaml_ambiguous_scalars(&raw)
+                    .into_iter()
+                    .map(|diagnostic| serde_json::to_value(&diagnostic).unwrap_or_default()),
+            );
+        }
+    }
     let report = &value["value"];
     if format == "json" {
-        println!("{envelope}");
+        println!("{}", serde_json::to_string(&value).unwrap_or(envelope));
     } else {
         print_lint_text(report);
     }
@@ -147,12 +160,14 @@ fn run_lint(path: &str, format: &str, deny: &[String]) -> ExitCode {
     }
 }
 
-fn read_definition(path: &str) -> Result<serde_json::Value, String> {
+fn read_definition_with_source(path: &str) -> Result<(serde_json::Value, String, bool), String> {
     let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-        return Ok(value);
+        return Ok((value, content, false));
     }
-    serde_yaml_ng::from_str::<serde_json::Value>(&content).map_err(|err| err.to_string())
+    let definition =
+        serde_yaml_ng::from_str::<serde_json::Value>(&content).map_err(|err| err.to_string())?;
+    Ok((definition, content, true))
 }
 
 fn print_lint_text(report: &serde_json::Value) {

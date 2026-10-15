@@ -69,24 +69,19 @@ pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOu
     let mut signals: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
     let mut status = STATUS_INIT;
     let mut terminal = false;
-    for (index, (name, arrived_at)) in facts.iter().enumerate() {
+    let mut index = 0usize;
+    while index < facts.len() {
         if terminal {
             break;
         }
-        let horizon = if index + 1 < facts.len() {
-            facts[index + 1].1
-        } else {
-            now
-        };
-        signals.insert(name.clone(), *arrived_at);
-        let mut step = eval_step(&decoded, &signals, *arrived_at, &mut status, &mut terminal)?;
+        let (name, arrived_at) = facts[index].clone();
+        signals.entry(name).or_insert(arrived_at);
+        index += 1;
+        let mut step = eval_step(&decoded, &signals, arrived_at, &mut status, &mut terminal)?;
         while !terminal && step.state == EvalState::Wait {
             let Some(due_at) = step.ready_at else {
                 break;
             };
-            if due_at > horizon {
-                break;
-            }
             let decision_at = due_at
                 .checked_add_signed(chrono::Duration::milliseconds(MATURITY_DECISION_SLACK_MS))
                 .ok_or_else(|| {
@@ -94,6 +89,26 @@ pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOu
                         "maturity decision point overflows the replay timestamp range".to_string(),
                     )
                 })?;
+            while index < facts.len() && facts[index].1 <= decision_at {
+                let (name, arrived_at) = facts[index].clone();
+                signals.entry(name).or_insert(arrived_at);
+                index += 1;
+                step = eval_step(&decoded, &signals, arrived_at, &mut status, &mut terminal)?;
+                if terminal || step.state != EvalState::Wait {
+                    break;
+                }
+            }
+            if terminal || step.state != EvalState::Wait {
+                break;
+            }
+            let horizon = if index < facts.len() {
+                facts[index].1
+            } else {
+                now
+            };
+            if due_at > horizon {
+                break;
+            }
             step = eval_step(&decoded, &signals, decision_at, &mut status, &mut terminal)?;
         }
     }
@@ -276,6 +291,21 @@ mod tests {
         )
         .expect("replay must succeed");
         assert_eq!(outcome.status, STATUS_WAIT);
+    }
+
+    #[test]
+    fn duplicate_fact_keeps_the_earliest_arrival_like_the_eval_api() {
+        let outcome = walk(
+            "src::b.approved + 2h",
+            &[("b.approved", iso(3 * 3600)), ("b.approved", iso(1800))],
+            &iso(0),
+        )
+        .expect("replay must succeed");
+        assert_eq!(
+            outcome.status, STATUS_READY,
+            "重复事实归约须与 eval API 同语义（保最早 received_at）：\
+             双口径在此输入上分叉——保最后（旧实现）给 wait，保最早给 ready"
+        );
     }
 
     #[test]

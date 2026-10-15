@@ -3,8 +3,8 @@
 
 use serde_json::Value;
 use uvp_hook_dsl::{
-    lint_hook, lint_hook_json, Expr, Gate, Profile, SpannedExpr, MAX_LINT_BOOLEAN_DEPTH,
-    MAX_LINT_BOOLEAN_OPERANDS,
+    lint_hook, lint_hook_in_stage, lint_hook_json, lint_yaml_ambiguous_scalars, Expr, Gate,
+    Profile, SpannedExpr, MAX_LINT_BOOLEAN_DEPTH, MAX_LINT_BOOLEAN_OPERANDS,
 };
 
 const CORPUS: &str = include_str!("../../../fixtures/hook/lint.v1.json");
@@ -16,6 +16,8 @@ struct LintCorpus {
     cases: Vec<LintCase>,
     #[serde(rename = "invalidCases")]
     invalid_cases: Vec<InvalidCase>,
+    #[serde(default, rename = "yamlScalarCases")]
+    yaml_scalar_cases: Vec<YamlScalarCase>,
 }
 
 #[derive(serde::Deserialize)]
@@ -27,6 +29,16 @@ struct LintCase {
     expect_codes: Vec<String>,
     #[serde(default)]
     forbidden_message_substrings: Vec<String>,
+    #[serde(default)]
+    stage_source: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct YamlScalarCase {
+    name: String,
+    yaml: String,
+    expect_codes: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -64,8 +76,18 @@ fn lint_corpus_positive_and_negative_cases() {
     let corpus = load_corpus();
     assert!(!corpus.cases.is_empty());
     for case in &corpus.cases {
-        let report = lint_hook(Profile::EvmStrict, Gate::Hook, &case.hook_name, &case.hook)
-            .unwrap_or_else(|err| panic!("case {:?} must be a legal hook: {err}", case.name));
+        let report = match &case.stage_source {
+            Some(stage_source) => lint_hook_in_stage(
+                Profile::EvmStrict,
+                Gate::Hook,
+                &case.hook_name,
+                &case.hook,
+                stage_source,
+            )
+            .map(|result| result.report),
+            None => lint_hook(Profile::EvmStrict, Gate::Hook, &case.hook_name, &case.hook),
+        }
+        .unwrap_or_else(|err| panic!("case {:?} must be a legal hook: {err}", case.name));
         let mut expected = case.expect_codes.clone();
         expected.sort();
         assert_eq!(
@@ -96,6 +118,34 @@ fn lint_corpus_positive_and_negative_cases() {
             }
         }
         assert_eq!(report.semantic_version, "uvp.semantic.v1");
+    }
+}
+
+#[test]
+fn lint_corpus_yaml_scalar_advisories() {
+    let corpus = load_corpus();
+    for case in &corpus.yaml_scalar_cases {
+        let diagnostics = lint_yaml_ambiguous_scalars(&case.yaml);
+        let mut actual: Vec<String> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.to_string())
+            .collect();
+        actual.sort();
+        actual.dedup();
+        let mut expected = case.expect_codes.clone();
+        expected.sort();
+        expected.dedup();
+        assert_eq!(
+            actual,
+            expected,
+            "case {:?} ({:?}) produced unexpected diagnostics: {:?}",
+            case.name,
+            case.yaml,
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>()
+        );
     }
 }
 

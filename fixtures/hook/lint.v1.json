@@ -158,6 +158,71 @@
       "expectCodes": [
         "UVP-L001"
       ]
+    },
+    {
+      "name": "hook header source differing from the receiving stage source warns",
+      "hookName": "WATCH",
+      "hook": "seller::listing.cmp",
+      "stageSource": "buyer",
+      "expectCodes": [
+        "UVP-L023"
+      ]
+    },
+    {
+      "name": "hook header source matching the receiving stage source stays silent",
+      "hookName": "START",
+      "hook": "buyer::pay.cmp & ~refund.cmp",
+      "stageSource": "buyer",
+      "expectCodes": []
+    }
+  ],
+  "yamlScalarCases": [
+    {
+      "name": "leading-zero integer warns",
+      "yaml": "labels:\n  batch: 010\n",
+      "expectCodes": [
+        "UVP-L030"
+      ]
+    },
+    {
+      "name": "binary-prefixed integer warns",
+      "yaml": "labels:\n  mask: 0b101\n",
+      "expectCodes": [
+        "UVP-L030"
+      ]
+    },
+    {
+      "name": "underscore-grouped integer warns",
+      "yaml": "labels:\n  count: 1_000\n",
+      "expectCodes": [
+        "UVP-L030"
+      ]
+    },
+    {
+      "name": "yaml 1.1 boolean word warns",
+      "yaml": "labels:\n  enabled: yes\n",
+      "expectCodes": [
+        "UVP-L030"
+      ]
+    },
+    {
+      "name": "non-finite float literal warns",
+      "yaml": "params:\n  cap: .inf\n",
+      "expectCodes": [
+        "UVP-L030"
+      ]
+    },
+    {
+      "name": "merge key warns",
+      "yaml": "base: &b {x: 1}\nspec:\n  <<: *b\n",
+      "expectCodes": [
+        "UVP-L030"
+      ]
+    },
+    {
+      "name": "quoted or unambiguous scalars stay silent",
+      "yaml": "labels:\n  batch: \"010\"\n  plain: 10\n  flag: true\n  text: on-demand\n",
+      "expectCodes": []
     }
   ],
   "invalidCases": [

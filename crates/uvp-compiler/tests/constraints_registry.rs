@@ -51,7 +51,7 @@ fn load_constraints_meta(registry_path: &std::path::Path) -> Value {
     let raw = std::fs::read_to_string(&meta_path).unwrap_or_else(|err| {
         panic!(
             "[uvp-constraints] 读不到注册表 sha 声明文件（硬失败，不 skip）：{}\n\
-             - 注册表内容 sha 只在 uvp-protocol 仓 protocol/uvp-constraints.v1.meta.json 声明。\n\
+             - 注册表内容 sha 只在与注册表同目录的 uvp-core/protocol/uvp-constraints.v1.meta.json 声明（两份 uvp-core 副本同批更新）。\n\
              原始错误：{err}",
             meta_path.display()
         )
@@ -347,7 +347,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 probe_compile({
                     let mut d = base_definition();
                     let hooks = serde_json::Map::from_iter(
-                        (0..65).map(|i| (format!("GO{i}"), json!(format!("buyer::work.cmp")))),
+                        (0..65).map(|i| (format!("GO{i}"), json!("buyer::work.cmp".to_string()))),
                     );
                     stage_mut(&mut d)["receiveSignals"] = Value::Object(hooks);
                     let inputs = serde_json::Map::from_iter((0..65).map(|i| {
@@ -685,11 +685,14 @@ fn rust_probes() -> Vec<(String, Probe)> {
         (
             || probe_compile(dock_definition()),
             || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    dock_config_mut(&mut d)["target"]["zhixu"] = json!("");
-                    d
-                })
+                // 空 uid 先拒；合法 slug 形态但非 zx-uid 的 name 式引用同样
+                // 拒绝——寻址面是内容派生 uid，name 不是寻址面。
+                let mut empty = dock_definition();
+                dock_config_mut(&mut empty)["target"]["zhixu"] = json!("");
+                assert_violate(probe_compile(empty), "D003", "dock-target-name-slug");
+                let mut d = dock_definition();
+                dock_config_mut(&mut d)["target"]["zhixu"] = json!("payment-zhixu");
+                probe_compile(d)
             },
             "D003",
         ),
@@ -870,7 +873,7 @@ fn constraints_registry_is_pinned() {
     assert_eq!(
         hex, declared,
         "约束注册表内容与 meta 声明的 sha256 不一致：请逐条核对规则后，\
-         在 uvp-protocol 仓同一提交里更新 protocol/uvp-constraints.v1.meta.json 的 contentSha256"
+         在与注册表同目录的 uvp-core/protocol/uvp-constraints.v1.meta.json 更新 contentSha256（两份 uvp-core 副本同批更新）"
     );
 }
 

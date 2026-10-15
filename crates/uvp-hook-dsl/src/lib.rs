@@ -14,10 +14,11 @@ mod parser;
 pub mod lint;
 
 pub use lint::{
-    contradicts, lint_hook, lint_hook_with_condition, ready_implies, same_expr,
-    semantic_fingerprint, Category, HookLintResult, LintDiagnostic, LintError, LintProof,
-    LintReport, ProofReason, ProofResult, RelatedSpan, Severity, Span, SpannedExpr,
-    MAX_LINT_BOOLEAN_DEPTH, MAX_LINT_BOOLEAN_OPERANDS, MAX_LINT_NODES, MAX_PAIRWISE_HOOKS,
+    contradicts, header_source_diagnostic, lint_hook, lint_hook_in_stage, lint_hook_with_condition,
+    lint_yaml_ambiguous_scalars, ready_implies, same_expr, semantic_fingerprint, Category,
+    HookLintResult, LintDiagnostic, LintError, LintProof, LintReport, ProofReason, ProofResult,
+    RelatedSpan, Severity, Span, SpannedExpr, MAX_LINT_BOOLEAN_DEPTH, MAX_LINT_BOOLEAN_OPERANDS,
+    MAX_LINT_NODES, MAX_PAIRWISE_HOOKS,
 };
 
 pub use ast::{valid_signal_identity, Compatibility, Expr, HookExpr, HookMode, SubscriptionTarget};

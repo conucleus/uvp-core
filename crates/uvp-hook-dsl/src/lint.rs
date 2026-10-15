@@ -419,6 +419,53 @@ pub fn lint_hook(
     lint_hook_with_condition(profile, gate, hook_name, hook).map(|result| result.report)
 }
 
+/// 同单 hook 挂在接收阶段上时的 header source 语境检查：普通 hook 的
+/// header source 可以合法地不等于接收阶段自身的 source——语义是「在本订
+/// 单上等一条落在别处的跨源信号」，不是「别处每发生一次就通知我」。作者
+/// 极易混写且写混后 hook 永远等不到、无报警，故 advisory 只警不拒。
+pub fn header_source_diagnostic(
+    hook_source: &str,
+    receiving_source: &str,
+    hook_name: &str,
+) -> Option<LintDiagnostic> {
+    if hook_source.is_empty() || receiving_source.is_empty() || hook_source == receiving_source {
+        return None;
+    }
+    Some(LintDiagnostic {
+        code: "UVP-L023",
+        severity: Severity::Warning,
+        category: Category::Maintainability,
+        hook_name: Some(hook_name.to_string()),
+        message: format!(
+            "hook header source `{hook_source}` differs from the receiving stage source \
+             `{receiving_source}`"
+        ),
+        explanation: Some(format!(
+            "legal, but this waits for a cross-source signal landing under `{hook_source}` \
+             on this order; it is not \"notify me on every occurrence elsewhere\" — the hook \
+             only fires when the `{hook_source}` fact arrives on this very order"
+        )),
+        primary_span: None,
+        related_spans: Vec::new(),
+        proof: None,
+    })
+}
+
+pub fn lint_hook_in_stage(
+    profile: Profile,
+    gate: crate::Gate,
+    hook_name: &str,
+    hook: &str,
+    receiving_source: &str,
+) -> Result<HookLintResult, LintError> {
+    let mut result = lint_hook_with_condition(profile, gate, hook_name, hook)?;
+    if let Some(diagnostic) = header_source_diagnostic(&result.source, receiving_source, hook_name)
+    {
+        result.report.diagnostics.push(diagnostic);
+    }
+    Ok(result)
+}
+
 pub fn lint_spanned_tree(tree: &SpannedExpr, hook_name: &str) -> Vec<LintDiagnostic> {
     if matches!(tree.expr, Expr::Subscription { .. }) {
         return Vec::new();
@@ -832,6 +879,116 @@ fn lint_excessive_operand_count(group: &SpannedExpr, hook_name: &str) -> LintDia
                 .to_string(),
         ),
         primary_span: Some(group.span),
+        related_spans: Vec::new(),
+        proof: None,
+    }
+}
+
+/// YAML 歧义标量 advisory（只警不拒）：`010`、`0b101`、`1_000`、
+/// `y|yes|on`（及同族 `n|no|off`）、`.inf/.nan`、合并键 `<<:` 这几类裸
+/// 标量在三轨装载器里解析形态互不相同（同一 YAML 两轨静默得到不同定义
+/// uid，已实证）。规则只扫原始 YAML 文本（装载后这些形态已被抹平），对
+/// JSON 输入不适用；引号包裹的值不属于歧义面。
+pub fn lint_yaml_ambiguous_scalars(raw: &str) -> Vec<LintDiagnostic> {
+    let mut out = Vec::new();
+    for (line_number, line) in raw.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = split_yaml_entry(trimmed) else {
+            continue;
+        };
+        if key_is_merge_key(key) {
+            out.push(yaml_scalar_diagnostic("merge key", "<<", line_number + 1));
+            continue;
+        }
+        let Some(token) = first_bare_token(value) else {
+            continue;
+        };
+        if let Some(kind) = ambiguous_scalar_kind(token) {
+            out.push(yaml_scalar_diagnostic(kind, token, line_number + 1));
+        }
+    }
+    out
+}
+
+fn split_yaml_entry(line: &str) -> Option<(&str, &str)> {
+    if line.starts_with('-') || line.starts_with('{') || line.starts_with('[') {
+        return None;
+    }
+    let colon = line.find(':')?;
+    let key = line[..colon].trim();
+    let value = line[colon + 1..].trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some((key, value))
+}
+
+fn key_is_merge_key(key: &str) -> bool {
+    key == "<<"
+}
+
+fn first_bare_token(value: &str) -> Option<&str> {
+    if value.is_empty() || value.starts_with('\'') || value.starts_with('"') {
+        return None;
+    }
+    let token = value.split_whitespace().next()?;
+    let token = token.split('#').next()?.trim_end();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
+}
+
+fn ambiguous_scalar_kind(token: &str) -> Option<&'static str> {
+    let body = token.strip_prefix(['+', '-']).unwrap_or(token);
+    let lower = body.to_ascii_lowercase();
+    if matches!(lower.as_str(), "y" | "yes" | "on" | "n" | "no" | "off") {
+        return Some("yaml-1.1 boolean word");
+    }
+    if matches!(lower.as_str(), ".inf" | ".nan") {
+        return Some("non-finite float literal");
+    }
+    if body.len() > 2
+        && (body.starts_with("0b") || body.starts_with("0B"))
+        && body[2..].chars().all(|ch| ch == '0' || ch == '1')
+    {
+        return Some("binary-prefixed integer");
+    }
+    if body.len() > 1 && body.starts_with('0') && body[1..].chars().all(|ch| ch.is_ascii_digit()) {
+        return Some("leading-zero integer");
+    }
+    let mut chars = body.chars();
+    if let Some(first) = chars.next() {
+        if first.is_ascii_digit()
+            && body.contains('_')
+            && body.chars().all(|ch| ch.is_ascii_digit() || ch == '_')
+            && !body.starts_with('_')
+            && !body.ends_with('_')
+        {
+            return Some("underscore-grouped integer");
+        }
+    }
+    None
+}
+
+fn yaml_scalar_diagnostic(kind: &'static str, token: &str, line: usize) -> LintDiagnostic {
+    LintDiagnostic {
+        code: "UVP-L030",
+        severity: Severity::Warning,
+        category: Category::Maintainability,
+        hook_name: None,
+        message: format!("ambiguous YAML scalar `{token}` ({kind}) on line {line}"),
+        explanation: Some(
+            "bare scalars of this shape resolve differently across the track loaders \
+             (leading zero / base prefix / underscores / YAML 1.1 boolean words / non-finite \
+             floats / merge keys), so the same document can silently derive different \
+             definition identities per track; quote the value to pin its form"
+                .to_string(),
+        ),
+        primary_span: None,
         related_spans: Vec::new(),
         proof: None,
     }

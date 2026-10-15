@@ -115,16 +115,4 @@ mod tests {
         .unwrap();
         assert_eq!(uid, derive_definition_uid(&reordered).unwrap());
     }
-
-    #[test]
-    fn definition_uid_golden_vectors() {
-        let cases: &[(Value, &str)] = &[(
-            json!({"apiVersion":"uvp/v0","kind":"Zhixu","metadata":{"name":"weaving_order"},"spec":{"platform":{"type":"cloud"}}}),
-            "zx-e906ad47866918682d1e2ed2528682f5",
-        )];
-        for (definition, want) in cases {
-            let got = derive_definition_uid(definition).unwrap();
-            assert_eq!(&got, want, "definition: {definition}");
-        }
-    }
 }

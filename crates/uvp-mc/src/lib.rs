@@ -104,7 +104,10 @@ pub fn mc_check(request: McCheckRequest) -> Result<McCheckReport> {
 
 /// 裸跑套件：零检查项时对定义自身做形式体检——每个意图在闭包宇宙内至
 /// 少存在一个适格时刻（死意图即红），意图两两共存矩阵供人眼扫意外组合。
-fn bare_run(vocab: &Vocabulary, max_states: u64) -> Result<(Vec<CheckOutcome>, Option<Vec<IntentPair>>)> {
+fn bare_run(
+    vocab: &Vocabulary,
+    max_states: u64,
+) -> Result<(Vec<CheckOutcome>, Option<Vec<IntentPair>>)> {
     let mut checker = Checker::new(vocab, max_states);
     let mut checks = Vec::new();
     for fact in vocab.intent_facts() {
@@ -125,8 +128,10 @@ fn intent_coexistence(vocab: &Vocabulary, max_states: u64) -> Result<Vec<IntentP
                 &universe,
                 max_states,
                 Some(&|state| {
-                    Ok((state.fact_epochs[a].is_some() && state.fact_epochs[b].is_some())
-                        .then_some(explore::StopKind::Satisfied))
+                    Ok(
+                        (state.fact_epochs[a].is_some() && state.fact_epochs[b].is_some())
+                            .then_some(explore::StopKind::Satisfied),
+                    )
                 }),
                 None,
             )?;

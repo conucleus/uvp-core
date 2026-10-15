@@ -128,9 +128,11 @@ fn different_sources_produce_no_relation() {
         "FROM_BUYER": "buyer::a.cmp",
         "FROM_SELLER": "seller::a.cmp"
     }));
-    assert!(
-        codes.is_empty(),
-        "cross-source hooks must stay silent: {codes:?}"
+    assert_eq!(
+        codes,
+        vec!["UVP-L023"],
+        "cross-source hooks produce no relation codes; the header-source advisory is the only \
+         diagnostic: {codes:?}"
     );
 }
 

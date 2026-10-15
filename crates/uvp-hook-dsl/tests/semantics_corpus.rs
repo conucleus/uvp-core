@@ -1,11 +1,13 @@
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uvp_hook_dsl::{
     eval_compiled_hook, parse_hook, EvalCompiledHookRequest, Gate, ParseHookRequest, Profile,
     SignalFact,
 };
 
 const CORPUS: &str = include_str!("../../../fixtures/hook/semantics.v1.json");
+const CORPUS_META: &str = include_str!("../../../fixtures/hook/semantics.v1.meta.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +82,27 @@ struct DelayLiteralCase {
     name: String,
     literal: String,
     seconds: Option<i64>,
+}
+
+#[test]
+fn corpus_is_pinned_by_content_sha256() {
+    let meta: Value =
+        serde_json::from_str(CORPUS_META).expect("semantic corpus meta fixture should decode");
+    assert_eq!(
+        meta["algorithm"], "sha256",
+        "本钉只实现 sha256；改算法须三线 harness 同批迁移"
+    );
+    let declared = meta["contentSha256"]
+        .as_str()
+        .expect("meta 携带 contentSha256");
+    let digest = Sha256::digest(CORPUS.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(
+        hex, declared,
+        "语义语料内容与 fixtures/hook/semantics.v1.meta.json 声明的 sha256 不一致：\
+         语料改动必须在同一提交里重算并更新 meta 的 contentSha256，\
+         否则三线（Rust/TS/链轨）任一检出旧语料都无人报警"
+    );
 }
 
 fn load_corpus() -> Corpus {
@@ -230,8 +253,8 @@ fn parses_delay_literal_corpus() {
         });
         match case.seconds {
             Some(expected) => {
-                let output = result
-                    .unwrap_or_else(|err| panic!("{} failed to parse: {err}", case.name));
+                let output =
+                    result.unwrap_or_else(|err| panic!("{} failed to parse: {err}", case.name));
                 let seconds = find_delay_seconds(&output.cloud_ast)
                     .unwrap_or_else(|| panic!("{} produced no delay node", case.name));
                 assert_eq!(seconds, expected, "{}", case.name);

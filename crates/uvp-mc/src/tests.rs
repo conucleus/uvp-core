@@ -41,8 +41,15 @@ fn demo_definition() -> serde_json::Value {
 
 fn demo_checks() -> Vec<Check> {
     vec![
-        check("claim-mutex", CheckKind::BadState, "buyer::escrow.release & escrow.refund"),
-        check_closed("terminal-closes-intents", "buyer::escrow.released | escrow.returned"),
+        check(
+            "claim-mutex",
+            CheckKind::BadState,
+            "buyer::escrow.release & escrow.refund",
+        ),
+        check_closed(
+            "terminal-closes-intents",
+            "buyer::escrow.released | escrow.returned",
+        ),
     ]
 }
 
@@ -101,7 +108,11 @@ fn one_sided_negative_gate_fails_claim_mutex() {
     let mut definition = demo_definition();
     let signals = &mut definition["spec"]["stages"][0]["sendSignals"];
     // release 丢掉 ~refund：单边负门只挡自己先落，refund 先落仍可共存。
-    signals[1]["validWhen"] = json!(["buyer::escrow.held", "buyer::~escrow.released", "buyer::~escrow.returned"]);
+    signals[1]["validWhen"] = json!([
+        "buyer::escrow.held",
+        "buyer::~escrow.released",
+        "buyer::~escrow.returned"
+    ]);
     let report = run(definition, demo_checks());
     let outcome = report
         .checks
@@ -159,7 +170,8 @@ fn bare_run_flags_dead_intent_and_reports_coexistence() {
         report
             .checks
             .iter()
-            .all(|outcome| outcome.id == "dead-intent:buyer::lane.stuck" || outcome.status == Status::Pass),
+            .all(|outcome| outcome.id == "dead-intent:buyer::lane.stuck"
+                || outcome.status == Status::Pass),
         "healthy intents must pass: {:?}",
         report.checks
     );
@@ -167,9 +179,7 @@ fn bare_run_flags_dead_intent_and_reports_coexistence() {
     let lookup = |a: &str, b: &str| {
         pairs
             .iter()
-            .find(|pair| {
-                (pair.a == a && pair.b == b) || (pair.a == b && pair.b == a)
-            })
+            .find(|pair| (pair.a == a && pair.b == b) || (pair.a == b && pair.b == a))
             .unwrap_or_else(|| panic!("pair {a}/{b} missing"))
             .coexist
     };
@@ -193,7 +203,11 @@ fn bare_run_flags_dead_intent_and_reports_coexistence() {
 #[test]
 fn typo_atom_is_rejected_loudly() {
     let mut checks = demo_checks();
-    checks.push(check("typo", CheckKind::BadState, "buyer::escrow.ghost & escrow.held"));
+    checks.push(check(
+        "typo",
+        CheckKind::BadState,
+        "buyer::escrow.ghost & escrow.held",
+    ));
     let report = run(demo_definition(), checks);
     assert!(!report.passed);
     assert!(!report.lint["ok"].as_bool().expect("lint ok flag"));
@@ -333,7 +347,9 @@ fn window_closure_advances_time_and_closes_gates() {
     let violation = outcome.violation.as_ref().expect("violation payload");
     let trace = violation["trace"].as_array().expect("trace");
     assert!(
-        trace.iter().any(|step| step.get("advance_to_epoch").is_some()),
+        trace
+            .iter()
+            .any(|step| step.get("advance_to_epoch").is_some()),
         "反例必须含时间推进步：{trace:?}"
     );
 }

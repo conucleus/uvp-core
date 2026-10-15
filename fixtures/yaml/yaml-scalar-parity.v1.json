@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "uvp.yamlScalarParity.v1",
+  "note": "同一 YAML 裸标量在三轨装载器里解析形态互不相同的 parity 语料。每格声明 yaml 片段、取值路径与各轨装载后的期望形态（form: string|number|boolean|null|object|error；error=该轨装载即拒，value 存错误锚点）；null 槽位表示该轨尚未实证，接线 harness 时以实测回填、不得照抄他轨。rust 线按 uvp-cli read_definition 同路径（serde_yaml_ng -> serde_json::Value）装载；ts 线按 zhixu-loader 装载路径（yaml 包 YAML.parse；非字符串标量在 labels/annotations/params 值位被装载边界拒绝）；go 线按 pkg/compiler/input YAMLToJSONSingleDocument（sigs.k8s.io/yaml）装载。2026-10-15 双轨联合审计 A3 实证（010 三侧三值：串/10/8；Y/yes/on Go 独转布尔；.inf Rust 静默变 null；合并键 Go 真合并）；2026-10-16 接线实测复核：ts .inf→Infinity（number，JSON 不可表示，槽位只记 form 不记 value），go .inf→装载即拒（json: unsupported value: +Inf），go 合并键合并后 y 键按 YAML 1.1 布尔真值串化成 \"true\"，实测 {\"x\":1,\"true\":2}（推翻审计记录的 {\"x\":1,\"y\":2}），ts 0b101/1_000 保持字符串、go 分别按二进制 5 与下划线分组 1000 解析。",
+  "cases": [
+    {
+      "name": "leading-zero decimal",
+      "yaml": "a: 010\n",
+      "path": "a",
+      "rust": { "form": "string", "value": "010" },
+      "ts": { "form": "number", "value": 10 },
+      "go": { "form": "number", "value": 8 }
+    },
+    {
+      "name": "binary-prefixed integer",
+      "yaml": "a: 0b101\n",
+      "path": "a",
+      "rust": { "form": "number", "value": 5 },
+      "ts": { "form": "string", "value": "0b101" },
+      "go": { "form": "number", "value": 5 }
+    },
+    {
+      "name": "underscore-grouped integer",
+      "yaml": "a: 1_000\n",
+      "path": "a",
+      "rust": { "form": "string", "value": "1_000" },
+      "ts": { "form": "string", "value": "1_000" },
+      "go": { "form": "number", "value": 1000 }
+    },
+    {
+      "name": "yaml 1.1 boolean word Y",
+      "yaml": "a: Y\n",
+      "path": "a",
+      "rust": { "form": "string", "value": "Y" },
+      "ts": { "form": "string", "value": "Y" },
+      "go": { "form": "boolean", "value": true }
+    },
+    {
+      "name": "yaml 1.1 boolean word yes",
+      "yaml": "a: yes\n",
+      "path": "a",
+      "rust": { "form": "string", "value": "yes" },
+      "ts": { "form": "string", "value": "yes" },
+      "go": { "form": "boolean", "value": true }
+    },
+    {
+      "name": "yaml 1.1 boolean word on",
+      "yaml": "a: on\n",
+      "path": "a",
+      "rust": { "form": "string", "value": "on" },
+      "ts": { "form": "string", "value": "on" },
+      "go": { "form": "boolean", "value": true }
+    },
+    {
+      "name": "non-finite float inf",
+      "yaml": "a: .inf\n",
+      "path": "a",
+      "rust": { "form": "null" },
+      "ts": { "form": "number" },
+      "go": { "form": "error", "value": "json: unsupported value: +Inf" }
+    },
+    {
+      "name": "merge key stays a literal key in rust",
+      "yaml": "base: &b {x: 1}\nchild:\n  <<: *b\n  y: 2\n",
+      "path": "child",
+      "rust": { "form": "object", "value": { "<<": { "x": 1 }, "y": 2 } },
+      "ts": { "form": "object", "value": { "<<": { "x": 1 }, "y": 2 } },
+      "go": { "form": "object", "value": { "x": 1, "true": 2 } }
+    },
+    {
+      "name": "quoted decimal is not an ambiguity face",
+      "yaml": "a: \"010\"\n",
+      "path": "a",
+      "rust": { "form": "string", "value": "010" },
+      "ts": { "form": "string", "value": "010" },
+      "go": { "form": "string", "value": "010" }
+    },
+    {
+      "name": "plain true is boolean on every track",
+      "yaml": "a: true\n",
+      "path": "a",
+      "rust": { "form": "boolean", "value": true },
+      "ts": { "form": "boolean", "value": true },
+      "go": { "form": "boolean", "value": true }
+    }
+  ]
+}
