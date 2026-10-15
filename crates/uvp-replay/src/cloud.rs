@@ -65,6 +65,12 @@ pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOu
             parse_cloud_time(&fact.arrived_at)?,
         ));
     }
+    // 走带防线：按 arrived_at 稳定排序。entry().or_insert 的「保最早」语
+    // 义保的是先见值而非最小值——若调用方喂入乱序（后到事实时刻更早），
+    // or_insert 会把较晚时刻钉进信号集，与 eval API 的保最早分叉。生产
+    // 调用方（云轨 fact log 查询）已按受理序升序喂入，此排序对合法输入
+    // 是幂等防线；稳定排序同时刻重复事实保持受理序，先见语义不变。
+    facts.sort_by_key(|(_, arrived_at)| *arrived_at);
 
     let mut signals: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
     let mut status = STATUS_INIT;
@@ -295,16 +301,48 @@ mod tests {
 
     #[test]
     fn duplicate_fact_keeps_the_earliest_arrival_like_the_eval_api() {
+        // 判别形状：首条事实 T-10000s，其 +2h 成熟于 T-2800s（已过）；重
+        // 复事实 T-5000s 落在成熟裁决之后，且其自身 +2h（T+2200s）超出
+        // now。保最早 → 锚定 T-10000s，吸收环吃掉重复事实后在 T-2800s
+        // 裁决 READY；保最后（旧实现的覆盖写）→ horizon 闸在 T-5000s
+        // 先 break，随后锚被覆盖成 T-5000s、T+2200s 未到给 WAIT。两条
+        // 实现在此输入上真分叉——上一版测试输入（T-10800s/T-1800s）的
+        // 第二条落在成熟裁决之前，旧实现同样 READY，不具判别力。
         let outcome = walk(
             "src::b.approved + 2h",
-            &[("b.approved", iso(3 * 3600)), ("b.approved", iso(1800))],
+            &[("b.approved", iso(10000)), ("b.approved", iso(5000))],
             &iso(0),
         )
         .expect("replay must succeed");
         assert_eq!(
             outcome.status, STATUS_READY,
             "重复事实归约须与 eval API 同语义（保最早 received_at）：\
-             双口径在此输入上分叉——保最后（旧实现）给 wait，保最早给 ready"
+             双口径在此输入上分叉——保最后（旧实现覆盖写）给 wait，保最早给 ready"
+        );
+    }
+
+    #[test]
+    fn out_of_order_facts_are_normalized_into_the_same_walk() {
+        // 排序防线钉：乱序喂入（后到事实时刻更早）与正序喂入必须归约到
+        // 同一条走带——否则 or_insert 的「保最早」只是在保先见，语义正
+        // 确性将依赖调用方的排序纪律。
+        let hook = "src::b.approved + 2h";
+        let ordered = walk(
+            hook,
+            &[("b.approved", iso(10000)), ("b.approved", iso(5000))],
+            &iso(0),
+        )
+        .expect("replay must succeed");
+        let reversed = walk(
+            hook,
+            &[("b.approved", iso(5000)), ("b.approved", iso(10000))],
+            &iso(0),
+        )
+        .expect("replay must succeed");
+        assert_eq!(ordered.status, reversed.status);
+        assert_eq!(
+            reversed.status, STATUS_READY,
+            "earliest arrival (T-10000s) must win regardless of feed order"
         );
     }
 

@@ -19,7 +19,7 @@
 - [ ] Rust 实现（crates/ 对应模块）已改，`cargo check` + 触碰 crate 测试绿
 - [ ] 语义语料 `fixtures/hook/semantics.v1.json` 补钉新语义的格子（evalCases/replayCases/invalidCases/delayLiteralCases 按需）
 - [ ] `fixtures/hook/semantics.v1.meta.json` 的 contentSha256 已在同一提交重算更新（三线钉：Rust/TS/链轨 harness 任一检出旧语料都会红）
-- [ ] 金向量（uid/planHash/hooksHash，单源 uvp-core/fixtures/commitments/golden-vectors.v1.json，uvp-core 根 `make golden-vectors` 重算→diff）已再生并 diff 确认
+- [ ] 金向量（uid/planHash/hooksHash，单源 uvp-core/fixtures/commitments/golden-vectors.v1.json，uvp-core 根 `make golden-vectors` 重算→diff）已再生并 diff 确认。注意：该目标仅 uvp-eth 布局可跑（硬依赖姊妹仓 `../uvp-protocol` 的 TS 生成器；miniprogram 检出旁无该目录，目标会响亮报错退出）——须在 uvp-eth 检出执行后把再生文件同步到另一份 uvp-core 副本
 - [ ] 语料 schema 若有扩展：两个 TS harness 消费线同批接线（不得只改 Rust 侧留旧线）
 
 ### 2. 两册语法册（云轨册 + 链轨册）

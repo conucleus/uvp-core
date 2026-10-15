@@ -134,6 +134,126 @@ fn one_sided_negative_gate_fails_claim_mutex() {
 }
 
 #[test]
+fn or_predicate_witness_via_the_other_arm_is_not_pruned_away() {
+    // A5 回归钉：谓词 (arm_a | arm_b) 的见证可以只经 arm_b 臂。arm_a 的
+    // 正门 never 是永死意图（base 与 ~base 同时要求，任何状态都不适
+    // 格），arm_a 自身永不可落，其阻断项 lock 落地即把它永久关死；
+    // arm_b 的唯一正门恰是 lock。修复前（positive_signal_atoms 下降
+    // Or）must 含 arm_a：凡 lock 在案而 arm_a 缺席的后继（arm_a 永不可
+    // 落，即一切含 lock 的状态）都命中剪枝整枝丢弃——而 arm_b 的唯一
+    // 适格路径必经含 lock 的状态，见证被误剪、检查误 PASS。修复后 Or
+    // 不下降、must 为空、剪枝关闭：lock 落地、arm_b 随之落地、谓词
+    // ready，必报 Violation。
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_or_prune_regression"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "base"},
+                    {"name": "lock"},
+                    {"name": "never", "validWhen": ["buyer::lane.base", "buyer::~lane.base"]},
+                    {"name": "arm_a", "validWhen": ["buyer::lane.never", "buyer::~lane.lock"]},
+                    {"name": "arm_b", "validWhen": ["buyer::lane.lock"]}
+                ],
+                "receiveSignals": {"H": "buyer::lane.lock"}
+            }]
+        }
+    });
+    let report = run(
+        definition,
+        vec![check(
+            "or-any-arm-witness",
+            CheckKind::BadState,
+            "buyer::lane.arm_a | lane.arm_b",
+        )],
+    );
+    let outcome = report
+        .checks
+        .iter()
+        .find(|outcome| outcome.id == "or-any-arm-witness")
+        .expect("or-any-arm-witness outcome");
+    assert_eq!(
+        outcome.status,
+        Status::Fail,
+        "witness via arm_b must stay reachable; witness-must pruning must not descend Or arms"
+    );
+    let violation = outcome.violation.as_ref().expect("violation payload");
+    let trace = violation["trace"].as_array().expect("counterexample trace");
+    let lands: Vec<&str> = trace
+        .iter()
+        .filter_map(|step| step.get("land").and_then(|value| value.as_str()))
+        .collect();
+    assert!(
+        lands.contains(&"buyer::lane.arm_b"),
+        "counterexample must reach the witness through arm_b: {lands:?}"
+    );
+}
+
+#[test]
+fn conjunctive_predicate_pruning_keeps_its_reachability_verdict() {
+    // A5 正例：纯合取谓词的 must 剪枝语义不变。veto_p/veto_q 各带一枚
+    // 独立负门阻断项（must 非空、剪枝照常启用），但阻断项不落地时两者
+    // 双双适格、见证 {veto_p, veto_q} 可达——剪枝必须对这条路径保持沉
+    // 默，检查必报 Violation（合取臂原子是真必经项，收进 must 不误剪）。
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_and_prune_regression"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "veto_zp"},
+                    {"name": "veto_zq"},
+                    {"name": "veto_p", "validWhen": ["buyer::~lane.veto_zp"]},
+                    {"name": "veto_q", "validWhen": ["buyer::~lane.veto_zq"]}
+                ],
+                "receiveSignals": {"H": "buyer::lane.veto_p"}
+            }]
+        }
+    });
+    let report = run(
+        definition,
+        vec![check(
+            "conj-both-arms-witness",
+            CheckKind::BadState,
+            "buyer::lane.veto_p & lane.veto_q",
+        )],
+    );
+    let outcome = report
+        .checks
+        .iter()
+        .find(|outcome| outcome.id == "conj-both-arms-witness")
+        .expect("conj-both-arms-witness outcome");
+    assert_eq!(
+        outcome.status,
+        Status::Fail,
+        "conjunctive witness must stay reachable with must-based pruning enabled"
+    );
+    let violation = outcome.violation.as_ref().expect("violation payload");
+    let trace = violation["trace"].as_array().expect("counterexample trace");
+    let lands: Vec<&str> = trace
+        .iter()
+        .filter_map(|step| step.get("land").and_then(|value| value.as_str()))
+        .collect();
+    assert!(
+        lands.contains(&"buyer::lane.veto_p") && lands.contains(&"buyer::lane.veto_q"),
+        "counterexample must land both conjunctive arms: {lands:?}"
+    );
+}
+
+#[test]
 fn bare_run_flags_dead_intent_and_reports_coexistence() {
     // dead: stuck 要求 held 与 ~held 同时成立，任何可达状态都不适格。
     let definition = json!({
