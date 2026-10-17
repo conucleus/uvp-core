@@ -4,6 +4,10 @@ use thiserror::Error;
 
 pub const DEFINITION_UID_DOMAIN: &str = "uvp:definition-uid:v2";
 
+pub const HOOK_PLAN_HASH_DOMAIN: &str = "uvp:hook-plan-artifact:v1";
+
+pub const ONCHAIN_PLAN_HASH_DOMAIN: &str = "uvp:onchain-hook-plan-artifact:v1";
+
 #[derive(Debug, Error)]
 pub enum CanonicalError {
     #[error(
@@ -38,6 +42,13 @@ pub fn canonicalize(value: &Value) -> Result<Value> {
 
 pub fn canonical_stringify(value: &Value) -> Result<String> {
     Ok(serde_json::to_string(&canonicalize(value)?).expect("canonical JSON should serialize"))
+}
+
+pub fn hash_canonical(domain: &str, payload: &Value) -> Result<String> {
+    let canonical = canonical_stringify(payload)?;
+    let preimage = format!("{domain}:{canonical}");
+    let digest = Keccak256::digest(preimage.as_bytes());
+    Ok(format!("0x{}", digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()))
 }
 
 fn strip_definition_display_fields(mut definition: Value) -> Value {

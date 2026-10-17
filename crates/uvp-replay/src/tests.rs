@@ -2465,17 +2465,6 @@ fn admission_decaying_veto_positions_register_under_the_filter_gate() {
             ])
         ),
         admission_entry(
-            "delay_operand_veto",
-            json!([
-                { "op": "SIGNAL", "signalKey": "0x50" },
-                { "op": "SIGNAL", "signalKey": "0x51" },
-                { "op": "DELAY", "delaySeconds": 5 },
-                { "op": "NOT" },
-                { "op": "AND", "arity": 2 },
-                { "op": "DELAY", "delaySeconds": 10 }
-            ])
-        ),
-        admission_entry(
             "no_positive_anchor",
             json!([
                 { "op": "SIGNAL", "signalKey": "0x50" },
@@ -2519,14 +2508,108 @@ fn admission_not_vocabulary_and_delay_bounds_are_enforced_at_registration() {
         "{error}"
     );
 
-    for (label, seconds) in [("zero", 0i64), ("over_30d", 2592001)] {
-        let over = admission_plan(json!([admission_entry(
-            label,
+    let zero = admission_plan(json!([admission_entry(
+        "zero",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 0 }
+        ])
+    )]));
+    let error = replay_chain_events(
+        vec![plan_registered_event(zero)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("DELAY delaySeconds must be positive"),
+        "zero: {error}"
+    );
+
+    let over_30d = admission_plan(json!([admission_entry(
+        "over_30d",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "DELAY", "delaySeconds": 2592001 }
+        ])
+    )]));
+    let error = replay_chain_events(
+        vec![plan_registered_event(over_30d)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "DELAY delaySeconds 2592001 exceeds the maximum allowed delay of 2592000s (30d)"
+        ),
+        "over_30d: {error}"
+    );
+}
+
+#[test]
+fn admission_delay_anchor_and_nested_delay_gates_are_enforced_at_registration() {
+    let anchorless_delay = admission_plan(json!([admission_entry(
+        "anchorless_delay",
+        json!([
+            { "op": "SIGNAL", "signalKey": "0x50" },
+            { "op": "NOT" },
+            { "op": "DELAY", "delaySeconds": 5 }
+        ])
+    )]));
+    let error = replay_chain_events(
+        vec![plan_registered_event(anchorless_delay)],
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("admission anchorless_delay applies DELAY to an operand with no positive anchor"),
+        "{error}"
+    );
+
+    for (label, instructions) in [
+        (
+            "nested_delay",
             json!([
                 { "op": "SIGNAL", "signalKey": "0x50" },
-                { "op": "DELAY", "delaySeconds": seconds }
-            ])
-        )]));
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "DELAY", "delaySeconds": 10 }
+            ]),
+        ),
+        (
+            "veto_through_and_under_delay",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "NOT" },
+                { "op": "AND", "arity": 2 },
+                { "op": "DELAY", "delaySeconds": 10 }
+            ]),
+        ),
+        (
+            "delay_through_or_branch",
+            json!([
+                { "op": "SIGNAL", "signalKey": "0x50" },
+                { "op": "DELAY", "delaySeconds": 5 },
+                { "op": "SIGNAL", "signalKey": "0x51" },
+                { "op": "OR", "arity": 2 },
+                { "op": "DELAY", "delaySeconds": 3 }
+            ]),
+        ),
+    ] {
+        let over = admission_plan(json!([admission_entry(label, instructions)]));
         let error = replay_chain_events(
             vec![plan_registered_event(over)],
             &ReplayOptions {
@@ -2536,11 +2619,9 @@ fn admission_not_vocabulary_and_delay_bounds_are_enforced_at_registration() {
         )
         .unwrap_err();
         assert!(
-            error.to_string().contains("DELAY")
-                && (error.to_string().contains("must be positive")
-                    || error
-                        .to_string()
-                        .contains("exceeds the maximum allowed delay")),
+            error.to_string().contains(&format!(
+                "admission {label} applies DELAY to an operand containing a nested delay"
+            )),
             "{label}: {error}"
         );
     }

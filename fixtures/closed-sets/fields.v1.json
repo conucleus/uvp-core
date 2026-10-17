@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "uvp.fieldSets.v1",
+  "note": "定义结构体字段闭集的跨语言钉死语料：Rust（uvp-model serde deny_unknown_fields 结构体）、TS（compiler zhixu-loader KNOWN_FIELDS）与 Go（uvp-utils api/core/v0 结构体 json tag）三方测试对同一份文件做逐元素相等比对。值面开放键（labels/annotations/params/receiveSignals/fileResources 条目、inputs/outputs 端口名、zhixuExecutorConfig/selectableResource 内部）是数据不是结构字段，不在其中——任一侧增删字段或改比对口径都会让至少一侧的测试报警。改本文件必须同改三方结构体。",
+  "root": ["apiVersion", "kind", "metadata", "spec"],
+  "metadata": ["name", "labels", "annotations"],
+  "spec": ["platform", "nucleation", "stages", "dockInterface"],
+  "platform": ["type", "provider", "network", "version", "params"],
+  "nucleation": ["id", "params"],
+  "stage": ["name", "source", "mint", "executor", "selectedStages", "sendSignals", "receiveSignals", "fileResources"],
+  "sendSignalEntry": ["name", "validWhen"],
+  "executor": ["supplierType", "supplierID", "zhixuExecutorConfig", "selectableResource"],
+  "dockInterfaceEntry": ["orderModes", "inputs", "outputs"],
+  "dockInputPort": ["hook"],
+  "dockOutputPort": ["signal"]
+}

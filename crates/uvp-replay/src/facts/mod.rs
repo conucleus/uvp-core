@@ -155,6 +155,8 @@ fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
     struct AdmissionSlot {
         bare_signal: bool,
         delay_result: bool,
+        delay_inside: bool,
+        has_pos_anchor: bool,
         depth: usize,
     }
     let mut stack: Vec<AdmissionSlot> = Vec::new();
@@ -163,6 +165,8 @@ fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
             "SIGNAL" => stack.push(AdmissionSlot {
                 bare_signal: true,
                 delay_result: false,
+                delay_inside: false,
+                has_pos_anchor: true,
                 depth: 0,
             }),
             "NOT" => {
@@ -180,6 +184,8 @@ fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
                 stack.push(AdmissionSlot {
                     bare_signal: false,
                     delay_result: false,
+                    delay_inside: slot.delay_inside,
+                    has_pos_anchor: false,
                     depth: slot.depth + 1,
                 });
             }
@@ -202,9 +208,21 @@ fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
                         "malformed instruction plan: DELAY delaySeconds {delay_seconds} exceeds the maximum allowed delay of {MAX_DELAY_SECONDS}s (30d) (contract commitPlan reverts HookDelayTooLong)"
                     )));
                 }
+                if !slot.has_pos_anchor {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: admission {label} applies DELAY to an operand with no positive anchor (an anchor-less delay never settles at evaluation and stays dead code; contract _validateAdmission reverts InvalidInstruction)"
+                    )));
+                }
+                if slot.delay_inside {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: admission {label} applies DELAY to an operand containing a nested delay, possibly through a veto negation (collapse the delay chain into a single duration; contract _validateAdmission reverts InvalidInstruction)"
+                    )));
+                }
                 stack.push(AdmissionSlot {
                     bare_signal: false,
                     delay_result: true,
+                    delay_inside: true,
+                    has_pos_anchor: slot.has_pos_anchor,
                     depth: slot.depth + 1,
                 });
             }
@@ -224,10 +242,14 @@ fn validate_admission_registration_shape(admission: &Value) -> Result<()> {
                     )));
                 }
                 let terms = stack.split_off(stack.len() - arity);
+                let delay_inside = terms.iter().any(|term| term.delay_inside);
+                let has_pos_anchor = terms.iter().any(|term| term.has_pos_anchor);
                 let depth = terms.iter().map(|term| term.depth).max().unwrap_or(0) + 1;
                 stack.push(AdmissionSlot {
                     bare_signal: false,
                     delay_result: false,
+                    delay_inside,
+                    has_pos_anchor,
                     depth,
                 });
             }

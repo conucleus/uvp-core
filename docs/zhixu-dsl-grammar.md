@@ -69,7 +69,7 @@
 
 ### 2.1 内容派生身份（uid）
 
-定义身份是内容派生 uid `zx-<32hex>`——preimage 为定义文档 canonical JSON 剔除展示字段（`metadata.name`、`metadata.annotations`）后的形态，`keccak256("uvp:definition-uid:v2:" + canonical)` 取摘要前 32 hex；`metadata.labels` 是内容，参与派生。同一内容跨环境、跨轨得到同一 uid：重复发布是幂等 no-op，内容一变即新身份——不存在「重发布一个定义」的概念。DSL 壳不携带任何身份——`metadata.uid` 一旦出现即按未知字段响亮拒绝（uvp-core `deny_unknown_fields` 口径），uid 恒由发布方按内容派生后写入，作者不手写。权威实现是 Rust `uvp_ir::derive_definition_uid`（domain 常量 `uvp:definition-uid:v2`）；链轨 TS 编译器同公式、共享金向量互钉（见 `uvp-chain.md`）。日志与错误消息按 `name(uid前8hex)` 渲染。云轨运行时零哈希，机器面寻址键即该 uid；跨秩序引用一律按 uid 精确指向（§7.3）。
+定义身份是内容派生 uid `zx-<32hex>`——preimage 为定义文档 canonical JSON 剔除展示字段（`metadata.name`、`metadata.annotations`）后的形态，`keccak256("uvp:definition-uid:v2:" + canonical)` 取摘要前 32 hex；`metadata.labels` 是内容，参与派生。同一内容跨环境、跨轨得到同一 uid：重复发布是幂等 no-op，内容一变即新身份——不存在「重发布一个定义」的概念。唯一限定（YAML 裸标量）：「同一内容」以装载器解析后的结果为准——裸标量（`010`、`Y`/`yes`/`on`、`0b101`、`1_000` 一类）在 Rust / TS / Go 三轨装载器下解析结果真分歧（`uvp-core` `fixtures/yaml/yaml-scalar-parity.v1.json` 语料逐格钉住），同一 YAML 文件跨轨可派生出不同 uid；值位书写一律用带引号字符串是作者纪律（对照行见 `uvp-chain.md` 附录 B）。DSL 壳不携带任何身份——`metadata.uid` 一旦出现即按未知字段响亮拒绝（uvp-core `deny_unknown_fields` 口径），uid 恒由发布方按内容派生后写入，作者不手写。权威实现是 Rust `uvp_ir::derive_definition_uid`（domain 常量 `uvp:definition-uid:v2`）；链轨 TS 编译器同公式、共享金向量互钉（见 `uvp-chain.md`）。日志与错误消息按 `name(uid前8hex)` 渲染。云轨运行时零哈希，机器面寻址键即该 uid；跨秩序引用一律按 uid 精确指向（§7.3）。
 
 ### 2.2 事实不可改写与 first-win
 
@@ -264,6 +264,8 @@ buyer::ANCHOR(@seller::main.cmp)        # 订阅必须空标头
 
 推论：`A&B|C` 且 `min(A,B)<C≤max(A,B)` 时，OR 分支的锚定取 C 而非 AND 分支——AND 尚在等待时无权竞争 OR 的锚点；C 恰等于 `max(A,B)` 的等号点上两者等价。延时到期时刻本身成为新的锚点：`(A+5s)&B` 的锚点取"A+5s 到期时刻"与"B 接收时刻"中较晚者。求值输出四态（uvp-core 求值器 `EvalState`，snake_case 序列化；Go 侧 `hookdsl` 同词表）：`ready`（成熟）/ `wait`（等待中，携带预期到期时刻）/ `impossible`（按当前单调存在语义已不可能再满足）/ `needs_more`（需更多事实方可再判）——本册下文「判 cxl」的叙述对应 `impossible` 终态；持久层状态词汇与熔断形态属实现层（见 `uvp-cloud.md`）。
 
+**成熟边界的跨轨口径**：负事实恰在到期时刻之后极短窗口内到达的边界组合，两轨物理不同——云轨在 DB 时钟域给 `(due, due+1ms]` 闭区间宽限，窗内到达的负事实仍参与裁决、判负赢（求值器与回放同值同窗）；链轨按 `block.timestamp` 秒域、同秒内以块内交易序裁决，无毫秒域宽限。该边界组合两轨可分叉，属登记在案的跨轨差异（`uvp-chain.md` 附录 B 对照行；各自的实现层口径见 `uvp-cloud.md` §6.1 与 `uvp-chain.md` §6）。
+
 **嵌套延时一律拒绝**（正位与否决位同闸）：Delay 的操作数子树内不得再含任何延时节点，`((A +5s) +10s)` 应写作 `(A +15s)`——链式对锚点是纯加法，嵌套只会让单段 30d 上限被逐段叠加绕过（uvp-core 解析层 `reject_nested_delay`，钩子位/适格位两档同闸）。时长全部按整秒精度折算。不带括号的连写 `A +5s +10s` 按语法错误拒绝（后缀延时只消费一次）。
 
 **锚点必须来自事实（表达力边界）**：延时是相对延时，锚点永远是某条事实的接收时刻（或由它链式派生的到期时刻），引擎没有墙钟原语——周期性语义（"每月 1 号触发"）与绝对期限（"截止到固定日期"）不能直接表达。链上求值器按 anchored 语义执行本条：延时操作数无锚（锚定事实尚未到达）时恒判非 Ready（返回未决中性值，绝不把「无锚」当纪元 0 时刻起算伪造锚）；无锚延时形态另被注册闸挡在链外（§5.6——`commitPlan` 要求 DELAY 操作数含正向信号锚点，注册即拒而不是留死代码上链，见 `uvp-chain.md`）。建模模式：上游执行者（转化者）在自己的业务事务里解读日历，把"到期/应触发"表达为一条事实，本域以普通 hook 或订阅消费（日期裁决权留在调用方，回放只需事实即可收敛）。
@@ -295,6 +297,8 @@ buyer::ANCHOR(@seller::main.cmp)        # 订阅必须空标头
 | 相同项 | duration 字面量语法与 30 天上限、`~` 操作数词表、两段式寻址与身份闸、深度上限 | 同左 |
 
 **列表形态**：`validWhen` 是 `{source}::{condition}` 的完整表达式列表。逐项独立过筛（适格位是最宽容档，规则项内全覆盖）；全体项 header source 必须一致（否则编译拒绝——适格产物只携带单一 source 标签，D032）；编译期折叠为一棵 AND（N=1 形态不变），依赖取并集，`rawExpression` 逐项以数组保留进 admissions 供诊断。缺键=无条件发射；空数组/空项拒绝（D027，提示删键）。
+
+**跨轨叙述的拆词纪律**：「请求级门 → 吸收 → 适格」三层各自独立，勿混称为一个「适格」。「请求级门」指鉴权/签名/deadline/提交者授权一类入口闸（链轨 `submitSignalFor` 的先序闸；云轨 HTTP 入口与 HMAC 单 sender 语义）——链轨的订单级 submitter 授权住在这一层，不在适格层；「吸收」指重复事实的 first-win 幂等（不再过任何筛）；「适格」仅指本节 `validWhen` 的发射过滤（pre-state 求值）。云轨的 validWhen 时间窗与链轨的提交者授权分属第 3/1 层、物理不同；两轨在第 2/3 层同位同序（见下段）。
 
 **适格位的求值与次序**：幂等吸收先于适格求值（已落库的重复外部提交 first-win 吸收、不再过适格，at-least-once 重试不得被过期窗口 revert），但**后于**请求级门——链轨 `submitSignalFor` 的 deadline/签名/提交者授权与属主阶段就绪门都排在吸收之前：过期或未授权的重放先响亮 revert（`ExpiredSignalSignature` / `UnauthorizedSignalSubmitter`）而非被静默吸收。该次序是刻意选择：把吸收挪到请求级门之前会开「无有效签名探测事实存在性」面，现序方向更严。新事实在提交时对 pre-state 整棵求值（时钟取运行侧权威时钟，链上为 `block.timestamp`）；**整棵 admit-iff-Ready**（`value && !wait && !cancel`）：Ready 准入，Wait/Impossible/NeedsMore 整笔拒绝为类型化错误（云轨为类型化非重试拒绝，消息点名信号与失败表达式；链轨 revert `SignalAdmissionRejected`，携带 orderId/sourceId/signalId），不是逐项投票。**整批原子性**：链轨一笔交易多发射时一个不适格即整批 revert——EVM 原生原子性，接受为设计（见 `uvp-chain.md`）。
 
@@ -383,7 +387,7 @@ sendSignals:
 
 ### 6.6 出生提交通道（链上）
 
-本节原叙述的开放提交请求体、capability 词表闸与 creator 先到先得等链上运行期机制已迁至链轨实现层文档 `uvp-chain.md`（uvp-eth 根）；语言层的出生声明面见 §4 `mint`、§6.2、§6.3（存根保号，既有 § 引用不断链）。
+本节原叙述的开放提交请求体、capability 词表闸与 creator 先到先得等链上运行期机制已迁至链轨实现层文档 `uvp-chain.md`（uvp-eth 根）；语言层的出生声明面见 §4 `mint`、§6.2、§6.3（存根保号，既有 § 引用不断链）。出生提交者授权（birthAuthorizer 承诺）见 uvp-chain.md §4.1。
 
 ### 6.7 订阅条目的链上编译规则
 
@@ -626,8 +630,8 @@ spec:
         supplierID: trading_executor_001
 
     # 出生阶段：每条 trading 域成交事实铸一单（编译为 SIGNAL 指令并置
-    # ORDER_TRIGGER_MINT 位标志，现实成立后任何持钥人可开放提交出生——
-    # 链上细节见 uvp-chain.md）。
+    # ORDER_TRIGGER_MINT 位标志，现实成立后由计划授权的出生提交者
+    # （birthAuthorizer）提交出生——链上细节见 uvp-chain.md）。
     - name: on_deal
       source: settlement
       mint: per-fact

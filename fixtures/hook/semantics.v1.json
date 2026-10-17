@@ -1193,6 +1193,18 @@
       }
     },
     {
+      "name": "vacuum or arms tie at zero anchors and the outer delay stays needs_more",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::(~a.cmp | ~b.cmp)+5s",
+      "now": "2026-04-27T00:00:10.000Z",
+      "signals": [],
+      "expect": {
+        "state": "needs_more"
+      }
+    },
+    {
       "name": "or with every branch absent stays needs_more",
       "profile": "evm_strict",
       "hookName": "ANY",

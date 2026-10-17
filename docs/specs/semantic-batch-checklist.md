@@ -22,11 +22,10 @@
 - [ ] 金向量（uid/planHash/hooksHash，单源 uvp-core/fixtures/commitments/golden-vectors.v1.json，uvp-core 根 `make golden-vectors` 重算→diff）已再生并 diff 确认。注意：该目标仅 uvp-eth 布局可跑（硬依赖姊妹仓 `../uvp-protocol` 的 TS 生成器；miniprogram 检出旁无该目录，目标会响亮报错退出）——须在 uvp-eth 检出执行后把再生文件同步到另一份 uvp-core 副本
 - [ ] 语料 schema 若有扩展：两个 TS harness 消费线同批接线（不得只改 Rust 侧留旧线）
 
-### 2. 两册语法册（云轨册 + 链轨册）
+### 2. 语法册正本（uvp-core/docs/zhixu-dsl-grammar.md，单源）
 
-- [ ] 云轨 `zhixu-dsl-grammar.md` 对应章节已更新（章节骨架两册共享，编号对齐）
-- [ ] 链轨 `zhixu-dsl-grammar.md` 对应章节已更新（注意 §5.4/§5.6/§5.5/适格位否决域等历史易错半面）
-- [ ] 两册附录 A/B 需要补的接受域/差异行已补（附录 B 管「语法点接受域」，不写运行时差异）
+- [ ] 正本 uvp-core/docs/zhixu-dsl-grammar.md 对应章节已更新（注意 §5.4/§5.6/§5.5/适格位否决域等历史易错半面）；两轨根下同名扉页不承载语义、无需随改
+- [ ] 正本附录 A 需要补的接受域行已补；两轨接受域差异行补进 uvp-eth 根 `uvp-chain.md` 附录 B（不写运行时差异）
 
 ### 3. 云轨实现层文档
 
@@ -53,7 +52,7 @@
 ### 7. 规格 + 附录 B 差异行
 
 - [ ] `docs/specs/subscription-mint-spec.md` 需要改写的条款已改（本规格是跨秩序协作唯一权威出处）
-- [ ] 两轨运行差异需要登记的，登记到链轨册附录 B（语法点接受域）或 wiki 运行差异页（运行时行为），不与 spec 抢权威
+- [ ] 两轨运行差异需要登记的，登记到 uvp-eth 根 `uvp-chain.md` 附录 B（语法点接受域）或 wiki 运行差异页（运行时行为），不与 spec 抢权威
 
 ## 关批动作
 
