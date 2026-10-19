@@ -1,5 +1,9 @@
 use serde_json::json;
+use uvp_hook_dsl::EvalState;
 
+use crate::explore::{explore_universe, StopKind};
+use crate::model::{self, McState};
+use crate::vocab::Vocabulary;
 use crate::{mc_check, Check, CheckKind, McCheckRequest, Status};
 
 fn demo_definition() -> serde_json::Value {
@@ -471,5 +475,356 @@ fn window_closure_advances_time_and_closes_gates() {
             .iter()
             .any(|step| step.get("advance_to_epoch").is_some()),
         "反例必须含时间推进步：{trace:?}"
+    );
+}
+
+struct XorShift(u64);
+
+impl XorShift {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+    fn flag(&mut self) -> bool {
+        self.next() & 1 == 1
+    }
+}
+
+fn gen_expr(rng: &mut XorShift, atoms: &[String], depth: usize) -> String {
+    if depth == 0 || atoms.is_empty() || rng.flag() {
+        let atom = &atoms[rng.below(atoms.len())];
+        return match rng.below(4) {
+            0 => atom.clone(),
+            1 => format!("~{atom}"),
+            2 => format!("{atom} + {}s", 1 + rng.below(2)),
+            _ => format!("~({atom} + {}s)", 1 + rng.below(2)),
+        };
+    }
+    let left = gen_expr(rng, atoms, depth - 1);
+    let right = gen_expr(rng, atoms, depth - 1);
+    if rng.flag() {
+        format!("({left} & {right})")
+    } else {
+        format!("({left} | {right})")
+    }
+}
+
+fn random_case(rng: &mut XorShift) -> (serde_json::Value, Vec<Check>) {
+    let names: Vec<String> = (0..3 + rng.below(3)).map(|i| format!("lane.s{i}")).collect();
+    let mut send_signals = Vec::new();
+    let mut gated: Vec<String> = Vec::new();
+    for (index, name) in names.iter().enumerate() {
+        if index == 0 || rng.flag() {
+            send_signals.push(json!({"name": name}));
+            continue;
+        }
+        let others: Vec<String> = names
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != index)
+            .map(|(_, n)| n.clone())
+            .collect();
+        let items: Vec<String> = (0..1 + rng.below(2))
+            .map(|_| format!("buyer::{}", gen_expr(rng, &others, 2)))
+            .collect();
+        send_signals.push(json!({"name": name, "validWhen": items}));
+        gated.push(name.clone());
+    }
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_diff_case"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": send_signals,
+                "receiveSignals": {"H": format!("buyer::{}", names[0])}
+            }]
+        }
+    });
+    let mut checks = vec![check(
+        "diff-bad-state",
+        CheckKind::BadState,
+        &format!("buyer::{}", gen_expr(rng, &names, 2)),
+    )];
+    if !gated.is_empty() && rng.flag() {
+        checks.push(Check {
+            id: "diff-admission-closed".to_string(),
+            kind: CheckKind::AdmissionClosed,
+            description: None,
+            when: Some(format!("buyer::{}", gen_expr(rng, &names, 2))),
+            predicate: None,
+            intents: vec![format!("buyer::{}", gated[rng.below(gated.len())])],
+        });
+    }
+    (definition, checks)
+}
+
+fn predicate_ready(vocab: &Vocabulary, raw: Option<&str>, state: &McState) -> bool {
+    let Some(raw) = raw else { return true };
+    let decoded = vocab
+        .predicates
+        .get(raw)
+        .expect("predicate parsed during vocabulary build");
+    model::eval_state(decoded, &state.signal_times(vocab), state.now).expect("eval succeeds")
+        == EvalState::Ready
+}
+
+fn exhaustive_status(vocab: &Vocabulary, source: &Check) -> Status {
+    let universe: Vec<usize> = (0..vocab.facts.len()).collect();
+    match source.kind {
+        CheckKind::BadState => {
+            let predicate = source.predicate.as_deref().expect("validated");
+            let when = source.when.as_deref();
+            let graph = explore_universe(
+                vocab,
+                &universe,
+                crate::DEFAULT_MAX_STATES,
+                Some(&|state: &McState| {
+                    Ok((predicate_ready(vocab, when, state)
+                        && predicate_ready(vocab, Some(predicate), state))
+                        .then_some(StopKind::Violation))
+                }),
+                None,
+            )
+            .expect("oracle stays inside the state cap");
+            if graph.stopped.is_some() {
+                Status::Fail
+            } else {
+                Status::Pass
+            }
+        }
+        CheckKind::AdmissionClosed => {
+            let when = source.when.as_deref().expect("validated");
+            for name in &source.intents {
+                let fact = vocab
+                    .fact_index
+                    .get(name)
+                    .copied()
+                    .expect("lint interned the intent");
+                let &intent = vocab
+                    .intent_fact
+                    .get(&fact)
+                    .expect("lint verified the admission");
+                let graph = explore_universe(
+                    vocab,
+                    &universe,
+                    crate::DEFAULT_MAX_STATES,
+                    Some(&|state: &McState| {
+                        if state.fact_epochs[fact].is_some()
+                            || !predicate_ready(vocab, Some(when), state)
+                        {
+                            return Ok(None);
+                        }
+                        let admissible = model::intent_admissible(
+                            vocab,
+                            intent,
+                            &state.signal_times(vocab),
+                            state.now,
+                        )
+                        .expect("eval succeeds");
+                        Ok(admissible.then_some(StopKind::Violation))
+                    }),
+                    None,
+                )
+                .expect("oracle stays inside the state cap");
+                if graph.stopped.is_some() {
+                    return Status::Fail;
+                }
+            }
+            Status::Pass
+        }
+    }
+}
+
+// 差分钉：剪枝（落地阻断项整枝剪除）与闭包宇宙收窄只许换速度、不许换
+// 结论——剪枝版结论与全事实宇宙、无剪枝的穷举版不一致即红（假 PASS 的
+// oracle 撒谎面）。
+#[test]
+fn pruned_verdicts_match_exhaustive_exploration() {
+    for seed in 1..=200u64 {
+        let mut rng = XorShift(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let (definition, checks) = random_case(&mut rng);
+        let vocab = Vocabulary::build(&definition, &checks).expect("generated case builds");
+        let report = mc_check(McCheckRequest {
+            definition: definition.clone(),
+            checks: checks.clone(),
+            max_states: None,
+        })
+        .expect("generated case runs");
+        assert!(
+            report.lint["ok"].as_bool().expect("lint ok flag"),
+            "seed {seed}: generator emitted an unlintable case: {:?}",
+            report.lint
+        );
+        for outcome in &report.checks {
+            let source = checks
+                .iter()
+                .find(|probe| probe.id == outcome.id)
+                .expect("outcome maps back to a check");
+            let oracle = exhaustive_status(&vocab, source);
+            assert_eq!(
+                outcome.status,
+                oracle,
+                "seed {seed} check {}: pruned says {:?}, exhaustive says {:?}; definition={definition:?} checks={checks:?}",
+                outcome.id, outcome.status, oracle
+            );
+        }
+    }
+}
+
+// 回归钉：Or 臂内的否定（aux | ~x）与正负同位（gate & (aux | ~gate)）都
+// 不是落地阻断项——修复前被当成阻断项整枝剪掉，admission_closed 与
+// bad_state 在这三处全部假 PASS。两形态现必须与穷举结论一致且判 Fail。
+#[test]
+fn or_arm_negation_and_same_site_polarity_match_exhaustive() {
+    let shape_a = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_shape_or_arm_neg"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "x"},
+                    {"name": "aux"},
+                    {"name": "out", "validWhen": ["buyer::(lane.aux | ~lane.x)"]}
+                ],
+                "receiveSignals": {"H": "buyer::lane.x"}
+            }]
+        }
+    });
+    let shape_b = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_shape_same_site_polarity"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [{
+                "name": "lane",
+                "source": "buyer",
+                "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                "sendSignals": [
+                    {"name": "gate"},
+                    {"name": "aux"},
+                    {"name": "out", "validWhen": ["buyer::(lane.gate & (lane.aux | ~lane.gate))"]}
+                ],
+                "receiveSignals": {"H": "buyer::lane.gate"}
+            }]
+        }
+    });
+    let cases: Vec<(serde_json::Value, Vec<Check>)> = vec![
+        (
+            shape_a,
+            vec![
+                Check {
+                    id: "a-closed".to_string(),
+                    kind: CheckKind::AdmissionClosed,
+                    description: None,
+                    when: Some("buyer::lane.x".to_string()),
+                    predicate: None,
+                    intents: vec!["buyer::lane.out".to_string()],
+                },
+                check("a-bad", CheckKind::BadState, "buyer::lane.out"),
+            ],
+        ),
+        (
+            shape_b,
+            vec![
+                Check {
+                    id: "b-closed".to_string(),
+                    kind: CheckKind::AdmissionClosed,
+                    description: None,
+                    when: Some("buyer::lane.aux".to_string()),
+                    predicate: None,
+                    intents: vec!["buyer::lane.out".to_string()],
+                },
+                check("b-bad", CheckKind::BadState, "buyer::lane.out"),
+            ],
+        ),
+    ];
+    for (definition, checks) in cases {
+        let vocab = Vocabulary::build(&definition, &checks).expect("shape builds");
+        let report = mc_check(McCheckRequest {
+            definition: definition.clone(),
+            checks: checks.clone(),
+            max_states: None,
+        })
+        .expect("shape runs");
+        assert!(report.lint["ok"].as_bool().expect("lint ok flag"));
+        for outcome in &report.checks {
+            let source = checks
+                .iter()
+                .find(|probe| probe.id == outcome.id)
+                .expect("outcome maps back to a check");
+            assert_eq!(
+                outcome.status,
+                exhaustive_status(&vocab, source),
+                "check {} must agree with exhaustive exploration",
+                outcome.id
+            );
+            assert_eq!(
+                outcome.status,
+                Status::Fail,
+                "check {} witnessed through the once-pruned arm must stay red",
+                outcome.id
+            );
+        }
+    }
+}
+
+#[test]
+fn multi_source_admission_header_is_a_typed_error_not_a_panic() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_multi_source_reject"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [
+                {
+                    "name": "marks",
+                    "source": "seller",
+                    "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                    "sendSignals": [{"name": "mark"}],
+                    "receiveSignals": {"H": "seller::marks.mark"}
+                },
+                {
+                    "name": "lane",
+                    "source": "buyer",
+                    "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                    "sendSignals": [{"name": "out", "validWhen": ["seller::marks.mark"]}],
+                    "receiveSignals": {"H": "buyer::lane.out"}
+                }
+            ]
+        }
+    });
+    let error = mc_check(McCheckRequest {
+        definition,
+        checks: Vec::new(),
+        max_states: None,
+    })
+    .expect_err("multi-source admission must be rejected, not panicked on");
+    let message = error.to_string();
+    assert!(
+        message.contains("multi-source") && message.contains("lane.out"),
+        "error must name the unsupported shape: {message}"
     );
 }

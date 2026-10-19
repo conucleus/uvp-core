@@ -117,30 +117,51 @@ pub fn conjunctive_positive_atoms(expr: &Expr, source: &str) -> Vec<String> {
     out
 }
 
-/// 落地位阻断项的原子集：只认「单个原子恰处一层 Not 之下」的直接负门
-/// （~x）。时间窗负位（~(x+d)）随时间翻转、不随落地关死；复合否定
-/// （~(a&b)）需诸项齐落才为假——二者都不构成落地即永死的阻断项。
+/// 落地位阻断项的原子集：只认合取语境正位上的直接负门（~x），且该原子
+/// 在整个表达式里再无任何正位出现——析取臂内的否定（A|~x）可由另一臂
+/// 救活、正负同位的原子（x&…&~x、(x+d)&~x）落地也可能是成真条件，都
+/// 不是「落地即永死」的阻断项。时间窗负位（~(x+d)）随时间翻转、不随落
+/// 地关死；否定下不下降 Or。
+/// 落地位阻断项的原子集：只认合取语境正位上的直接负门（~x），且该原子
+/// 在整个表达式里再无任何正位出现——析取臂内的否定（A|~x）可由另一臂
+/// 救活、正负同位的原子（x&…&~x、(x+d)&~x）落地也可能是成真条件，都
+/// 不是「落地即永死」的阻断项。时间窗负位（~(x+d)）随时间翻转、不随落
+/// 地关死；否定下不下降 Or。
 pub fn negative_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    fn walk(expr: &Expr, source: &str, negated: bool, out: &mut Vec<String>) {
+    fn conjunctive_negations(expr: &Expr, source: &str, out: &mut Vec<String>) {
         match expr {
-            Expr::Signal(signal) => {
-                if negated {
+            Expr::Not(inner) => {
+                if let Expr::Signal(signal) = &**inner {
                     out.push(format!("{source}::{signal}"));
                 }
             }
-            Expr::Not(inner) => walk(inner, source, !negated, out),
-            Expr::Delay { .. } => {}
-            Expr::And(terms) | Expr::Or(terms) if !negated => {
+            Expr::And(terms) => {
                 for term in terms {
-                    walk(term, source, false, out);
+                    conjunctive_negations(term, source, out);
                 }
             }
-            Expr::And(_) | Expr::Or(_) | Expr::Subscription { .. } => {}
+            Expr::Or(_) | Expr::Delay { .. } | Expr::Signal(_) | Expr::Subscription { .. } => {}
         }
     }
-    walk(expr, source, false, &mut out);
-    out
+    fn appears_positive(expr: &Expr, source: &str, atom: &str, positive: bool) -> bool {
+        match expr {
+            Expr::Signal(signal) => positive && format!("{source}::{signal}") == atom,
+            Expr::Not(inner) => appears_positive(inner, source, atom, !positive),
+            Expr::Delay { expr, .. } => appears_positive(expr, source, atom, positive),
+            Expr::And(terms) | Expr::Or(terms) => terms
+                .iter()
+                .any(|term| appears_positive(term, source, atom, positive)),
+            Expr::Subscription { .. } => false,
+        }
+    }
+    let mut candidates = Vec::new();
+    conjunctive_negations(expr, source, &mut candidates);
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+        .into_iter()
+        .filter(|atom| !appears_positive(expr, source, atom, true))
+        .collect()
 }
 
 impl Vocabulary {
@@ -232,12 +253,25 @@ impl Vocabulary {
             .iter()
             .enumerate()
             .map(|(index, intent)| {
-                let fact = *fact_index
-                    .get(&intent.fact)
-                    .expect("intent fact was interned during collection");
-                (fact, index)
+                let fact = fact_index.get(&intent.fact).copied().ok_or_else(|| {
+                    let (header_source, signal) = intent
+                        .fact
+                        .split_once("::")
+                        .unwrap_or(("", intent.fact.as_str()));
+                    let declared_source = declared
+                        .iter()
+                        .find_map(|fact| {
+                            let (source, rest) = fact.split_once("::")?;
+                            (rest == signal).then_some(source)
+                        })
+                        .unwrap_or("<undeclared>");
+                    McError::Message(format!(
+                        "mc does not support multi-source definitions yet: {signal} is declared under source {declared_source} but its admission header addresses source {header_source}"
+                    ))
+                })?;
+                Ok((fact, index))
             })
-            .collect();
+            .collect::<Result<BTreeMap<usize, usize>>>()?;
 
         Ok(Vocabulary {
             zhixu_name: definition.metadata.name,
