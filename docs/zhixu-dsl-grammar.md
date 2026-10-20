@@ -589,9 +589,6 @@ spec:
       sendSignals:
         - name: str
         - name: cmp
-          # 发射适格：触发事实在案且本阶段未报错时 cmp 才可发（§5.6）
-          validWhen:
-            - "buyer::choose_executor.executor_selected & ~main.err"
         - name: err
       executor:
         supplierType: zhixu
@@ -640,12 +637,17 @@ spec:
       sendSignals:
         - name: str
         - name: cmp
+          # 发射适格（§5.6）：触发事实 str 在案时 cmp 才可发。validWhen
+          # 不得声明在 signalMap relay 目标上——main 的 str/cmp/err 经
+          # dock 输出中继写事实、绕过适格面，D029 编译期拒收。
+          validWhen:
+            - "settlement::on_deal.str"
       executor:
         supplierType: organization
         supplierID: settlement_executor_001
 ```
 
-示例与编译边界逐条自洽：每个阶段都编译出至少一个带物化位的 hook；同一 signalKey 无跨阶段双重观察——`executor_selected` 只被 `main` 观察，`on_deal.str`、`deal.closed` 等各只有一个观察阶段（「同一 signalKey 只允许单一阶段观察」是 onchain 实现层接受域，见 §4 指针块与 `uvp-chain.md`——"同一事实驱动多个阶段"应拆分为各阶段观察不同的目标信号，而不是让多个阶段订阅同一 signalKey）；`cmp` 演示发射适格。
+示例与编译边界逐条自洽：每个阶段都编译出至少一个带物化位的 hook；同一 signalKey 无跨阶段双重观察——`executor_selected` 只被 `main` 观察，`on_deal.str`、`deal.closed` 等各只有一个观察阶段（「同一 signalKey 只允许单一阶段观察」是 onchain 实现层接受域，见 §4 指针块与 `uvp-chain.md`——"同一事实驱动多个阶段"应拆分为各阶段观察不同的目标信号，而不是让多个阶段订阅同一 signalKey）；`on_deal.cmp` 演示发射适格。
 
 ### 8.3 建模范式
 

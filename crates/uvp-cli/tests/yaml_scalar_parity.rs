@@ -1,6 +1,6 @@
 //! YAML 标量 parity 语料（fixtures/yaml/yaml-scalar-parity.v1.json）Rust 线
 //! 消费：钉各 token 经 uvp-cli read_definition 同路径（serde_yaml_ng ->
-//! serde_json::Value）装载后的形态。ts/go 槽位由各自 harness 接线时消费。
+//! serde_json::Value）装载后的形态。
 
 use serde_json::Value;
 

@@ -122,11 +122,6 @@ pub fn conjunctive_positive_atoms(expr: &Expr, source: &str) -> Vec<String> {
 /// 救活、正负同位的原子（x&…&~x、(x+d)&~x）落地也可能是成真条件，都
 /// 不是「落地即永死」的阻断项。时间窗负位（~(x+d)）随时间翻转、不随落
 /// 地关死；否定下不下降 Or。
-/// 落地位阻断项的原子集：只认合取语境正位上的直接负门（~x），且该原子
-/// 在整个表达式里再无任何正位出现——析取臂内的否定（A|~x）可由另一臂
-/// 救活、正负同位的原子（x&…&~x、(x+d)&~x）落地也可能是成真条件，都
-/// 不是「落地即永死」的阻断项。时间窗负位（~(x+d)）随时间翻转、不随落
-/// 地关死；否定下不下降 Or。
 pub fn negative_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
     fn conjunctive_negations(expr: &Expr, source: &str, out: &mut Vec<String>) {
         match expr {
