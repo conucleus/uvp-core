@@ -2572,9 +2572,9 @@ fn admission_delay_anchor_and_nested_delay_gates_are_enforced_at_registration() 
     )
     .unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("admission anchorless_delay applies DELAY to an operand with no positive anchor"),
+        error.to_string().contains(
+            "admission anchorless_delay applies DELAY to an operand with no positive anchor"
+        ),
         "{error}"
     );
 

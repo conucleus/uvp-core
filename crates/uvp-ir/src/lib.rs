@@ -48,7 +48,13 @@ pub fn hash_canonical(domain: &str, payload: &Value) -> Result<String> {
     let canonical = canonical_stringify(payload)?;
     let preimage = format!("{domain}:{canonical}");
     let digest = Keccak256::digest(preimage.as_bytes());
-    Ok(format!("0x{}", digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()))
+    Ok(format!(
+        "0x{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
 }
 
 fn strip_definition_display_fields(mut definition: Value) -> Value {

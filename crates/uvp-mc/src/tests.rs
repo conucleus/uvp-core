@@ -517,7 +517,9 @@ fn gen_expr(rng: &mut XorShift, atoms: &[String], depth: usize) -> String {
 }
 
 fn random_case(rng: &mut XorShift) -> (serde_json::Value, Vec<Check>) {
-    let names: Vec<String> = (0..3 + rng.below(3)).map(|i| format!("lane.s{i}")).collect();
+    let names: Vec<String> = (0..3 + rng.below(3))
+        .map(|i| format!("lane.s{i}"))
+        .collect();
     let mut send_signals = Vec::new();
     let mut gated: Vec<String> = Vec::new();
     for (index, name) in names.iter().enumerate() {
@@ -594,7 +596,7 @@ fn exhaustive_status(vocab: &Vocabulary, source: &Check) -> Status {
                 Some(&|state: &McState| {
                     Ok((predicate_ready(vocab, when, state)
                         && predicate_ready(vocab, Some(predicate), state))
-                        .then_some(StopKind::Violation))
+                    .then_some(StopKind::Violation))
                 }),
                 None,
             )
