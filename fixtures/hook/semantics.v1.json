@@ -469,6 +469,51 @@
           }
         ]
       }
+    },
+    {
+      "name": "filter gate admits a bare plain negation at the root",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::~pay.cmp",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "~pay.cmp",
+        "normalizedExpression": "buyer::~pay.cmp",
+        "dependencies": [
+          {
+            "kind": "negative",
+            "source": "buyer",
+            "signalName": "pay.cmp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "whitespace between + and the duration literal is tolerated",
+      "profile": "evm_strict",
+      "hookName": "TIMEOUT",
+      "hook": "buyer::(pay.cmp + 5s)",
+      "expect": {
+        "source": "buyer",
+        "mode": "normal",
+        "runtimeCondition": "pay.cmp+5s",
+        "normalizedExpression": "buyer::pay.cmp+5s",
+        "dependencies": [
+          {
+            "kind": "positive",
+            "source": "buyer",
+            "signalName": "pay.cmp"
+          },
+          {
+            "kind": "timer",
+            "source": "buyer",
+            "signalName": "pay.cmp",
+            "delaySeconds": 5
+          }
+        ]
+      }
     }
   ],
   "evalCases": [
@@ -1225,6 +1270,47 @@
       "expect": {
         "state": "needs_more"
       }
+    },
+    {
+      "name": "and with every operand absent stays needs_more",
+      "profile": "evm_strict",
+      "hookName": "ALL",
+      "hook": "buyer::a.cmp & b.cmp",
+      "now": "2026-04-27T00:00:00.000Z",
+      "signals": [],
+      "expect": {
+        "state": "needs_more"
+      }
+    },
+    {
+      "name": "filter admission with two live vetoes expires at the tighter maturity",
+      "profile": "evm_strict",
+      "gate": "filter",
+      "hookName": "ADMIT",
+      "hook": "buyer::execute.locked & ~(execute.approved +5s) & ~(execute.reviewed +10s)",
+      "now": "2026-04-27T00:00:04.000Z",
+      "signals": [
+        {
+          "source": "buyer",
+          "signalName": "execute.locked",
+          "receivedAt": "2026-04-27T00:00:02.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "execute.approved",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        },
+        {
+          "source": "buyer",
+          "signalName": "execute.reviewed",
+          "receivedAt": "2026-04-27T00:00:00.000Z"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "readyAt": "2026-04-27T00:00:02.000Z",
+        "expiresAt": "2026-04-27T00:00:05.000Z"
+      }
     }
   ],
   "invalidCases": [
@@ -1553,7 +1639,8 @@
     { "name": "31 days", "literal": "31d" },
     { "name": "i64 overflow", "literal": "9223372036854775808d" },
     { "name": "i64 max days", "literal": "9223372036854775807d" },
-    { "name": "18-digit days", "literal": "999999999999999999d" }
+    { "name": "18-digit days", "literal": "999999999999999999d" },
+    { "name": "uppercase unit", "literal": "5S" }
   ],
   "replayCases": [
     {

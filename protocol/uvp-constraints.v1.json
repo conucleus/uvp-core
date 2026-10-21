@@ -929,7 +929,7 @@
           "scope": "并集内同一 (source, stage.signal) 事实键被重复声明为出生通道",
           "arms": {
             "mint-union-dock / dock-union-dock": "三方一致拒绝：跨通道共享键会让任一侧的出生事务把另一侧的出生线一并推 Ready、物化幻影阶段；dock entrance 键按 route 钉死（planHookDependsOn），一键挂两条 entrance 时任一 route 的子单会物化另一 route 的阶段",
-            "mint-union-mint": "分叉现状（三线未收敛），含两臂：①「跨 stage 多 mint 线」——同一事实被多个 mint 阶段声明为出生键；②「同 stage 双 mint 钩」——同一 mint 阶段内两条 mint 钩共享出生键（同 stage 多钩臂）。两臂同判：rust 编译期拒绝——一事实多 mint 各铸一单，\"该事实对应哪个订单\"三线发散，一事一单在编译期收口；Solidity 注册门与 TS 编译器放行——一事实扇出多条 mint 出生线是产品现行形态（customs 基准 plan：order::registered 同时出生执行者选择与资源发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段；运行期单数分叉：云轨代铸派生键含 stage+hook 维——同一事实逐 hook 铸 N 单，链轨同出生上下文铸 1 单（定义作者在两轨得到不同单数）"
+            "mint-union-mint": "分叉现状（三线未收敛），含两臂：①「跨 stage 多 mint 线」——同一事实被多个 mint 阶段声明为出生键，rust 编译期拒绝——一事实多 mint 各铸一单，\"该事实对应哪个订单\"三线发散，一事一单在编译期收口；②「同 stage 双 mint 钩」——同一 mint 阶段内多条 mint 钩共享出生键（同 stage 多钩臂），rust 编译期按 stage 集合去重放行（查重以 stage 计数，同 stage 多钩不构成跨阶段重复），Solidity 注册门与 TS 编译器同口径放行——一事实扇出多条 mint 出生线是产品现行形态（customs 基准 plan：order::registered 同时出生执行者选择与资源发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段；运行期单数分叉：云轨代铸派生键含 stage+hook 维——同一事实逐 hook 铸 N 单，链轨同出生上下文铸 1 单（定义作者在两轨得到不同单数）"
           }
         }
       },
@@ -942,9 +942,9 @@
         "rust"
       ],
       "sources": {
-        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_birth_channel_key_uniqueness（三臂全拒——mint∪mint 臂本仓严于链上）"
+        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_birth_channel_key_uniqueness（mint∪dock / dock∪dock 跨通道臂与 mint∪mint 跨 stage 线拒绝；同 stage 双 mint 钩按 stage 集合去重放行）"
       },
-      "ruling": "登记为分叉现状，不宣称三线一致：mint∪dock、dock∪dock 两臂三方（rust 编译期、合约注册门 DuplicateBirthChannelKey、TS 编译器镜像 duplicateBirthChannelKeyIssues）一致拒绝；mint∪mint 臂（含跨 stage 多 mint 线与同 stage 双 mint 钩两形态）仅 rust 拒绝，合约（UVPPlanRegistration._registerPlanHook 按 dock 标志分界）与 TS（按 orderTriggerKind=dock 分界）放行；运行期单数云 N/链 1（云代铸键含 stage+hook 维），跨轨对账单数不可比（uvp-chain.md 附录 B 对照行）。error.rust 两段锚点分属两臂：前段（一事一单…改用 hook 依赖）钉 mint∪mint 臂文案，后段（出生通道键并集查重…不得重复）钉 mint∪dock / dock∪dock 跨通道臂文案。镜像状态另见 rejectionSurfaces 矩阵 duplicate-birth-channel-key 行。"
+      "ruling": "登记为分叉现状，不宣称三线一致：mint∪dock、dock∪dock 两臂三方（rust 编译期、合约注册门 DuplicateBirthChannelKey、TS 编译器镜像 duplicateBirthChannelKeyIssues）一致拒绝；mint∪mint 臂仅「跨 stage 多 mint 线」被 rust 编译期拒绝（一事一单），「同 stage 双 mint 钩」按 stage 集合去重后 rust 亦放行——合约（UVPPlanRegistration._registerPlanHook 按 dock 标志分界）与 TS（按 orderTriggerKind=dock 分界）对 mint∪mint 全形态放行；运行期单数云 N/链 1（云代铸键含 stage+hook 维），跨轨对账单数不可比（uvp-chain.md 附录 B 对照行）。error.rust 两段锚点分属两臂：前段（一事一单…改用 hook 依赖）钉 mint∪mint 跨 stage 线文案，后段（出生通道键并集查重…不得重复）钉 mint∪dock / dock∪dock 跨通道臂文案。镜像状态另见 rejectionSurfaces 矩阵 duplicate-birth-channel-key 行。"
     },
     {
       "id": "stage-entries-max-count",
@@ -1109,11 +1109,11 @@
       "id": "duplicate-birth-channel-key",
       "surface": "order-trigger 依赖键跨出生通道重复 revert DuplicateBirthChannelKey（UVPPlanRegistration._registerPlanHook，按 dock 标志分界：mint∪dock 与 dock∪dock 两臂拒绝）",
       "mirrors": {
-        "rust": "mirrored:rule birth-channel-key-union-uniqueness（三臂全拒——mint∪mint 臂本仓编译期拒绝、严于链上）",
+        "rust": "mirrored:rule birth-channel-key-union-uniqueness（mint∪dock / dock∪dock 与 mint∪mint 跨 stage 线拒绝；同 stage 双 mint 钩按 stage 去重放行）",
         "go": "none",
         "ts": "mirrored（duplicateBirthChannelKeyIssues：mint∪dock、dock∪dock 两臂拒绝）"
       },
-      "note": "分叉现状：mint∪mint 臂合约不 revert（放行）、TS 同口径放行，仅 rust 编译期拒绝（一事一单）——三线收敛前按各侧行为如实登记，详见 rule birth-channel-key-union-uniqueness。"
+      "note": "分叉现状：mint∪mint 臂合约不 revert（放行）、TS 同口径放行，rust 编译期仅拒跨 stage 多 mint 线（一事一单）、同 stage 双 mint 钩按 stage 去重亦放行——三线收敛前按各侧行为如实登记，详见 rule birth-channel-key-union-uniqueness。"
     }
   ]
 }

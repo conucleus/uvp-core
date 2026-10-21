@@ -56,23 +56,15 @@
       "condition": "Tx-pool / nonce race texts: nonce too low, nonce has already been used, replacement transaction underpriced, already known, same hash was already imported.",
       "layer": "chain",
       "producers": ["chain-services", "executor-kit"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
       "benign_scan_outcome": false,
       "internal_names": {
         "chain-services": ["duplicate_transaction"],
         "executor-kit": ["nonce_conflict"]
       },
-      "producer_overrides": {
-        "executor-kit": {
-          "retryable": true,
-          "backoff": "exponential",
-          "dead_letter": false,
-          "notes": "Executor-kit recomputes the account nonce on every attempt (fresh wallet.writeContract), so a nonce race is transient and retryable. Needs-ruling vs chain-services relayer."
-        }
-      },
-      "notes": "Divergent dispositions (needs-ruling): chain-services relayer classifies as duplicate_transaction — non-retryable, dead-letter, BUT first probes candidate txHashes (error-carried + previously recorded) for an on-chain receipt; a success receipt resolves the submission as submitted with the nonce consumed. chain-services submissions adapter has no nonce pattern, so these texts fall to state_machine_broadcast_failed (retryable=true fallback). executor-kit nonce_conflict retryable=true."
+      "notes": "Ruled single-value (A-30): a nonce conflict is recovered by re-preparing a fresh nonce (chain-services re-assembles with a new gas nonce; executor-kit recomputes the account nonce on every attempt), so every producer retries and none dead-letters. chain-services broadcast catch-phases still probe candidate txHash receipts first: a success receipt resolves submitted, a mined revert resolves terminal transaction_reverted, and an unreadable receipt stays in the retryable transaction_receipt_unknown lane."
     },
     {
       "code": "rpc_network",

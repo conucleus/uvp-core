@@ -304,7 +304,7 @@ buyer::ANCHOR(@seller::main.cmp)        # 订阅必须空标头
 
 **拒绝面**：对事实流静默（拒绝即零事实行、零投递行，绝不落 marker 事实）、对发送方响亮（类型化拒绝，可定位是哪发被哪个闸拒）。拒绝后补齐依赖事实再重新提交即可（该发未落库，重新提交不是重复；重新提交会再过一次筛）。
 
-**作用域**：仅外部提交过筛；引擎内部产事实路径不经此面（dock 投递与回填、per-fact 代铸入口再投递、派生信号与模块内产事实——链轨 `*FromModule` 族调用卡点以下层级）。无单外部出生（开放出生提交）照常过筛（pre-state 空集，正锚表达式自然拒绝——关上"gated 信号绕窗铸单"的口子）。编译期拒绝：出生锚信号与无锚通道阶段不得声明 `validWhen`（声明即死代码，D029）；表达式引用本信号自身即自证无效（D028）；引用的每个 `stage.signal` 受引用存在性约束——目标信号须在目标 stage 的 `sendSignals` 中声明（dock 输入端口的 mailbox 通道是唯一豁免，D013）。适格族拒绝文案逐项带下标 `validWhen[i]` 定位（D027–D032 全族同格式）。
+**作用域**：仅外部提交过筛；引擎内部产事实路径不经此面（dock 投递与回填、per-fact 代铸入口再投递、派生信号与模块内产事实——链轨 `*FromModule` 族调用卡点以下层级）。无单外部出生（开放出生提交）照常过筛（pre-state 空集，正锚表达式自然拒绝——关上"gated 信号绕窗铸单"的口子）。编译期拒绝：出生锚信号、无锚通道阶段与 dock 输出中继目标（signalMap relay target）不得声明 `validWhen`（声明即死代码，D029——出生写入与输出中继都经引擎内部入口产事实、不过适格面）；表达式引用本信号自身即自证无效（D028）；引用的每个 `stage.signal` 受引用存在性约束——目标信号须在目标 stage 的 `sendSignals` 中声明（dock 输入端口的 mailbox 通道是唯一豁免，D013）。适格族拒绝文案逐项带下标 `validWhen[i]` 定位（D027–D032 全族同格式）。
 
 **链上双闸（见 `uvp-chain.md`）**：适格声明编为与钩子同款的 CompactHook 指令计划，以旗标位 8（`HOOK_FLAG_ADMISSION`）随 hooksHash 进 plan 承诺——适格声明不留未签名面。注册门 `_validateAdmission`（`_validateHook` 的过滤档兄弟）在 `commitPlan` 时校验指令计划：与钩子档同源的保留闸是 NOT 操作数词表（裸 SIGNAL 或延时产出）、**延时操作数正向锚点**与嵌套延时禁令——过滤档书写层按共享词表接受 `(~A)+5s` 一类纯否定延时操作数（一拍求值下瞬时值良定义，云轨同词表），链轨对它的裁决是**注册期拒绝**（无锚延时在求值侧是恒未决死代码，commitPlan 挡下而非留死代码上链）。提交卡点 `_requireSignalAdmission`（`_submitSignal` 内、幂等吸收之后）按 `block.timestamp` 求值——无锚延时恒非 Ready（§5.4 anchored 语义，求值侧防御纵深）。无适格声明的 plan 由订单级 `admissionsDeclared` 位短路——零额外冷读。
 
