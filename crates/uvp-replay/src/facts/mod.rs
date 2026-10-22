@@ -326,6 +326,7 @@ fn validate_hook_dependency_index_mirror(
 struct InstructionSlot {
     bare_signal: bool,
     delay_result: bool,
+    delay_inside: bool,
     veto_term: bool,
     veto_inside: bool,
     has_pos_anchor: bool,
@@ -365,6 +366,7 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                 stack.push(InstructionSlot {
                     bare_signal: true,
                     delay_result: false,
+                    delay_inside: false,
                     veto_term: false,
                     veto_inside: false,
                     has_pos_anchor: true,
@@ -386,6 +388,7 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                 stack.push(InstructionSlot {
                     bare_signal: false,
                     delay_result: false,
+                    delay_inside: slot.delay_inside,
                     veto_term: slot.delay_result,
                     veto_inside: slot.veto_inside || slot.delay_result,
                     has_pos_anchor: false,
@@ -427,9 +430,15 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                         "malformed instruction plan: hook {hook_id} applies DELAY to an operand containing a decaying veto (a veto's readiness decays while delay maturity is permanent; an outer delay anchored on an expired veto would silently pass; contract _validateHook reverts InvalidInstruction)"
                     )));
                 }
+                if slot.delay_inside {
+                    return Err(ReplayError::Message(format!(
+                        "malformed instruction plan: hook {hook_id} applies DELAY to an operand containing a nested delay, possibly through a veto negation (collapse the delay chain into a single duration; contract _validateHook reverts InvalidInstruction)"
+                    )));
+                }
                 stack.push(InstructionSlot {
                     bare_signal: false,
                     delay_result: true,
+                    delay_inside: true,
                     veto_term: false,
                     veto_inside: false,
                     has_pos_anchor: slot.has_pos_anchor,
@@ -464,10 +473,12 @@ fn validate_hook_registration_shape(hook: &Value) -> Result<()> {
                     terms.iter().all(|term| term.has_pos_anchor)
                 };
                 let veto_inside_result = terms.iter().any(|term| term.veto_inside);
+                let delay_inside_result = terms.iter().any(|term| term.delay_inside);
                 let depth = terms.iter().map(|term| term.depth).max().unwrap_or(0) + 1;
                 stack.push(InstructionSlot {
                     bare_signal: false,
                     delay_result: false,
+                    delay_inside: delay_inside_result,
                     veto_term: false,
                     veto_inside: veto_inside_result,
                     has_pos_anchor: anchored,

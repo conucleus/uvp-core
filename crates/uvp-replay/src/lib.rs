@@ -313,5 +313,14 @@ fn envelope_json(result: Result<Value>) -> String {
             }]),
         },
     };
-    serde_json::to_string(&envelope).expect("replay envelope should serialize")
+    serde_json::to_string(&envelope).unwrap_or_else(|err| {
+        serde_json::json!({
+            "ok": false,
+            "infrastructure": true,
+            "diagnostics": [
+                { "message": format!("uvp-core response envelope serialization failed: {err}") }
+            ]
+        })
+        .to_string()
+    })
 }
