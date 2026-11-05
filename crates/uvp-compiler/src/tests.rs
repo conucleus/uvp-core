@@ -2576,3 +2576,222 @@ fn rejects_executor_supplier_id_over_uuid_length() {
         "unexpected cloud error: {error}"
     );
 }
+
+fn implicit_entry_definition() -> Value {
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "implicit_entry" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "entry-core" },
+            "stages": [{
+                "name": "entry",
+                "source": "customer",
+                "sendSignals": [
+                    { "name": "str" },
+                    { "name": "cmp" }
+                ],
+                "executor": { "supplierType": "organization", "supplierID": "journey-executor" }
+            }]
+        }
+    })
+}
+
+#[test]
+fn implicit_entry_stage_lowers_to_mint_order_trigger() {
+    let definition = implicit_entry_definition();
+    let plan = compile_zhixu_hook_plan(&definition, None, false)
+        .expect("an implicit entry stage compiles to a birth hook");
+    let hooks = plan["compiledHooks"].as_array().unwrap();
+    let order_trigger_hooks = hooks
+        .iter()
+        .filter(|hook| hook["orderTriggerKind"] != "none")
+        .collect::<Vec<_>>();
+    assert_eq!(order_trigger_hooks.len(), 1);
+    let hook = hooks
+        .iter()
+        .find(|hook| hook["hookId"] == "entry#str")
+        .expect("the synthesized entry hook carries the stage#str identity");
+    assert_eq!(hook["kind"], "receive");
+    assert_eq!(hook["stageIdentifier"], "entry");
+    assert_eq!(hook["orderTriggerKind"], "mint");
+    assert_eq!(hook["emitReady"], true);
+    assert_eq!(hook["rawExpression"], "customer::entry.str");
+    assert_eq!(hook["normalizedExpression"], "customer::entry.str");
+    assert_eq!(hook["ast"]["source"], "customer");
+    assert_eq!(hook["ast"]["condition"]["kind"], "signal");
+    assert_eq!(hook["ast"]["condition"]["signalName"], "entry.str");
+    assert_eq!(
+        hook["dependencies"],
+        json!([{ "kind": "positive", "source": "customer", "signalName": "entry.str" }])
+    );
+    assert_eq!(hook["route"]["stageIdentifier"], "entry");
+    assert_eq!(hook["route"]["executor"]["supplierID"], "journey-executor");
+    assert_eq!(
+        plan["dependencyIndex"],
+        json!({ "customer::entry.str": ["entry#str"] })
+    );
+
+    let cloud = compile_cloud_artifact(&definition, None, false)
+        .expect("the cloud target keeps compiling the same definition unchanged");
+    assert_eq!(cloud["stages"].as_array().unwrap().len(), 1);
+    assert_eq!(cloud["stages"][0]["stageIdentifier"], "entry");
+    assert_eq!(
+        cloud["hooks"].as_array().unwrap().len(),
+        0,
+        "the synthesized entry hook is chain-target lowering only"
+    );
+}
+
+#[test]
+fn rejects_implicit_entry_str_with_valid_when() {
+    let mut definition = implicit_entry_definition();
+    definition["spec"]["stages"][0]["sendSignals"][0]["validWhen"] =
+        json!(["customer::entry.cmp"]);
+    let error = compile_zhixu_hook_plan(&definition, None, false)
+        .expect_err("a validWhen on the entry str birth fact must fail");
+    assert!(
+        error.to_string().contains("validWhen")
+            && error.to_string().contains("implicit entry stage"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_implicit_entry_stage_that_is_not_first() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "entry_not_first" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "entry-core" },
+            "stages": [{
+                "name": "inspect",
+                "source": "customer",
+                "receiveSignals": { "GO": "customer::inspect.seed" },
+                "sendSignals": [{ "name": "seed" }],
+                "executor": { "supplierType": "organization", "supplierID": "inspection-executor" }
+            }, {
+                "name": "entry",
+                "source": "customer",
+                "sendSignals": [{ "name": "str" }],
+                "executor": { "supplierType": "organization", "supplierID": "journey-executor" }
+            }]
+        }
+    });
+    let error = compile_zhixu_hook_plan(&definition, None, false)
+        .expect_err("an implicit entry outside the first stage must fail");
+    assert!(
+        error.to_string().contains("must be the first stage"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_two_implicit_entry_stages() {
+    let mut definition = implicit_entry_definition();
+    definition["spec"]["stages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "second_entry",
+            "source": "customer",
+            "sendSignals": [{ "name": "str" }],
+            "executor": { "supplierType": "organization", "supplierID": "second-executor" }
+        }));
+    let error = compile_zhixu_hook_plan(&definition, None, false)
+        .expect_err("two stages without receiveSignals must fail");
+    assert!(
+        error.to_string().contains("at most one implicit entry stage"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_other_stage_observing_entry_str() {
+    let mut definition = implicit_entry_definition();
+    definition["spec"]["stages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "observer",
+            "source": "customer",
+            "receiveSignals": { "OBSERVE": "customer::entry.str" },
+            "sendSignals": [{ "name": "seen" }],
+            "executor": { "supplierType": "organization", "supplierID": "observer-executor" }
+        }));
+    let error = compile_zhixu_hook_plan(&definition, None, false)
+        .expect_err("another stage depending on the entry str must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("only the entry stage's own order-trigger hook may observe it"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_no_receive_signals_stage_that_is_not_entry() {
+    let mut definition = implicit_entry_definition();
+    definition["spec"]["stages"][0]["sendSignals"] = json!([{ "name": "seed" }]);
+    let error = compile_zhixu_hook_plan(&definition, None, false)
+        .expect_err("a no-receiveSignals stage without str is not an implicit entry");
+    let message = error.to_string();
+    assert!(
+        message.contains("must declare a str sendSignal")
+            && message.contains("declares no receiveSignals"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn rejects_implicit_entry_without_static_plain_executor() {
+    let mut delegated = implicit_entry_definition();
+    delegated["spec"]["stages"][0]["executor"] = json!({
+        "supplierType": "zhixu",
+        "zhixuExecutorConfig": {
+            "target": null,
+            "interface": "service",
+            "order": { "mode": "existing" },
+            "signalMap": { "str": "started" }
+        }
+    });
+    let error = compile_zhixu_hook_plan(&delegated, None, true)
+        .expect_err("a zhixu-delegated implicit entry must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("requires its own static non-zhixu executor with supplierID"),
+        "unexpected error: {error}"
+    );
+
+    let mut missing = implicit_entry_definition();
+    missing["spec"]["stages"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("executor");
+    let error = compile_zhixu_hook_plan(&missing, None, true)
+        .expect_err("an implicit entry without an executor must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("requires its own static non-zhixu executor with supplierID"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_implicit_entry_with_selected_stages() {
+    let mut definition = implicit_entry_definition();
+    definition["spec"]["stages"][0]["selectedStages"] = json!(["entry"]);
+    let error = compile_zhixu_hook_plan(&definition, None, true)
+        .expect_err("an implicit entry declaring selectedStages must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("must not declare selectedStages"),
+        "unexpected error: {error}"
+    );
+}

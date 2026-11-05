@@ -77,7 +77,7 @@
 
 ### 2.3 阶段种类不可变
 
-阶段种类（出生/有锚/无锚监听，判定见 §6.2）由 `mint` 与订阅声明在编译期定死，终生不可变；订阅/出生阶段的 `executor_configs` 终生禁 patch。订单创建后事实不可改写，终态一经落定不被后续事实改写——运行侧终态与资金不变量的轨道形态见实现层文档。
+阶段种类（出生/有锚/无锚监听，判定见 §6.2；链轨另有隐式 entry 出生形状，判定见 §4 的 target 条件块）由 `mint`、订阅声明与 entry 形状在编译期定死，终生不可变；订阅/出生阶段的 `executor_configs` 终生禁 patch。订单创建后事实不可改写，终态一经落定不被后续事实改写——运行侧终态与资金不变量的轨道形态见实现层文档。
 
 ---
 
@@ -167,8 +167,16 @@ spec:
 **执行者拓扑约束**（uvp-core 裁决）：
 
 - 阶段完全不给出 `executor` 块时，必须可被其他阶段通过 `selectedStages` 覆盖到，否则编译拒绝（"没有分配 executor，也没有被 selectedStages 引用"）。覆盖解决的是"无 executor 块"的可达性，不豁免 supplierID 存在性。
-- 订阅/出生阶段必须编译期静态指定执行者，按阶段种类细分见 §6.2；出生阶段（`mint: per-fact`）只能显式 `supplierID`，与 zhixu 委托互斥。
-- ⚠ **阶段物化门（onchain 产物面，core 裁决、带 target 条件）**：uvp-core 在 onchain（hookPlan）产物线执行该闸——链上阶段只能由本阶段 order-trigger（mint/dock）或 EMIT_READY hook 物化，每个阶段都必须编译出至少一个带物化位的 hook：零 `receiveSignals`（仅 `sendSignals`）的阶段（编译为零 hook、永不可物化、无恢复路径），以及「无静态执行者、仅被 `selectedStages` 覆盖却声明 `receiveSignals`」的阶段（hook 一律编译为 flags=0 纯 watcher，形态一旦上链即死锁且无恢复路径）一律编译期整体拒绝；cloud 产物面免检。闸的完整叙述（EMIT_READY 编译形态、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
+- 订阅/出生阶段必须编译期静态指定执行者，按阶段种类细分见 §6.2；出生阶段（`mint: per-fact`）只能显式 `supplierID`，与 zhixu 委托互斥；隐式 entry 同属出生形态，必须静态非 zhixu executor（见下）。
+- ⚠ **阶段物化门（onchain 产物面，core 裁决、带 target 条件）**：uvp-core 在 onchain（hookPlan）产物线执行该闸——链上阶段只能由本阶段 order-trigger（mint/dock）或 EMIT_READY hook 物化，每个阶段都必须编译出至少一个带物化位的 hook：零 `receiveSignals`（仅 `sendSignals`）且不满足隐式 entry 条件的阶段（编译为零 hook、永不可物化、无恢复路径；隐式 entry 以合成 hook 例外，见下），以及「无静态执行者、仅被 `selectedStages` 覆盖却声明 `receiveSignals`」的阶段（hook 一律编译为 flags=0 纯 watcher，形态一旦上链即死锁且无恢复路径）一律编译期整体拒绝。该闸只作用于 onchain（hookPlan）产物线：entry 是语言层的订单创建通道，cloud 由 runtime 的 `new_source`/`str` 建单承担、不经过本闸；链轨由 compiler lowering 合成 hook。闸的完整叙述（EMIT_READY 编译形态、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
+
+**隐式 entry（onchain 产物面，core 裁决、带 target 条件）**：链轨 hookPlan 产物线把「执行器 `str` 自报」落成一个由阶段形状隐式声明的出生入口，不需要任何 DSL 关键字或字段。
+
+- 识别条件（全定义恰满足）：恰好一个阶段没有 `receiveSignals`，且该阶段是 `spec.stages` 的首个阶段、`sendSignals` 含 `str`（裸 `str` 或两段式自指 `<stage>.str`）、executor 为静态非 zhixu（`supplierID` 非空）、不声明 `selectedStages`。
+- 合成产物：在该阶段位置生成一条 order-trigger hook——`hookId` 为 `<stage>#str`、`kind` 为 `receive`、`orderTriggerKind` 为 `mint`、`emitReady` 为 true，条件为单条同单 signal、依赖为 `<source>::<stage>.str`（`source` 取该阶段 source），`route` 指向该阶段静态执行者；`rawExpression`/`normalizedExpression` 是编译器 lowered 的合成文本（`<source>::<stage>.str`），不是作者原文，读面不得把它当作者输入解释。无 `receiveSignals` 的其他阶段仍按物化门拒绝。
+- 非法形状（链轨编译期具名拒绝；cloud target 不经过本 lowering——entry 的订单创建由 runtime 的 `new_source`/`str` 建单承担）：多个无 `receiveSignals` 的阶段（同一 plan 至多一个隐式 entry）；entry 非首 stage；缺 `str`；executor 缺失、为 zhixu 委托或 `supplierID` 为空；entry 声明 `selectedStages`；entry 的 `str` 声明 `validWhen`；其他阶段的任何 hook 依赖 `<source>::<stage>.str`（普通同单、`::ANCHOR(@…)` 订阅、负位、延时锚点一视同仁）。
+- 出生线关系：隐式 entry 与 `mint: per-fact` 可以同 plan 共存（多条出生线；链上各自是独立 order-trigger/出生键），读面（如出生 trigger 选择、`birthChannel` 标签）必须显式选择或枚举，不得假设全计划唯一出生线。隐式 entry 不是 `mint` 声明，不改变 §6.2 的有锚/无锚判定（mint 声明仍是编译期唯一锚定依据）。
+- selector 关系：其他阶段可用 `selectedStages` 指向 entry，但该绑定是死声明——链上 order-trigger 阶段的 executor patch 恒 revert `StageExecutorPatchForbiddenOnBirthStage`，资源/首次指派 patch 亦因出生事实已计入首个信号而 revert `StageAlreadyHasSignal`（运行期细节见 `uvp-chain.md` §6）。
 - ⚠ 当前代码不存在 `stage.type`、`selectionStages`、单数形 `selectedStage`/`signals`/`receivedSignals` 字段名——表达"谁有权指定别的阶段执行者"只看 `selectedStages`。
 - ⚠ 对会创建新订单的阶段，订单创建承诺只有两条声明通道：执行器 `str` 与 `mint: per-fact`（§6.3）；不要把订单创建语义放在普通业务 signal 上，订单号不可自报（§1）。
 
@@ -304,7 +312,7 @@ buyer::ANCHOR(@seller::main.cmp)        # 订阅必须空标头
 
 **拒绝面**：对事实流静默（拒绝即零事实行、零投递行，绝不落 marker 事实）、对发送方响亮（类型化拒绝，可定位是哪发被哪个闸拒）。拒绝后补齐依赖事实再重新提交即可（该发未落库，重新提交不是重复；重新提交会再过一次筛）。
 
-**作用域**：仅外部提交过筛；引擎内部产事实路径不经此面（dock 投递与回填、per-fact 代铸入口再投递、派生信号与模块内产事实——链轨 `*FromModule` 族调用卡点以下层级）。无单外部出生（开放出生提交）照常过筛（pre-state 空集，正锚表达式自然拒绝——关上"gated 信号绕窗铸单"的口子）。编译期拒绝：出生锚信号、无锚通道阶段与 dock 输出中继目标（signalMap relay target）不得声明 `validWhen`（声明即死代码，D029——出生写入与输出中继都经引擎内部入口产事实、不过适格面）；表达式引用本信号自身即自证无效（D028）；引用的每个 `stage.signal` 受引用存在性约束——目标信号须在目标 stage 的 `sendSignals` 中声明（dock 输入端口的 mailbox 通道是唯一豁免，D013）。适格族拒绝文案逐项带下标 `validWhen[i]` 定位（D027–D032 全族同格式）。
+**作用域**：仅外部提交过筛；引擎内部产事实路径不经此面（dock 投递与回填、per-fact 代铸入口再投递、派生信号与模块内产事实——链轨 `*FromModule` 族调用卡点以下层级）。无单外部出生（开放出生提交）照常过筛（pre-state 空集，正锚表达式自然拒绝——关上"gated 信号绕窗铸单"的口子）。编译期拒绝：出生锚信号、无锚通道阶段与 dock 输出中继目标（signalMap relay target）不得声明 `validWhen`（声明即死代码，D029——出生写入与输出中继都经引擎内部入口产事实、不过适格面）；链轨 hookPlan 产物线另具名拒绝隐式 entry 的 `<source>::<stage>.str` 声明 `validWhen`（开放出生的出生事实照常过适格门，pre-state 空集下正锚表达式必拒；该拒绝只作用于链轨 hookPlan 产物线——cloud target 不经过 entry lowering，entry 的订单创建由 runtime 的 `new_source`/`str` 建单承担，见 §4 的 entry 块与 `uvp-chain.md` §2）；表达式引用本信号自身即自证无效（D028）；引用的每个 `stage.signal` 受引用存在性约束——目标信号须在目标 stage 的 `sendSignals` 中声明（dock 输入端口的 mailbox 通道是唯一豁免，D013）。适格族拒绝文案逐项带下标 `validWhen[i]` 定位（D027–D032 全族同格式）。
 
 **链上双闸（见 `uvp-chain.md`）**：适格声明编为与钩子同款的 CompactHook 指令计划，以旗标位 8（`HOOK_FLAG_ADMISSION`）随 hooksHash 进 plan 承诺——适格声明不留未签名面。注册门 `_validateAdmission`（`_validateHook` 的过滤档兄弟）在 `commitPlan` 时校验指令计划：与钩子档同源的保留闸是 NOT 操作数词表（裸 SIGNAL 或延时产出）、**延时操作数正向锚点**与嵌套延时禁令——过滤档书写层按共享词表接受 `(~A)+5s` 一类纯否定延时操作数（一拍求值下瞬时值良定义，云轨同词表），链轨对它的裁决是**注册期拒绝**（无锚延时在求值侧是恒未决死代码，commitPlan 挡下而非留死代码上链）。提交卡点 `_requireSignalAdmission`（`_submitSignal` 内、幂等吸收之后）按 `block.timestamp` 求值——无锚延时恒非 Ready（§5.4 anchored 语义，求值侧防御纵深）。无适格声明的 plan 由订单级 `admissionsDeclared` 位短路——零额外冷读。
 
@@ -365,6 +373,7 @@ sendSignals:
 - 出生阶段最小形态：必须至少有一条 `::ANCHOR(@…)` 订阅通道，且 `receiveSignals` 只能是订阅条目——per-fact 出生由事实驱动，同单 hook 在铸单前没有可求值的订单上下文。
 - 订阅 source 必须由本 zhixu 的某个阶段声明（订阅寻址只在本域解析），目标 stage/signal 必须在本定义内真实存在；跨秩序的事实级联没有订阅直连，唯一通道是委托 dock（§7）。
 - 订阅阶段必须编译期静态给出执行者：通常静态 `executor.supplierID`；唯一例外是**有锚订阅阶段**允许绑定 zhixu 委托（此时禁止 `supplierID`）。无锚扇入订阅阶段禁止 zhixu 委托——委托信封只携带同订单子信号，扇入投递没有订单上下文；`mint` 出生阶段与 zhixu 委托互斥（出生代铸与委托 dock 子单是两种互斥的订单创建路径）。
+- 链轨另有隐式 entry 出生形状（§4 的 entry 块）：它是执行器 `str` 自报的链上落地，不声明 `mint`，因此不参与本节的有锚/无锚判定——判定依据仍是 mint 声明。同一 plan 中 entry 与 mint 阶段可共存，形成多条出生线（读面须显式选择，§6.3）。
 
 ### 6.3 生命周期词汇与建单判定
 
@@ -372,6 +381,7 @@ sendSignals:
 
 - 语言层承诺的订单创建通道只有三条：执行器 `str` 自报（首条有效信号申请/确认订单号）、出生阶段 `mint: per-fact`（§6.2）、dock `order.mode=new`（§7.5）；订单号一律由出生事实纯函数派生、调用方不可自报（§6.4）。
 - 各轨建单判定的接受口径与出生通道全集是实现层语义：云轨引擎只认 `new_source=true` 且 `order_id` 为空的信号（其余信号必须携带 `order_id`，缺单在摄入期确定性拒绝；被引用订单号无条件幂等注册——见 `uvp-cloud.md`）；链轨合约只认出生通道（ORDER_TRIGGER_MINT 开放提交、模块派生建单、dock、治理分叉 `forkOrder`——见 `uvp-chain.md`）。两轨口径对照见 `uvp-chain.md` 附录 B。
+- 链轨把「执行器 `str` 自报」落为隐式 entry（§4 的 entry 块，onchain 产物面）：由首个 stage 的形状合成一条 `ORDER_TRIGGER_MINT` hook，不需要 `mint` 声明。隐式 entry 与 `mint: per-fact` 可同 plan 共存=多条出生线，读面（出生 trigger 选择、`birthChannel` 标签等）必须显式选择或枚举，不得假设唯一出生线；非法 entry 形状在链轨编译期具名拒绝（cloud target 不经过 entry lowering——entry 的订单创建由 runtime 的 `new_source`/`str` 建单承担），两轨对照见 `uvp-chain.md` 附录 B。
 
 约定俗成的生命周期词汇：`str` 是执行器生命周期中的第一条有效 signal（"我接了这个阶段实例"）；不要把订单创建语义放在普通业务 signal 上；`cmp`/`err`/`cxl` 都应建立在已存在的订单上；当前协议不要求单独的 `ack` 创建语义。同名异物提示一处：本节的 `cxl` 是调用方约定的信号名；§5.4 求值输出词表中没有 `cxl`——「裁决不可能成立」对应的求值状态是 `impossible`，与这里的信号名仅字面相近、无语义关联。
 

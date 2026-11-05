@@ -265,15 +265,129 @@ pub(crate) fn stage_is_subscription(stage: &ZhixuStage) -> bool {
     })
 }
 
+pub(crate) struct ImplicitEntry {
+    pub(crate) stage_identifier: String,
+}
+
+pub(crate) fn validate_implicit_entry(
+    entries: &[StageEntry],
+) -> (Option<ImplicitEntry>, Vec<String>) {
+    let candidates = entries
+        .iter()
+        .filter(|entry| entry.stage.receive_signals.is_empty())
+        .collect::<Vec<_>>();
+    let Some(candidate) = candidates.first().copied() else {
+        return (None, Vec::new());
+    };
+    if candidates.len() > 1 {
+        let names = candidates
+            .iter()
+            .map(|entry| entry.stage_identifier.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return (
+            None,
+            vec![format!(
+                "spec.stages declares {} stages without receiveSignals ({names}): a plan has at most one implicit entry stage, and the implicit entry must be the first stage",
+                candidates.len()
+            )],
+        );
+    }
+
+    let stage_identifier = candidate.stage_identifier.as_str();
+    let source = candidate.stage.source.as_str();
+    let signal_name = format!("{stage_identifier}.str");
+    let first_stage_identifier = entries
+        .first()
+        .map(|entry| entry.stage_identifier.as_str())
+        .unwrap_or_default();
+    let mut issues = Vec::new();
+    if first_stage_identifier != stage_identifier {
+        issues.push(format!(
+            "implicit entry stage {stage_identifier} must be the first stage of spec.stages; {first_stage_identifier} precedes it"
+        ));
+    }
+    if !declares_signal_expanding_to(&candidate.stage.send_signals, stage_identifier, &signal_name) {
+        issues.push(format!(
+            "implicit entry stage {stage_identifier} must declare a str sendSignal ({signal_name}): the str fact is the plan's birth fact"
+        ));
+    }
+    if !has_static_plain_executor(candidate.stage.executor.as_ref()) {
+        issues.push(format!(
+            "implicit entry stage {stage_identifier} requires its own static non-zhixu executor with supplierID: entry stages are birth stages and cannot be delegated or patched at runtime"
+        ));
+    }
+    if !candidate.stage.selected_stages.is_empty() {
+        issues.push(format!(
+            "implicit entry stage {stage_identifier} must not declare selectedStages: entry stages cannot carry executor patch selectors"
+        ));
+    }
+    if !issues.is_empty() {
+        return (None, issues);
+    }
+
+    for declared in &candidate.stage.send_signals {
+        if signal_declaration_expands_to(declared, stage_identifier, &signal_name)
+            && declared.valid_when.is_some()
+        {
+            issues.push(format!(
+                "implicit entry stage {stage_identifier}.sendSignals[{}].validWhen: {signal_name} is the plan's birth fact; birth writes bypass the admission face, a validWhen here is dead code",
+                declared.name
+            ));
+        }
+    }
+    for other in entries {
+        if other.stage_identifier == stage_identifier {
+            continue;
+        }
+        for (hook_name, raw_expression) in &other.stage.receive_signals {
+            let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
+                continue;
+            };
+            if parsed.dependencies.iter().any(|dependency| {
+                dependency.source == source && dependency.signal_name == signal_name
+            }) {
+                issues.push(format!(
+                    "{}.receiveSignals.{hook_name}: depends on {source}::{signal_name}, the implicit entry stage's birth fact; only the entry stage's own order-trigger hook may observe it (a second observer shares the birth channel key and can never materialize)",
+                    other.stage_identifier
+                ));
+            }
+        }
+    }
+    if !issues.is_empty() {
+        return (None, issues);
+    }
+    (
+        Some(ImplicitEntry {
+            stage_identifier: candidate.stage_identifier.clone(),
+        }),
+        Vec::new(),
+    )
+}
+
+fn has_static_plain_executor(executor: Option<&ZhixuExecutor>) -> bool {
+    match executor {
+        Some(executor) if executor.supplier_type != "zhixu" => executor
+            .supplier_id
+            .as_deref()
+            .is_some_and(|supplier_id| !supplier_id.trim().is_empty()),
+        _ => false,
+    }
+}
+
 pub(crate) fn validate_onchain_stage_materialization(
     entries: &[StageEntry],
     entrance_hook_ids: &BTreeSet<String>,
+    implicit_entry: Option<&str>,
 ) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
         if entry.stage.receive_signals.is_empty() {
+            if implicit_entry == Some(entry.stage_identifier.as_str()) {
+                continue;
+            }
             issues.push(format!(
-                "{} declares no receiveSignals and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare receiveSignals carrying a mint/dock entrance or a static executor",
+                "{} declares no receiveSignals and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare receiveSignals carrying a mint/dock entrance, or make this stage the plan's single implicit entry stage (first stage, str sendSignal, static executor)",
                 entry.stage_identifier
             ));
             continue;
@@ -663,13 +777,19 @@ pub(crate) fn declares_signal_expanding_to(
     stage_identifier: &str,
     full_signal_name: &str,
 ) -> bool {
-    send_signals.iter().any(|declared| {
-        if declared.name == full_signal_name {
-            return true;
-        }
-        !declared.name.contains('.')
-            && format!("{stage_identifier}.{}", declared.name) == full_signal_name
-    })
+    send_signals
+        .iter()
+        .any(|declared| signal_declaration_expands_to(declared, stage_identifier, full_signal_name))
+}
+
+fn signal_declaration_expands_to(
+    declared: &uvp_model::ZhixuSendSignal,
+    stage_identifier: &str,
+    full_signal_name: &str,
+) -> bool {
+    declared.name == full_signal_name
+        || (!declared.name.contains('.')
+            && format!("{stage_identifier}.{}", declared.name) == full_signal_name)
 }
 
 fn parse_signal_reference(signal_name: &str) -> Option<(String, String)> {

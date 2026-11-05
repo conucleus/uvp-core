@@ -131,7 +131,6 @@ pub(crate) fn compile_stage_hooks(
     let mut hooks = Vec::new();
     let is_mint_stage = entry.stage.mint.is_some();
     let entrance_hook_ids = dock_entrance_hook_ids(dock_state);
-    let is_zhixu_stage = is_zhixu_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
         let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
         let order_trigger_kind = if is_mint_stage {
@@ -142,15 +141,7 @@ pub(crate) fn compile_stage_hooks(
             "none"
         };
         let emit_ready = order_trigger_kind != "none" || entry.stage.executor.is_some();
-        let route = if is_zhixu_stage {
-            None
-        } else {
-            entry
-                .stage
-                .executor
-                .as_ref()
-                .map(|_| route_for_stage(entry))
-        };
+        let route = hook_route(entry);
         hooks.push(compile_hook(
             "receive",
             &entry.stage_identifier,
@@ -163,6 +154,32 @@ pub(crate) fn compile_stage_hooks(
     }
     hooks.sort_by_key(|hook| value_str(hook, "hookId").to_lowercase());
     Ok(hooks)
+}
+
+const IMPLICIT_ENTRY_HOOK_NAME: &str = "str";
+
+pub(crate) fn compile_implicit_entry_hook(entry: &StageEntry) -> Result<Value> {
+    let expression = format!("{}::{}.str", entry.stage.source, entry.stage_identifier);
+    compile_hook(
+        "receive",
+        &entry.stage_identifier,
+        IMPLICIT_ENTRY_HOOK_NAME,
+        "mint",
+        true,
+        &expression,
+        hook_route(entry),
+    )
+}
+
+fn hook_route(entry: &StageEntry) -> Option<Value> {
+    if is_zhixu_executor_stage(entry) {
+        return None;
+    }
+    entry
+        .stage
+        .executor
+        .as_ref()
+        .map(|_| route_for_stage(entry))
 }
 
 fn compile_hook(

@@ -8,12 +8,13 @@ use uvp_model::{ZhixuDefinition, ZhixuSendSignal};
 
 use crate::docking::{compile_dock_state, dock_entrance_hook_ids};
 use crate::lower::{
-    build_executor_routes, build_selected_stage_bindings, compile_stage_hooks, flatten_stages,
-    normalize_platform_value, parse_hook_for_cloud, value_str, StageEntry,
+    build_executor_routes, build_selected_stage_bindings, compile_implicit_entry_hook,
+    compile_stage_hooks, flatten_stages, normalize_platform_value, parse_hook_for_cloud, value_str,
+    StageEntry,
 };
 use crate::validate::{
-    stage_is_subscription, valid_identifier_part, valid_signal_declaration, validate_mint_anchors,
-    validate_onchain_stage_materialization, validate_receive_signal_keys,
+    stage_is_subscription, valid_identifier_part, valid_signal_declaration, validate_implicit_entry,
+    validate_mint_anchors, validate_onchain_stage_materialization, validate_receive_signal_keys,
     validate_receive_signal_references, validate_stage_executors, validate_subscription_delegation,
     validate_zhixu_shape,
 };
@@ -46,8 +47,10 @@ pub fn compile_zhixu_hook_plan(
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
 
     let dock_state = compile_dock_state(&definition, &stage_pairs, dock_targets, allow_unresolved)?;
+    let (implicit_entry, entry_issues) = validate_implicit_entry(&stage_entries);
 
     let mut validation_issues = Vec::new();
+    validation_issues.extend(entry_issues);
     validation_issues.extend(validate_stage_executors(
         &stage_entries,
         &selected_stage_bindings,
@@ -55,6 +58,9 @@ pub fn compile_zhixu_hook_plan(
     validation_issues.extend(validate_onchain_stage_materialization(
         &stage_entries,
         &dock_entrance_hook_ids(&dock_state),
+        implicit_entry
+            .as_ref()
+            .map(|entry| entry.stage_identifier.as_str()),
     ));
     validation_issues.extend(validate_mint_anchors(
         &stage_entries,
@@ -76,6 +82,12 @@ pub fn compile_zhixu_hook_plan(
 
     let mut compiled_hooks = Vec::new();
     for entry in &stage_entries {
+        if implicit_entry
+            .as_ref()
+            .is_some_and(|implicit| implicit.stage_identifier == entry.stage_identifier)
+        {
+            compiled_hooks.push(compile_implicit_entry_hook(entry)?);
+        }
         compiled_hooks.extend(compile_stage_hooks(entry, &dock_state)?);
     }
     let dependency_index = build_dependency_index(&compiled_hooks);
