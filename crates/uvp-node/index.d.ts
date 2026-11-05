@@ -7,5 +7,4 @@ export function lintHook(request: unknown): unknown;
 export function lintZhixu(request: unknown): unknown;
 export function version(): string;
 export function semanticVersion(): string;
-export function hookPlanSchemaVersion(): string;
 export function buildFingerprint(): string;

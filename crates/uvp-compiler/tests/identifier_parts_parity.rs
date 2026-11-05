@@ -40,7 +40,7 @@ fn compile_with_send_signal(
     send_signal: &str,
 ) -> std::result::Result<Value, uvp_compiler::CompilerError> {
     uvp_compiler::compile_request(&uvp_compiler::CompileRequest {
-        target: "hook_plan".to_string(),
+        target: "analyze".to_string(),
         definition: corpus_definition(send_signal),
         dock_targets: None,
     })

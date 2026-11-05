@@ -9,5 +9,4 @@ export const lintHook = core.lintHook;
 export const lintZhixu = core.lintZhixu;
 export const version = core.version;
 export const semanticVersion = core.semanticVersion;
-export const hookPlanSchemaVersion = core.hookPlanSchemaVersion;
 export const buildFingerprint = core.buildFingerprint;

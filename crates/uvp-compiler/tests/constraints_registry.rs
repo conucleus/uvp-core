@@ -91,13 +91,17 @@ fn envelope_message(output: &str) -> (bool, String) {
 }
 
 fn probe_compile(definition: Value) -> (bool, String) {
-    let request = json!({ "target": "parse", "definition": definition });
+    let request = json!({
+        "target": "analyze",
+        "definition": definition,
+        "allowUnresolved": true,
+    });
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
 
 fn probe_link(definition: Value, dock_targets: Value) -> (bool, String) {
     let request = json!({
-        "target": "hook_plan",
+        "target": "analyze",
         "definition": definition,
         "dockTargets": dock_targets,
     });

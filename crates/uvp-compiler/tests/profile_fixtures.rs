@@ -52,7 +52,9 @@ fn fixture_paths(profile_dir: &str) -> Vec<std::path::PathBuf> {
 
 #[test]
 fn compiles_profile_fixtures() {
-    let mut discovered = 0;
+    let mut cloud = 0;
+    let mut analyze_errors = 0;
+    let mut ts_shell = 0;
     for profile_dir in ["zhixu", "cloud", "evm"] {
         for path in fixture_paths(profile_dir) {
             let raw = std::fs::read_to_string(&path)
@@ -63,19 +65,39 @@ fn compiles_profile_fixtures() {
                     path.file_name().unwrap().to_string_lossy()
                 )
             });
-            run_fixture(&fixture);
-            discovered += 1;
+            match fixture.target.as_str() {
+                "cloud" | "cloud_db" => {
+                    run_fixture(&fixture, &fixture.target);
+                    cloud += 1;
+                }
+                "hook_plan" | "evm" if fixture.expect.error_contains.is_some() => {
+                    run_fixture(&fixture, "analyze");
+                    analyze_errors += 1;
+                }
+                "hook_plan" | "evm" => {
+                    ts_shell += 1;
+                }
+                other => panic!("{} has unsupported fixture target {other:?}", fixture.name),
+            }
         }
     }
-    assert!(
-        discovered >= 10,
-        "profile fixture discovery regressed: only {discovered} fixtures found"
+    assert_eq!(
+        cloud, 8,
+        "cloud fixture count drifted; update this split together with the fixture change"
+    );
+    assert_eq!(
+        analyze_errors, 3,
+        "analyze-retained hook_plan error fixtures drifted; keep every shared validation error fixture covered"
+    );
+    assert_eq!(
+        ts_shell, 9,
+        "hook_plan success fixtures are owned by the chain TS lowering; move them there instead of silently skipping"
     );
 }
 
-fn run_fixture(fixture: &ProfileFixture) {
+fn run_fixture(fixture: &ProfileFixture, target: &str) {
     let result = compile_request(&CompileRequest {
-        target: fixture.target.clone(),
+        target: target.to_string(),
         definition: fixture.input.clone(),
         dock_targets: fixture.dock_targets.clone(),
     });

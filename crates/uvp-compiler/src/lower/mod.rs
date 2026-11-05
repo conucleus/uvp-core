@@ -1,5 +1,5 @@
-//! 定义到目标表示的转换：stage 遍历、platform 归一化、绑定/路由构建与
-//! hook 编译（调用 uvp-hook-dsl 的解析管线）。
+//! 定义到中立表示的转换：stage 遍历、platform 归一化、绑定构建与 hook 解析
+//! （调用 uvp-hook-dsl 的解析管线）。
 
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 use uvp_hook_dsl::{parse_hook, Compatibility, Gate, ParseHookOutput, ParseHookRequest, Profile};
 use uvp_model::{ZhixuDefinition, ZhixuStage};
 
-use crate::docking::{dock_entrance_hook_ids, DockState};
 use crate::{CompilerError, Result};
 
 #[derive(Debug, Clone)]
@@ -103,19 +102,6 @@ pub(crate) fn build_selected_stage_bindings(
     Ok(bindings)
 }
 
-pub(crate) fn build_executor_routes(entries: &[StageEntry]) -> Value {
-    let mut routes = Map::new();
-    for entry in entries {
-        if is_zhixu_executor_stage(entry) {
-            continue;
-        }
-        if entry.stage.executor.is_some() {
-            routes.insert(entry.stage_identifier.clone(), route_for_stage(entry));
-        }
-    }
-    Value::Object(routes)
-}
-
 pub(crate) fn is_zhixu_executor_stage(entry: &StageEntry) -> bool {
     entry
         .stage
@@ -124,108 +110,10 @@ pub(crate) fn is_zhixu_executor_stage(entry: &StageEntry) -> bool {
         .is_some_and(|executor| executor.supplier_type == "zhixu")
 }
 
-pub(crate) fn compile_stage_hooks(
-    entry: &StageEntry,
-    dock_state: &DockState,
-) -> Result<Vec<Value>> {
-    let mut hooks = Vec::new();
-    let is_mint_stage = entry.stage.mint.is_some();
-    let entrance_hook_ids = dock_entrance_hook_ids(dock_state);
-    for (hook_name, raw_expression) in &entry.stage.receive_signals {
-        let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
-        let order_trigger_kind = if is_mint_stage {
-            "mint"
-        } else if entrance_hook_ids.contains(&hook_id) {
-            "dock"
-        } else {
-            "none"
-        };
-        let emit_ready = order_trigger_kind != "none" || entry.stage.executor.is_some();
-        let route = hook_route(entry);
-        hooks.push(compile_hook(
-            "receive",
-            &entry.stage_identifier,
-            hook_name,
-            order_trigger_kind,
-            emit_ready,
-            raw_expression,
-            route,
-        )?);
-    }
-    hooks.sort_by_key(|hook| value_str(hook, "hookId").to_lowercase());
-    Ok(hooks)
-}
+pub(crate) const IMPLICIT_ENTRY_HOOK_NAME: &str = "str";
 
-const IMPLICIT_ENTRY_HOOK_NAME: &str = "str";
-
-pub(crate) fn compile_implicit_entry_hook(entry: &StageEntry) -> Result<Value> {
-    let expression = format!("{}::{}.str", entry.stage.source, entry.stage_identifier);
-    compile_hook(
-        "receive",
-        &entry.stage_identifier,
-        IMPLICIT_ENTRY_HOOK_NAME,
-        "mint",
-        true,
-        &expression,
-        hook_route(entry),
-    )
-}
-
-fn hook_route(entry: &StageEntry) -> Option<Value> {
-    if is_zhixu_executor_stage(entry) {
-        return None;
-    }
-    entry
-        .stage
-        .executor
-        .as_ref()
-        .map(|_| route_for_stage(entry))
-}
-
-fn compile_hook(
-    kind: &str,
-    stage_identifier: &str,
-    hook_name: &str,
-    order_trigger_kind: &str,
-    emit_ready: bool,
-    raw_expression: &str,
-    route: Option<Value>,
-) -> Result<Value> {
-    let parsed = parse_hook_for_compiler(hook_name, raw_expression)?;
-    let mut hook = Map::new();
-    hook.insert(
-        "hookId".to_string(),
-        Value::String(format!("{stage_identifier}#{hook_name}")),
-    );
-    hook.insert("kind".to_string(), Value::String(kind.to_string()));
-    hook.insert(
-        "stageIdentifier".to_string(),
-        Value::String(stage_identifier.to_string()),
-    );
-    hook.insert("hookName".to_string(), Value::String(hook_name.to_string()));
-    hook.insert(
-        "orderTriggerKind".to_string(),
-        Value::String(order_trigger_kind.to_string()),
-    );
-    hook.insert("emitReady".to_string(), Value::Bool(emit_ready));
-    hook.insert(
-        "rawExpression".to_string(),
-        Value::String(raw_expression.to_string()),
-    );
-    hook.insert(
-        "normalizedExpression".to_string(),
-        Value::String(parsed.normalized_expression.clone()),
-    );
-    hook.insert("ast".to_string(), parsed.ast.clone());
-    hook.insert(
-        "dependencies".to_string(),
-        serde_json::to_value(&parsed.dependencies)
-            .map_err(|err| CompilerError::Message(err.to_string()))?,
-    );
-    if let Some(route) = route {
-        hook.insert("route".to_string(), route);
-    }
-    Ok(Value::Object(hook))
+pub(crate) fn implicit_entry_hook_expression(entry: &StageEntry) -> String {
+    format!("{}::{}.str", entry.stage.source, entry.stage_identifier)
 }
 
 pub(crate) fn parse_hook_for_compiler(
@@ -258,28 +146,6 @@ pub(crate) fn parse_hook_for_cloud(
         hook: raw_expression.to_string(),
     })
     .map_err(|err| CompilerError::Message(err.to_string()))
-}
-
-fn route_for_stage(entry: &StageEntry) -> Value {
-    let mut route = Map::new();
-    route.insert(
-        "stageIdentifier".to_string(),
-        Value::String(entry.stage_identifier.clone()),
-    );
-    if let Some(executor) = &entry.stage.executor {
-        route.insert(
-            "executor".to_string(),
-            serde_json::to_value(executor).unwrap_or(Value::Null),
-        );
-    }
-    if !entry.stage.file_resources.is_empty() {
-        route.insert(
-            "fileResources".to_string(),
-            serde_json::to_value(&entry.stage.file_resources)
-                .expect("fileResources should serialize"),
-        );
-    }
-    Value::Object(route)
 }
 
 pub(crate) fn value_str<'a>(value: &'a Value, key: &str) -> &'a str {

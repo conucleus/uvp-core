@@ -1,120 +1,24 @@
-//! 编译产物：hook_plan 与 cloud artifact 两条产物线的组装（含依赖索引与
-//! signal capabilities）。
+//! cloud artifact 的组装，以及 analyze 复用的 signal capabilities / admissions
+//! 共享派生。
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use uvp_hook_dsl::{parse_hook, DependencyKind, Gate, HookMode, ParseHookRequest, Profile};
 use uvp_model::{ZhixuDefinition, ZhixuSendSignal};
 
-use crate::docking::{compile_dock_state, dock_entrance_hook_ids};
+use crate::docking::compile_dock_state;
 use crate::lower::{
-    build_executor_routes, build_selected_stage_bindings, compile_implicit_entry_hook,
-    compile_stage_hooks, flatten_stages, normalize_platform_value, parse_hook_for_cloud, value_str,
-    StageEntry,
+    build_selected_stage_bindings, flatten_stages, normalize_platform_value, parse_hook_for_cloud,
+    value_str, StageEntry,
 };
 use crate::validate::{
-    stage_is_subscription, valid_identifier_part, valid_signal_declaration, validate_implicit_entry,
-    validate_mint_anchors, validate_onchain_stage_materialization, validate_receive_signal_keys,
-    validate_receive_signal_references, validate_stage_executors, validate_subscription_delegation,
-    validate_zhixu_shape,
+    stage_is_subscription, valid_identifier_part, valid_signal_declaration, validate_mint_anchors,
+    validate_receive_signal_keys, validate_receive_signal_references, validate_stage_executors,
+    validate_subscription_delegation, validate_zhixu_shape,
 };
 use crate::{join_issues_bounded, CompilerError, Result};
 
-pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v4";
 pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v5";
-
-pub fn compile_zhixu_hook_plan(
-    definition_value: &Value,
-    dock_targets: Option<&Value>,
-    allow_unresolved: bool,
-) -> Result<Value> {
-    let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
-        .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
-    let issues = validate_zhixu_shape(&definition);
-    if !issues.is_empty() {
-        return Err(CompilerError::Issues(join_issues_bounded(&issues)));
-    }
-
-    let stage_entries = flatten_stages(&definition)?;
-    let stage_pairs = stage_entries
-        .iter()
-        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
-        .collect::<Vec<_>>();
-    let stage_ids = stage_entries
-        .iter()
-        .map(|entry| entry.stage_identifier.clone())
-        .collect::<BTreeSet<_>>();
-    let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-
-    let dock_state = compile_dock_state(&definition, &stage_pairs, dock_targets, allow_unresolved)?;
-    let (implicit_entry, entry_issues) = validate_implicit_entry(&stage_entries);
-
-    let mut validation_issues = Vec::new();
-    validation_issues.extend(entry_issues);
-    validation_issues.extend(validate_stage_executors(
-        &stage_entries,
-        &selected_stage_bindings,
-    ));
-    validation_issues.extend(validate_onchain_stage_materialization(
-        &stage_entries,
-        &dock_entrance_hook_ids(&dock_state),
-        implicit_entry
-            .as_ref()
-            .map(|entry| entry.stage_identifier.as_str()),
-    ));
-    validation_issues.extend(validate_mint_anchors(
-        &stage_entries,
-        &dock_state.entrance_fact_keys,
-    ));
-    validation_issues.extend(validate_subscription_delegation(&stage_entries));
-    validation_issues.extend(validate_receive_signal_keys(&stage_entries));
-    validation_issues.extend(validate_receive_signal_references(
-        &stage_entries,
-        &dock_state.input_port_hook_ids,
-    ));
-    if !validation_issues.is_empty() {
-        return Err(CompilerError::Issues(join_issues_bounded(
-            &validation_issues,
-        )));
-    }
-
-    let platform = normalize_platform_value(&definition.spec.platform)?;
-
-    let mut compiled_hooks = Vec::new();
-    for entry in &stage_entries {
-        if implicit_entry
-            .as_ref()
-            .is_some_and(|implicit| implicit.stage_identifier == entry.stage_identifier)
-        {
-            compiled_hooks.push(compile_implicit_entry_hook(entry)?);
-        }
-        compiled_hooks.extend(compile_stage_hooks(entry, &dock_state)?);
-    }
-    let dependency_index = build_dependency_index(&compiled_hooks);
-    let signal_capabilities = build_signal_capabilities(&stage_entries)?;
-    let admissions = build_signal_admissions(&stage_entries, &dock_state, Profile::EvmStrict)?;
-    let executor_routes = build_executor_routes(&stage_entries);
-
-    let mut artifact = json!({
-        "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
-        "zhixuName": definition.metadata.name,
-        "platform": platform,
-        "compiledHooks": compiled_hooks,
-        "dependencyIndex": dependency_index,
-        "executorRoutes": executor_routes,
-        "dockRoutes": Value::Array(dock_state.routes_json),
-        "selectedStageBindings": selected_stage_bindings,
-        "signalCapabilities": signal_capabilities,
-        "admissions": admissions,
-    });
-    if let Some(interface_json) = dock_state.interface_json {
-        artifact["dockInterface"] = interface_json;
-    }
-    if !dock_state.unresolved_json.is_empty() {
-        artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
-    }
-    Ok(artifact)
-}
 
 pub fn compile_cloud_artifact(
     definition_value: &Value,
@@ -276,30 +180,7 @@ fn cloud_hook_artifact(
     Ok(Value::Object(hook))
 }
 
-fn build_dependency_index(compiled_hooks: &[Value]) -> Value {
-    let mut index: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for hook in compiled_hooks {
-        let hook_id = value_str(hook, "hookId").to_string();
-        for dependency in hook["dependencies"].as_array().into_iter().flatten() {
-            let key = format!(
-                "{}::{}",
-                value_str(dependency, "source"),
-                value_str(dependency, "signalName")
-            );
-            index.entry(key).or_default().insert(hook_id.clone());
-        }
-    }
-    let mut out = Map::new();
-    for (key, hook_ids) in index {
-        out.insert(
-            key,
-            Value::Array(hook_ids.into_iter().map(Value::String).collect()),
-        );
-    }
-    Value::Object(out)
-}
-
-fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
+pub(crate) fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     let mut capabilities = Vec::new();
     let mut seen = BTreeSet::new();
     let mut current_order_owners: BTreeMap<(String, String), String> = BTreeMap::new();
@@ -384,18 +265,25 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &ZhixuSendSignal
     }))
 }
 
-fn build_signal_admissions(
+pub(crate) struct SignalAdmissionItems {
+    pub(crate) stage_identifier: String,
+    pub(crate) signal_name: String,
+    pub(crate) raw_expressions: Vec<String>,
+    pub(crate) parsed_items: Vec<uvp_hook_dsl::ParseHookOutput>,
+}
+
+pub(crate) fn validate_signal_admissions(
     entries: &[StageEntry],
     dock_state: &crate::docking::DockState,
     profile: Profile,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<SignalAdmissionItems>> {
     let minted_sources: BTreeSet<&str> = entries
         .iter()
         .filter(|entry| entry.stage.mint.is_some())
         .map(|entry| entry.stage.source.as_str())
         .collect();
     let birth_anchors = collect_birth_anchor_signals(entries, &dock_state.entrance_fact_keys);
-    let mut admissions = Vec::new();
+    let mut admissions: Vec<SignalAdmissionItems> = Vec::new();
     for entry in entries {
         let anchorless_channel = stage_is_subscription(&entry.stage)
             && !minted_sources.contains(entry.stage.source.as_str());
@@ -496,75 +384,96 @@ fn build_signal_admissions(
                     entry.stage_identifier, declared.name
                 )));
             }
-            let mut admission = Map::new();
-            admission.insert(
-                "stageIdentifier".to_string(),
-                Value::String(entry.stage_identifier.clone()),
-            );
-            admission.insert("signalName".to_string(), Value::String(full_name));
-            admission.insert(
-                "rawExpression".to_string(),
-                Value::Array(
-                    valid_when
-                        .iter()
-                        .map(|item| Value::String(item.clone()))
-                        .collect(),
-                ),
-            );
-            if profile == Profile::CloudCompat {
-                let mut dependencies = Vec::new();
-                let mut seen: BTreeSet<(String, DependencyKind)> = BTreeSet::new();
-                for parsed in &parsed_items {
-                    for dependency in &parsed.dependencies {
-                        if dependency.kind == DependencyKind::Timer {
-                            continue;
-                        }
-                        if !seen.insert((dependency.signal_name.clone(), dependency.kind)) {
-                            continue;
-                        }
-                        dependencies.push(json!({
-                            "signalName": dependency.signal_name,
-                            "dependencyKind": dependency.kind,
-                        }));
-                    }
-                }
-                admission.insert(
-                    "cloudAst".to_string(),
-                    compose_cloud_admission_ast(&parsed_items),
-                );
-                admission.insert("dependencies".to_string(), Value::Array(dependencies));
-            } else {
-                let mut dependencies = Vec::new();
-                let mut seen: BTreeSet<(String, String, DependencyKind, Option<i64>)> =
-                    BTreeSet::new();
-                for parsed in &parsed_items {
-                    for dependency in &parsed.dependencies {
-                        if !seen.insert((
-                            dependency.source.clone(),
-                            dependency.signal_name.clone(),
-                            dependency.kind,
-                            dependency.delay_seconds,
-                        )) {
-                            continue;
-                        }
-                        dependencies.push(
-                            serde_json::to_value(dependency)
-                                .map_err(|err| CompilerError::Message(err.to_string()))?,
-                        );
-                    }
-                }
-                admission.insert(
-                    "normalizedExpression".to_string(),
-                    Value::String(compose_normalized_admission(&parsed_items)),
-                );
-                admission.insert(
-                    "ast".to_string(),
-                    compose_ast_admission(&parsed_items, valid_when),
-                );
-                admission.insert("dependencies".to_string(), Value::Array(dependencies));
-            }
-            admissions.push(Value::Object(admission));
+            admissions.push(SignalAdmissionItems {
+                stage_identifier: entry.stage_identifier.clone(),
+                signal_name: full_name,
+                raw_expressions: valid_when.clone(),
+                parsed_items,
+            });
         }
+    }
+    Ok(admissions)
+}
+
+pub(crate) fn build_signal_admissions(
+    entries: &[StageEntry],
+    dock_state: &crate::docking::DockState,
+    profile: Profile,
+) -> Result<Vec<Value>> {
+    let validated = validate_signal_admissions(entries, dock_state, profile)?;
+    let mut admissions = Vec::with_capacity(validated.len());
+    for items in validated {
+        let SignalAdmissionItems {
+            stage_identifier,
+            signal_name,
+            raw_expressions,
+            parsed_items,
+        } = items;
+        let mut admission = Map::new();
+        admission.insert(
+            "stageIdentifier".to_string(),
+            Value::String(stage_identifier),
+        );
+        admission.insert("signalName".to_string(), Value::String(signal_name));
+        admission.insert(
+            "rawExpression".to_string(),
+            Value::Array(
+                raw_expressions
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+        if profile == Profile::CloudCompat {
+            let mut dependencies = Vec::new();
+            let mut seen: BTreeSet<(String, DependencyKind)> = BTreeSet::new();
+            for parsed in &parsed_items {
+                for dependency in &parsed.dependencies {
+                    if dependency.kind == DependencyKind::Timer {
+                        continue;
+                    }
+                    if !seen.insert((dependency.signal_name.clone(), dependency.kind)) {
+                        continue;
+                    }
+                    dependencies.push(json!({
+                        "signalName": dependency.signal_name,
+                        "dependencyKind": dependency.kind,
+                    }));
+                }
+            }
+            admission.insert(
+                "cloudAst".to_string(),
+                compose_cloud_admission_ast(&parsed_items),
+            );
+            admission.insert("dependencies".to_string(), Value::Array(dependencies));
+        } else {
+            let mut dependencies = Vec::new();
+            let mut seen: BTreeSet<(String, String, DependencyKind, Option<i64>)> = BTreeSet::new();
+            for parsed in &parsed_items {
+                for dependency in &parsed.dependencies {
+                    if !seen.insert((
+                        dependency.source.clone(),
+                        dependency.signal_name.clone(),
+                        dependency.kind,
+                        dependency.delay_seconds,
+                    )) {
+                        continue;
+                    }
+                    dependencies.push(
+                        serde_json::to_value(dependency)
+                            .map_err(|err| CompilerError::Message(err.to_string()))?,
+                    );
+                }
+            }
+            admission.insert(
+                "normalizedExpression".to_string(),
+                Value::String(compose_normalized_admission(&parsed_items)),
+            );
+            admission.insert("ast".to_string(), compose_ast_admission(&parsed_items, &raw_expressions));
+            admission.insert("dependencies".to_string(), Value::Array(dependencies));
+        }
+        admissions.push(Value::Object(admission));
     }
     admissions.sort_by(|left, right| {
         value_str(left, "stageIdentifier")

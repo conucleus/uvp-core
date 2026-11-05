@@ -213,7 +213,7 @@ fn lint_zhixu_json_envelope() {
 }
 
 #[test]
-fn lint_zhixu_does_not_change_compile_artifacts() {
+fn lint_zhixu_does_not_change_analysis() {
     let definition: ZhixuDefinition = serde_json::from_value(json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
@@ -240,13 +240,13 @@ fn lint_zhixu_does_not_change_compile_artifacts() {
             }
         }))
     .expect("test definition should deserialize");
-    let artifact = uvp_compiler::compile_zhixu_hook_plan(
-        &serde_json::to_value(&definition).unwrap(),
-        None,
-        true,
-    );
+    let analysis = uvp_compiler::compile_request(&uvp_compiler::CompileRequest {
+        target: "analyze".to_string(),
+        definition: serde_json::to_value(&definition).unwrap(),
+        dock_targets: None,
+    });
     assert!(
-        artifact.is_ok(),
-        "lint-dirty definition must still compile: {artifact:?}"
+        analysis.is_ok(),
+        "lint-dirty definition must still analyze: {analysis:?}"
     );
 }

@@ -69,25 +69,6 @@ pub fn semantic_version() -> String {
 }
 
 #[napi]
-pub fn hook_plan_schema_version() -> String {
-    uvp_compiler::HOOK_PLAN_SCHEMA_VERSION.to_string()
-}
-
-#[napi]
 pub fn build_fingerprint() -> String {
     env!("UVP_BUILD_FINGERPRINT").to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn schema_version_exports_match_the_ts_authority_literals() {
-        assert_eq!(uvp_hook_dsl::SEMANTIC_VERSION, "uvp.semantic.v1");
-        assert_eq!(
-            uvp_compiler::HOOK_PLAN_SCHEMA_VERSION,
-            "uvp.hookPlan.v4",
-            "TS authority literal is uvp.protocol compiler HOOK_PLAN_SCHEMA_VERSION"
-        );
-        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v4");
-    }
 }
