@@ -77,6 +77,7 @@ fn struct_field_sets_match_the_pinned_corpus() {
                 file_resources: [("doc".to_string(), json!({"type": "local"}))]
                     .into_iter()
                     .collect(),
+                file_writers: vec!["supervisor".to_string()],
             }],
             dock_interface: [(
                 "production_service".to_string(),
