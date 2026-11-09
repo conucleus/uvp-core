@@ -17,7 +17,6 @@ const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
 
 const MAX_STAGE_ENTRIES: usize = 256;
 const MAX_HOOKS: usize = 512;
-const MAX_FILE_WRITERS: usize = 8;
 
 pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     let mut issues = Vec::new();
@@ -162,13 +161,6 @@ fn is_plain_source_identifier(value: &str) -> bool {
 
 fn validate_file_writers(stage: &ZhixuStage, stage_names: &BTreeSet<&str>) -> Vec<String> {
     let mut issues = Vec::new();
-    if stage.file_writers.len() > MAX_FILE_WRITERS {
-        issues.push(format!(
-            "{}.fileWriters contains {} entries, limit is {MAX_FILE_WRITERS}",
-            stage.name,
-            stage.file_writers.len()
-        ));
-    }
     let mut seen = BTreeSet::new();
     for writer in &stage.file_writers {
         if writer.trim().is_empty() {

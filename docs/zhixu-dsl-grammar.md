@@ -136,7 +136,7 @@ spec:
 |---|---|---|---|
 | `spec.stages` | `array` | 是 | 至少 1 个。 |
 | `spec.stages[].name` | `string` | 是 | 秩序内全局不可重复。 |
-| `spec.stages[].fileWriters` | `[]string` | 否 | 跨阶段文件写授权：每项引用本定义内另一个阶段名，该阶段（本订单）的执行者由此可写本阶段的文件映射；本阶段执行者隐式可写，不得自引用。项须真实存在、不得重复、至多 8 个；字段参与定义身份派生（§2.1），文件 patch 的声明与运行语义见实现层执行文档。 |
+| `spec.stages[].fileWriters` | `[]string` | 否 | 跨阶段文件写 **stage 级 allowlist**：每项引用本定义内另一个阶段名，表示该阶段获准写本阶段的文件映射；本阶段自身隐式可写，不得自引用。项须真实存在、不得重复；字段不承载提交者身份或执行者语义（提交者认证由各轨自持），也不定义统一数量上限（链轨产物按自身 capacity 约束）。字段参与定义身份派生（§2.1），文件 patch 的声明与运行语义见实现层执行文档。 |
 
 **`spec.dockInterface`**（可选）：目标侧对外发布的具名接口 map，完整语义见 §7.2。
 
@@ -727,7 +727,7 @@ spec:
 | `stage.source` | string | 是 | ≤36B plain identifier | §4 |
 | `stage.mint` | string | 否 | 仅 `per-fact`；种类不可变 | §4/§6 |
 | `stage.selectedStages` | []string | 否 | `{stage}` 真实存在 | §4 |
-| `stage.fileWriters` | []string | 否 | 引用本定义其他阶段名（≤8、唯一、不自指）；其执行者获本阶段文件写权 | §4 |
+| `stage.fileWriters` | []string | 否 | 引用本定义其他阶段名（唯一、不自指）；stage 级文件写 allowlist，提交者认证由各轨自持 | §4 |
 | `stage.sendSignals[].name` | string | 是 | 裸名或两段式自指全名，归一唯一 | §4 |
 | `stage.sendSignals[].validWhen` | []string | 否 | 发射适格（过滤档）；每项完整 `{source}::{condition}`，header source 全等 | §5.6 |
 | `stage.receiveSignals` | map | 否 | key=通道名（1-36B，无 `.`/`#`/空白）；value=hook 或订阅 | §4/§5/§6 |
