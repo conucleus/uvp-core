@@ -72,6 +72,31 @@ pub struct ZhixuStage {
     pub receive_signals: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_resources: BTreeMap<String, Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_file_writers"
+    )]
+    pub file_writers: Vec<String>,
+}
+
+fn deserialize_file_writers<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<Value>::deserialize(deserializer)?;
+    let mut writers = Vec::with_capacity(raw.len());
+    for (index, entry) in raw.into_iter().enumerate() {
+        match entry {
+            Value::String(writer) => writers.push(writer),
+            other => {
+                return Err(serde::de::Error::custom(format!(
+                    "spec.stages[].fileWriters[{index}] must be a stage-name string, found {other}"
+                )))
+            }
+        }
+    }
+    Ok(writers)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

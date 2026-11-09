@@ -17,6 +17,7 @@ const NAME_SLUG_PATTERN: &str = "^[a-z][a-z0-9_-]{0,99}$";
 
 const MAX_STAGE_ENTRIES: usize = 256;
 const MAX_HOOKS: usize = 512;
+const MAX_FILE_WRITERS: usize = 8;
 
 pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> {
     let mut issues = Vec::new();
@@ -67,6 +68,12 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
             "definition declares {hook_total} receiveSignals channels (compiled hooks) across spec.stages, limit is {MAX_HOOKS}"
         ));
     }
+    let stage_names = definition
+        .spec
+        .stages
+        .iter()
+        .map(|stage| stage.name.as_str())
+        .collect::<BTreeSet<_>>();
     for (stage_index, stage) in definition.spec.stages.iter().enumerate() {
         if !valid_identifier_part(&stage.name) {
             issues.push(format!(
@@ -104,6 +111,7 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                 issues.push(issue);
             }
         }
+        issues.extend(validate_file_writers(stage, &stage_names));
         if stage.source.trim().is_empty() {
             issues.push(format!(
                 "spec.stages[{stage_index}].source must be non-empty"
@@ -150,6 +158,48 @@ fn is_plain_source_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+fn validate_file_writers(stage: &ZhixuStage, stage_names: &BTreeSet<&str>) -> Vec<String> {
+    let mut issues = Vec::new();
+    if stage.file_writers.len() > MAX_FILE_WRITERS {
+        issues.push(format!(
+            "{}.fileWriters contains {} entries, limit is {MAX_FILE_WRITERS}",
+            stage.name,
+            stage.file_writers.len()
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for writer in &stage.file_writers {
+        if writer.trim().is_empty() {
+            issues.push(format!(
+                "{}.fileWriters contains an empty stage reference",
+                stage.name
+            ));
+            continue;
+        }
+        if writer == &stage.name {
+            issues.push(format!(
+                "{}.fileWriters must not reference the declaring stage itself (self is implicit)",
+                stage.name
+            ));
+            continue;
+        }
+        if !stage_names.contains(writer.as_str()) {
+            issues.push(format!(
+                "{}.fileWriters references unknown stage {}",
+                stage.name, writer
+            ));
+            continue;
+        }
+        if !seen.insert(writer.as_str()) {
+            issues.push(format!(
+                "{}.fileWriters contains duplicate writer stage {}",
+                stage.name, writer
+            ));
+        }
+    }
+    issues
 }
 
 fn file_resource_type_issue(path: &str, key: &str, resource: &Value) -> Option<String> {

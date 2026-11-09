@@ -149,6 +149,10 @@ fn stage_analysis(entry: &StageEntry) -> Result<Value> {
         serialized(&entry.stage.selected_stages)?,
     );
     stage.insert(
+        "fileWriters".to_string(),
+        serialized(&entry.stage.file_writers)?,
+    );
+    stage.insert(
         "fileResources".to_string(),
         serialized(&entry.stage.file_resources)?,
     );
