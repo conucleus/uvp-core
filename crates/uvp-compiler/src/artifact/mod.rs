@@ -55,6 +55,7 @@ pub fn compile_zhixu_hook_plan(
     validation_issues.extend(validate_onchain_stage_materialization(
         &stage_entries,
         &dock_entrance_hook_ids(&dock_state),
+        None,
     ));
     validation_issues.extend(validate_mint_anchors(
         &stage_entries,
@@ -294,7 +295,7 @@ fn build_dependency_index(compiled_hooks: &[Value]) -> Value {
     Value::Object(out)
 }
 
-fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
+pub(crate) fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {
     let mut capabilities = Vec::new();
     let mut seen = BTreeSet::new();
     let mut current_order_owners: BTreeMap<(String, String), String> = BTreeMap::new();
@@ -379,7 +380,7 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &ZhixuSendSignal
     }))
 }
 
-fn build_signal_admissions(
+pub(crate) fn build_signal_admissions(
     entries: &[StageEntry],
     dock_state: &crate::docking::DockState,
     profile: Profile,

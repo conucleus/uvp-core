@@ -8,11 +8,13 @@ use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 
+pub use analysis::compile_zhixu_analysis;
 pub use artifact::{compile_cloud_artifact, compile_zhixu_hook_plan};
 
 pub mod dock;
 pub mod lint;
 
+mod analysis;
 mod artifact;
 mod docking;
 mod lower;
@@ -68,6 +70,8 @@ pub struct CompileRequest {
     pub definition: Value,
     #[serde(default)]
     pub dock_targets: Option<Value>,
+    #[serde(default)]
+    pub allow_unresolved: bool,
 }
 
 fn default_target() -> String {
@@ -87,6 +91,7 @@ pub fn compile_request(req: &CompileRequest) -> Result<Value> {
         "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, dock_targets, false),
         "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, dock_targets, false),
         "parse" => compile_zhixu_hook_plan(&req.definition, dock_targets, true),
+        "analyze" => compile_zhixu_analysis(&req.definition, dock_targets, req.allow_unresolved),
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"
         ))),
