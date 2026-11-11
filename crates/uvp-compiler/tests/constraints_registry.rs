@@ -264,7 +264,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             "fileType must be one of",
         ),
     ));
-        probes.push((
+    probes.push((
         "stage-entries-max-count".into(),
         (
             || probe_compile(base_definition()),
@@ -596,7 +596,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             "hook source must be a plain identifier",
         ),
     ));
-            probes.push((
+    probes.push((
         "hook-delay-seconds-range".into(),
         (
             || probe_hook("evm_strict", "TIMEOUT", "buyer::(pay.cmp +2592000s)"),
