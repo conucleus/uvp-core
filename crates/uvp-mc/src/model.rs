@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, TimeZone, Utc};
-use uvp_hook_dsl::{DecodedCompiledHook, EvalState, HookMode};
+use uvp_hook_dsl::{DecodedCompiledHook, EvalState};
 
 use crate::vocab::Vocabulary;
 use crate::{McError, Result};
@@ -93,7 +93,6 @@ pub fn next_deadline_epoch(
     let now_dt = epoch_to_dt(now);
     for site in &vocab.delay_sites {
         let operand = DecodedCompiledHook {
-            mode: HookMode::Normal,
             source: site.source.clone(),
             expr: site.operand.clone(),
         };

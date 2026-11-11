@@ -191,7 +191,7 @@ fn implies(a: &Expr, b: &Expr, budget: &mut usize) -> ProofResult {
                 return ProofResult::Proven(ProofReason::DelayReady);
             }
         }
-        Expr::Signal(_) | Expr::Subscription { .. } | Expr::Not(_) => {}
+        Expr::Signal(_) | Expr::Not(_) => {}
     }
     match b {
         Expr::Or(b_terms) => {
@@ -213,7 +213,7 @@ fn implies(a: &Expr, b: &Expr, budget: &mut usize) -> ProofResult {
                 return ProofResult::Proven(ProofReason::AndMember);
             }
         }
-        Expr::Signal(_) | Expr::Subscription { .. } | Expr::Not(_) | Expr::Delay { .. } => {}
+        Expr::Signal(_) | Expr::Not(_) | Expr::Delay { .. } => {}
     }
     ProofResult::Unknown
 }
@@ -242,7 +242,7 @@ fn forced_positive(expr: &Expr, out: &mut BTreeSet<String>) {
         Expr::Signal(signal) => {
             out.insert(signal.clone());
         }
-        Expr::Subscription { .. } | Expr::Not(_) => {}
+        Expr::Not(_) => {}
         Expr::Delay { expr: inner, .. } => forced_positive(inner, out),
         Expr::And(terms) => {
             for term in terms {
@@ -260,7 +260,7 @@ fn forced_negative(expr: &Expr, out: &mut BTreeSet<String>) {
                 out.insert(signal.clone());
             }
         }
-        Expr::Signal(_) | Expr::Subscription { .. } => {}
+        Expr::Signal(_) => {}
         Expr::Delay { expr: inner, .. } => forced_negative(inner, out),
         Expr::And(terms) => {
             for term in terms {
@@ -288,7 +288,7 @@ pub fn contradicts(a: &Expr, b: &Expr) -> Option<String> {
 
 fn provably_impossible(expr: &Expr) -> bool {
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } | Expr::Not(_) => false,
+        Expr::Signal(_) | Expr::Not(_) => false,
         Expr::Delay { expr: inner, .. } => provably_impossible(inner),
         Expr::And(terms) => {
             terms.iter().any(provably_impossible)
@@ -304,7 +304,7 @@ fn provably_impossible(expr: &Expr) -> bool {
 
 fn boolean_depth(expr: &Expr) -> usize {
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } => 0,
+        Expr::Signal(_) => 0,
         Expr::Not(inner) => boolean_depth(inner),
         Expr::Delay { expr: inner, .. } => boolean_depth(inner),
         Expr::And(terms) | Expr::Or(terms) => {
@@ -334,7 +334,7 @@ impl SpannedExpr {
         spans: &mut std::iter::Copied<std::slice::Iter<'_, Span>>,
     ) -> Option<SpannedExpr> {
         let children = match expr {
-            Expr::Signal(_) | Expr::Subscription { .. } => Vec::new(),
+            Expr::Signal(_) => Vec::new(),
             Expr::Not(inner) => vec![Self::try_build(inner, spans)?],
             Expr::And(terms) | Expr::Or(terms) => terms
                 .iter()
@@ -352,7 +352,7 @@ impl SpannedExpr {
 
     fn spanless(expr: &Expr) -> SpannedExpr {
         let children = match expr {
-            Expr::Signal(_) | Expr::Subscription { .. } => Vec::new(),
+            Expr::Signal(_) => Vec::new(),
             Expr::Not(inner) => vec![Self::spanless(inner)],
             Expr::And(terms) | Expr::Or(terms) => terms.iter().map(Self::spanless).collect(),
             Expr::Delay { expr: inner, .. } => vec![Self::spanless(inner)],
@@ -467,9 +467,6 @@ pub fn lint_hook_in_stage(
 }
 
 pub fn lint_spanned_tree(tree: &SpannedExpr, hook_name: &str) -> Vec<LintDiagnostic> {
-    if matches!(tree.expr, Expr::Subscription { .. }) {
-        return Vec::new();
-    }
     let expensive = tree.node_count() <= MAX_LINT_NODES;
     let mut diagnostics = Vec::new();
     if boolean_depth(&tree.expr) > MAX_LINT_BOOLEAN_DEPTH {

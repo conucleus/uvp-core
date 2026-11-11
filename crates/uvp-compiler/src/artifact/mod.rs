@@ -3,7 +3,7 @@
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use uvp_hook_dsl::{parse_hook, DependencyKind, Gate, HookMode, ParseHookRequest, Profile};
+use uvp_hook_dsl::{parse_hook, DependencyKind, Gate, ParseHookRequest, Profile};
 use uvp_model::{ZhixuDefinition, ZhixuSendSignal};
 
 use crate::docking::{compile_dock_state, dock_entrance_hook_ids};
@@ -12,15 +12,14 @@ use crate::lower::{
     normalize_platform_value, parse_hook_for_cloud, value_str, StageEntry,
 };
 use crate::validate::{
-    stage_is_subscription, valid_identifier_part, valid_signal_declaration, validate_mint_anchors,
-    validate_onchain_stage_materialization, validate_receive_signal_keys,
-    validate_receive_signal_references, validate_stage_executors, validate_subscription_delegation,
-    validate_zhixu_shape,
+    valid_identifier_part, valid_signal_declaration, validate_onchain_stage_materialization,
+    validate_receive_signal_keys, validate_receive_signal_references, validate_stage_executors,
+    validate_stage_triggers, validate_zhixu_shape,
 };
 use crate::{join_issues_bounded, CompilerError, Result};
 
-pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v4";
-pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v5";
+pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v5";
+pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v6";
 
 pub fn compile_zhixu_hook_plan(
     definition_value: &Value,
@@ -55,13 +54,8 @@ pub fn compile_zhixu_hook_plan(
     validation_issues.extend(validate_onchain_stage_materialization(
         &stage_entries,
         &dock_entrance_hook_ids(&dock_state),
-        None,
     ));
-    validation_issues.extend(validate_mint_anchors(
-        &stage_entries,
-        &dock_state.entrance_fact_keys,
-    ));
-    validation_issues.extend(validate_subscription_delegation(&stage_entries));
+    validation_issues.extend(validate_stage_triggers(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(
         &stage_entries,
@@ -81,7 +75,7 @@ pub fn compile_zhixu_hook_plan(
     }
     let dependency_index = build_dependency_index(&compiled_hooks);
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
-    let admissions = build_signal_admissions(&stage_entries, &dock_state, Profile::EvmStrict)?;
+    let admissions = build_signal_admissions(&stage_entries, Profile::EvmStrict)?;
     let executor_routes = build_executor_routes(&stage_entries);
 
     let mut artifact = json!({
@@ -134,18 +128,14 @@ pub fn compile_cloud_artifact(
         &stage_entries,
         &selected_stage_bindings,
     ));
-    validation_issues.extend(validate_mint_anchors(
-        &stage_entries,
-        &dock_state.entrance_fact_keys,
-    ));
-    validation_issues.extend(validate_subscription_delegation(&stage_entries));
+    validation_issues.extend(validate_stage_triggers(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
     validation_issues.extend(validate_receive_signal_references(
         &stage_entries,
         &dock_state.input_port_hook_ids,
     ));
     build_signal_capabilities(&stage_entries)?;
-    let admissions = build_signal_admissions(&stage_entries, &dock_state, Profile::CloudCompat)?;
+    let admissions = build_signal_admissions(&stage_entries, Profile::CloudCompat)?;
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(join_issues_bounded(
             &validation_issues,
@@ -214,9 +204,11 @@ fn cloud_stage_artifact(entry: &StageEntry) -> Result<Value> {
                 .map_err(|err| CompilerError::Message(err.to_string()))?,
         );
     }
-    if let Some(mint) = &entry.stage.mint {
-        stage.insert("mint".to_string(), Value::String(mint.trim().to_string()));
-    }
+    stage.insert(
+        "triggers".to_string(),
+        serde_json::to_value(crate::analysis::trigger_signal_names(entry))
+            .map_err(|err| CompilerError::Message(err.to_string()))?,
+    );
     Ok(Value::Object(stage))
 }
 
@@ -382,19 +374,10 @@ fn parse_signal_capability(entry: &StageEntry, declared_signal: &ZhixuSendSignal
 
 pub(crate) fn build_signal_admissions(
     entries: &[StageEntry],
-    dock_state: &crate::docking::DockState,
     profile: Profile,
 ) -> Result<Vec<Value>> {
-    let minted_sources: BTreeSet<&str> = entries
-        .iter()
-        .filter(|entry| entry.stage.mint.is_some())
-        .map(|entry| entry.stage.source.as_str())
-        .collect();
-    let birth_anchors = collect_birth_anchor_signals(entries, &dock_state.entrance_fact_keys);
     let mut admissions = Vec::new();
     for entry in entries {
-        let anchorless_channel = stage_is_subscription(&entry.stage)
-            && !minted_sources.contains(entry.stage.source.as_str());
         for declared in &entry.stage.send_signals {
             let Some(valid_when) = &declared.valid_when else {
                 continue;
@@ -405,29 +388,11 @@ pub(crate) fn build_signal_admissions(
                     entry.stage_identifier, declared.name
                 )));
             }
-            if anchorless_channel {
-                return Err(CompilerError::Issues(format!(
-                    "D029 {}.sendSignals[{}].validWhen: {} is an anchorless channel stage (fan-in subscription delivery has no order to judge; the admission face is a per-order state judgment)",
-                    entry.stage_identifier, declared.name, entry.stage_identifier
-                )));
-            }
             let full_name = if declared.name.contains('.') {
                 declared.name.clone()
             } else {
                 format!("{}.{}", entry.stage_identifier, declared.name)
             };
-            if birth_anchors.contains(&full_name) {
-                return Err(CompilerError::Issues(format!(
-                    "D029 {}.sendSignals[{}].validWhen: {} is a birth-anchor signal (mint SPAWN birth target or dock order.mode=new birth-anchor input; birth writes bypass the admission face, a validWhen here is dead code)",
-                    entry.stage_identifier, declared.name, full_name
-                )));
-            }
-            if dock_state.output_relay_signals.contains(&full_name) {
-                return Err(CompilerError::Issues(format!(
-                    "D029 {}.sendSignals[{}].validWhen: {} is a signalMap relay target (dock output relay writes the fact through the engine-internal ingress, which bypasses the admission face; a validWhen here is dead code)",
-                    entry.stage_identifier, declared.name, full_name
-                )));
-            }
             let mut parsed_items = Vec::with_capacity(valid_when.len());
             for (index, item) in valid_when.iter().enumerate() {
                 if item.trim().is_empty() {
@@ -448,12 +413,6 @@ pub(crate) fn build_signal_admissions(
                         entry.stage_identifier, declared.name
                     ))
                 })?;
-                if parsed.mode == HookMode::Subscription {
-                    return Err(CompilerError::Issues(format!(
-                        "D030 {}.sendSignals[{}].validWhen[{index}]: admission is a per-order state judgment and must not contain subscription atoms (ANCHOR(@…))",
-                        entry.stage_identifier, declared.name
-                    )));
-                }
                 if parsed
                     .dependencies
                     .iter()
@@ -578,7 +537,7 @@ fn compose_cloud_admission_ast(parsed_items: &[uvp_hook_dsl::ParseHookOutput]) -
     json!({
         "schemaVersion": parsed_items[0].cloud_ast["schemaVersion"],
         "source": parsed_items[0].source,
-        "mode": HookMode::Normal,
+        "mode": "normal",
         "root": fold_admission_roots(&roots),
     })
 }
@@ -648,26 +607,4 @@ fn compose_ast_admission(
         "source": parsed_items[0].source,
         "condition": {"kind": "and", "terms": terms},
     })
-}
-
-fn collect_birth_anchor_signals(
-    entries: &[StageEntry],
-    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
-) -> BTreeSet<String> {
-    let mut birth: BTreeSet<String> = BTreeSet::new();
-    for entry in entries {
-        if entry.stage.mint.is_none() {
-            continue;
-        }
-        for raw_expression in entry.stage.receive_signals.values() {
-            let Ok(parsed) = crate::lower::parse_hook_for_compiler("HOOK", raw_expression) else {
-                continue;
-            };
-            if let Some(target) = &parsed.subscription_target {
-                birth.insert(target.signal_name.clone());
-            }
-        }
-    }
-    birth.extend(entrance_fact_keys.keys().map(|(_, signal)| signal.clone()));
-    birth
 }

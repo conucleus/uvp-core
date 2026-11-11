@@ -85,9 +85,9 @@ mod tests {
         assert_eq!(uvp_hook_dsl::SEMANTIC_VERSION, "uvp.semantic.v1");
         assert_eq!(
             uvp_compiler::HOOK_PLAN_SCHEMA_VERSION,
-            "uvp.hookPlan.v4",
+            "uvp.hookPlan.v5",
             "TS authority literal is uvp.protocol compiler HOOK_PLAN_SCHEMA_VERSION"
         );
-        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v4");
+        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v5");
     }
 }

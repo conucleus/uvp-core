@@ -81,7 +81,7 @@ fn retired_fan_in_hook_plan_fails_loudly_in_replay() {
                     "stageId": "exchange",
                     "stageIdentifier": "exchange",
                     "hookName": "PAIR",
-                    "orderTriggerKind": "mint",
+                    "orderTriggerKind": "trigger",
                     "emitReady": true,
                     "instructions": [
                         {"op": "SIGNAL", "signalKey": "0x50"},
@@ -149,7 +149,7 @@ fn ready_status_changes_and_duplicates_are_absorbed() {
                     "stageId": "start",
                     "stageIdentifier": "start",
                     "hookName": "START",
-                    "orderTriggerKind": "mint",
+                    "orderTriggerKind": "trigger",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }],
@@ -254,7 +254,7 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
                 "stageId": "one",
                 "stageIdentifier": "one",
                 "hookName": "ENTER",
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "trigger",
                 "emitReady": true,
                 "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
             },
@@ -263,7 +263,7 @@ fn ordinary_signals_do_not_advance_order_trigger_hooks() {
                 "stageId": "two",
                 "stageIdentifier": "two",
                 "hookName": "ENTER",
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "trigger",
                 "emitReady": true,
                 "instructions": [{"op": "SIGNAL", "signalKey": "0x51"}]
             }
@@ -680,7 +680,7 @@ fn replays_ready_hook() {
                     "stageId": "0x20",
                     "stageIdentifier": "start",
                     "hookName": "START",
-                    "orderTriggerKind": "mint",
+                    "orderTriggerKind": "trigger",
                     "emitReady": true,
                     "instructions": [{
                         "op": "SIGNAL",
@@ -756,7 +756,7 @@ fn emit_ready_is_independent_from_order_materialization() {
         "stageId": "start",
         "stageIdentifier": "start",
         "hookName": "SILENT",
-        "orderTriggerKind": "mint",
+        "orderTriggerKind": "trigger",
         "emitReady": false,
         "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
     });
@@ -890,7 +890,7 @@ fn hooks_missing_required_v2_fields_are_rejected() {
         "stageId": "start",
         "stageIdentifier": "start",
         "hookName": "BARE",
-        "orderTriggerKind": "mint",
+        "orderTriggerKind": "trigger",
         "isTrigger": true,
         "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
     });
@@ -924,7 +924,7 @@ fn replay_scopes_same_order_id_by_plan() {
                     "stageId": "start",
                     "stageIdentifier": "start",
                     "hookName": "READY",
-                    "orderTriggerKind": "mint",
+                    "orderTriggerKind": "trigger",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }],
@@ -997,7 +997,7 @@ fn single_hook_plan(hook_id: &str, instructions: Value) -> Value {
             "stageId": "start",
             "stageIdentifier": "start",
             "hookName": "START",
-            "orderTriggerKind": "mint",
+            "orderTriggerKind": "trigger",
             "emitReady": true,
             "instructions": instructions,
         }],
@@ -1346,7 +1346,7 @@ fn per_key_hook_ids_evaluate_triggers_before_watchers_in_stable_order() {
               "hookName": "W1", "orderTriggerKind": "none", "emitReady": true,
               "instructions": [{ "op": "SIGNAL", "signalKey": "0x50" }] },
             { "hookId": "birth#T", "stageId": "birth", "stageIdentifier": "birth",
-              "hookName": "T", "orderTriggerKind": "mint", "emitReady": true,
+              "hookName": "T", "orderTriggerKind": "trigger", "emitReady": true,
               "instructions": [{ "op": "SIGNAL", "signalKey": "0x50" }] },
             { "hookId": "watch#W2", "stageId": "two", "stageIdentifier": "two",
               "hookName": "W2", "orderTriggerKind": "none", "emitReady": true,
@@ -1422,7 +1422,7 @@ fn order_link_birth_requires_structural_hook_fields() {
                     "hookId": "entry#BIRTH",
                     "stageIdentifier": "entry",
                     "hookName": "BIRTH",
-                    "orderTriggerKind": "mint",
+                    "orderTriggerKind": "trigger",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 }],
@@ -1492,7 +1492,7 @@ fn order_link_birth_requires_structural_hook_fields() {
 
 #[test]
 fn order_trigger_hook_with_delay_is_a_structural_error() {
-    for kind in ["mint", "dock"] {
+    for kind in ["trigger", "dock"] {
         let events = vec![json!({
             "eventName": "PlanRegistered",
             "blockNumber": 1,
@@ -2643,7 +2643,7 @@ fn duplicate_hook_id_in_plan_is_a_structural_error() {
                     "stageId": "exchange",
                     "stageIdentifier": "exchange",
                     "hookName": "PAIR",
-                    "orderTriggerKind": "mint",
+                    "orderTriggerKind": "trigger",
                     "emitReady": true,
                     "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                 },
@@ -2688,7 +2688,7 @@ fn duplicate_order_triggered_with_conflicting_tx_is_loud() {
                         "stageId": "entry",
                         "stageIdentifier": "entry",
                         "hookName": "BIRTH",
-                        "orderTriggerKind": "mint",
+                        "orderTriggerKind": "trigger",
                         "emitReady": true,
                         "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
                     }],

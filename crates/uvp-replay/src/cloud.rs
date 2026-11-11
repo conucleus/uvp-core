@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use uvp_hook_dsl::{
-    decode_compiled_hook, valid_signal_identity, DecodedCompiledHook, EvalState, Gate, HookMode,
+    decode_compiled_hook, valid_signal_identity, DecodedCompiledHook, EvalState, Gate,
 };
 
 use crate::{ReplayError, Result};
@@ -46,11 +46,6 @@ pub const STATUS_INIT: &str = "init";
 pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOutcome> {
     let decoded = decode_compiled_hook(&request.ast, Gate::Hook)
         .map_err(|err| ReplayError::Message(err.to_string()))?;
-    if decoded.mode == HookMode::Subscription {
-        return Ok(CloudReplayOutcome {
-            status: STATUS_READY,
-        });
-    }
     let now = parse_cloud_time(&request.now)?;
     let mut facts = Vec::with_capacity(request.facts.len());
     for fact in &request.facts {
@@ -278,17 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn subscription_mode_short_circuits_to_ready() {
-        let outcome = replay_compiled_hook(CloudReplayRequest {
-            ast: cloud_ast("::ANCHOR(@src::b.signal)"),
-            facts: vec![],
-            now: iso(0),
-        })
-        .expect("subscription replay must succeed");
-        assert_eq!(outcome.status, STATUS_READY);
-    }
-
-    #[test]
     fn re_arrival_is_inert_for_the_pending_window() {
         let outcome = walk(
             "src::b.approved + 2h",
@@ -349,7 +333,7 @@ mod tests {
     #[test]
     fn malformed_ast_fails_loudly() {
         let result = replay_compiled_hook(CloudReplayRequest {
-            ast: json!({"schemaVersion": "uvp.cloudAst.v1", "mode": "normal"}),
+            ast: json!({"schemaVersion": "uvp.cloudAst.v2", "mode": "normal"}),
             facts: vec![],
             now: iso(0),
         });

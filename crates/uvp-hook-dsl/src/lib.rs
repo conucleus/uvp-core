@@ -21,7 +21,7 @@ pub use lint::{
     MAX_LINT_NODES, MAX_PAIRWISE_HOOKS,
 };
 
-pub use ast::{valid_signal_identity, Compatibility, Expr, HookExpr, HookMode, SubscriptionTarget};
+pub use ast::{valid_signal_identity, Compatibility, Expr, HookExpr};
 pub use dependency::{Dependency, DependencyKind};
 pub use evaluation::{
     decode_compiled_hook, eval_compiled_hook, DecodedCompiledHook, EvalCompiledHookOutput,
@@ -39,9 +39,7 @@ use serde_json::Value;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
-pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v1";
-
-pub const RETIRED_KEYWORDS_HINT: &str = "cross-source entries retired in uvp.semantic.v1; use ::ANCHOR(@source::stage.signal) as the unified subscription entry (see subscription-mint-spec.md)";
+pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v2";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

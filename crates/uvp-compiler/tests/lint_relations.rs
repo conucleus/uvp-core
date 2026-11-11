@@ -147,16 +147,6 @@ fn unprovable_relations_stay_silent() {
 }
 
 #[test]
-fn duplicate_subscription_targets_are_equivalent() {
-    let codes = lint_codes(json!({
-        "SUB_ONE": "::ANCHOR(@seller::listing.cmp)",
-        "SUB_TWO": "::ANCHOR(@seller::listing.cmp)",
-        "LOCAL": "buyer::a.cmp"
-    }));
-    assert_eq!(codes, vec!["UVP-L020"]);
-}
-
-#[test]
 fn layer_one_diagnostics_carry_hook_ids() {
     let diagnostic = find_diagnostic(json!({ "DUP": "buyer::a.cmp & a.cmp" }), "UVP-L001");
     assert_eq!(diagnostic.hook_name.as_deref(), Some("main#DUP"));

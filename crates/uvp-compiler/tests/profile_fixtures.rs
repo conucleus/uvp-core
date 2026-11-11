@@ -78,6 +78,7 @@ fn run_fixture(fixture: &ProfileFixture) {
         target: fixture.target.clone(),
         definition: fixture.input.clone(),
         dock_targets: fixture.dock_targets.clone(),
+        allow_unresolved: false,
     });
     match (&fixture.expect.error_contains, result) {
         (Some(expected), Err(err)) => {
@@ -195,6 +196,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
         target: fixture.target.clone(),
         definition: fixture.input.clone(),
         dock_targets: fixture.dock_targets.clone(),
+        allow_unresolved: false,
     })
     .unwrap_or_else(|err| {
         panic!(
@@ -212,7 +214,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
     match fixture.target.as_str() {
         "hook_plan" | "evm" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.hookPlan.v4",
+                value["schemaVersion"], "uvp.hookPlan.v5",
                 "{}",
                 fixture.name
             );
@@ -220,7 +222,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
         }
         "cloud" | "cloud_db" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.cloudArtifact.v5",
+                value["schemaVersion"], "uvp.cloudArtifact.v6",
                 "{}",
                 fixture.name
             );

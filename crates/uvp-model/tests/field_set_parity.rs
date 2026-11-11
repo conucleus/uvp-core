@@ -59,7 +59,7 @@ fn struct_field_sets_match_the_pinned_corpus() {
             stages: vec![ZhixuStage {
                 name: "main".to_string(),
                 source: "buyer".to_string(),
-                mint: Some("per-fact".to_string()),
+                trigger: vec!["main.cmp".to_string()],
                 executor: Some(ZhixuExecutor {
                     supplier_type: "organization".to_string(),
                     supplier_id: Some("org".to_string()),

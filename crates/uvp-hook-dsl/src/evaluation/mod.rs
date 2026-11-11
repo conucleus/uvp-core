@@ -6,8 +6,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::ast::{
-    contains_nested_subscription, is_plain_identifier, normalize_tight, valid_signal_identity,
-    validate_filter_hook, validate_hook, Expr, HookMode,
+    is_plain_identifier, normalize_tight, valid_signal_identity, validate_filter_hook,
+    validate_hook, Expr,
 };
 use crate::parser::{duration_to_seconds, MAX_PARSE_DEPTH};
 use crate::{
@@ -63,7 +63,6 @@ pub struct SignalFact {
 
 #[derive(Debug, Clone)]
 pub struct DecodedCompiledHook {
-    pub mode: HookMode,
     pub source: String,
     pub expr: Expr,
 }
@@ -107,15 +106,7 @@ pub fn decode_compiled_hook(ast: &Value, gate: Gate) -> Result<DecodedCompiledHo
         .ok_or_else(|| HookError::Message("compiled hook AST must be an object".to_string()))?;
     reject_unknown_keys(
         ast_object,
-        &[
-            "schemaVersion",
-            "source",
-            "mode",
-            "subscriptionTarget",
-            "mint",
-            "route",
-            "root",
-        ],
+        &["schemaVersion", "source", "mode", "root"],
         "compiled hook AST",
     )?;
     let schema_version = ast
@@ -133,153 +124,32 @@ pub fn decode_compiled_hook(ast: &Value, gate: Gate) -> Result<DecodedCompiledHo
         .get("mode")
         .and_then(Value::as_str)
         .ok_or_else(|| HookError::Message("compiled hook AST is missing mode".to_string()))?;
-    if !matches!(mode, "normal" | "subscription") {
+    if mode != "normal" {
         return Err(HookError::Message(format!(
             "unsupported compiled hook AST mode: {mode}"
         )));
     }
-    let mint = optional_ast_str(ast_object, "mint")?;
-    let route = optional_ast_str(ast_object, "route")?;
-    match mode {
-        "subscription" => {
-            if !mint.is_empty() && mint != "per-fact" {
-                return Err(HookError::Message(format!(
-                    "compiled hook AST mint only supports per-fact: {mint}"
-                )));
-            }
-            if !route.is_empty() && route != "order" && route != "fanin" {
-                return Err(HookError::Message(format!(
-                    "compiled hook AST route is invalid: {route}"
-                )));
-            }
-        }
-        _ => {
-            if !mint.is_empty() || !route.is_empty() {
-                return Err(HookError::Message(
-                    "compiled hook AST mint/route is only allowed on subscription mode".to_string(),
-                ));
-            }
-        }
-    }
-    let (target_source, target_signal) = if mode == "subscription" {
-        let target = ast
-            .get("subscriptionTarget")
-            .ok_or_else(|| {
-                HookError::Message(
-                    "compiled subscription hook AST is missing subscriptionTarget".to_string(),
-                )
-            })?
-            .clone();
-        let target_object = target.as_object().ok_or_else(|| {
-            HookError::Message("compiled subscriptionTarget must be an object".to_string())
-        })?;
-        reject_unknown_keys(
-            target_object,
-            &["source", "signal"],
-            "compiled subscriptionTarget",
-        )?;
-        let source = target_object
-            .get("source")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
-        let signal = target_object
-            .get("signal")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
-        let (source, signal) =
-            match (source, signal) {
-                (Some(source), Some(signal)) => (source, signal),
-                _ => return Err(HookError::Message(
-                    "compiled subscription hook AST is missing subscriptionTarget.source/.signal"
-                        .to_string(),
-                )),
-            };
-        if !is_plain_identifier(source) || source.len() > 36 {
-            return Err(HookError::Message(format!(
-                    "compiled subscriptionTarget source must be a plain identifier of at most 36 characters: {source:?}"
-                )));
-        }
-        if !valid_signal_identity(signal) {
-            return Err(HookError::Message(format!(
-                    "compiled subscriptionTarget signal must use stage.signal and be at most 100 characters: {signal:?}"
-                )));
-        }
-        (source.to_string(), signal.to_string())
-    } else {
-        if ast_object.contains_key("subscriptionTarget") {
-            return Err(HookError::Message(
-                "compiled normal hook AST must not carry subscriptionTarget".to_string(),
-            ));
-        }
-        (String::new(), String::new())
-    };
     let raw_source = optional_ast_str(ast_object, "source")?;
-    let source = match mode {
-        "subscription" => {
-            if !raw_source.is_empty() {
-                return Err(HookError::Message(
-                    "compiled subscription hook AST source must be empty".to_string(),
-                ));
-            }
-            String::new()
-        }
-        _ => {
-            if raw_source.trim().is_empty() {
-                return Err(HookError::Message(
-                    "compiled hook AST is missing source".to_string(),
-                ));
-            }
-            let source = raw_source.to_string();
-            if !is_plain_identifier(&source) || source.len() > 36 {
-                return Err(HookError::Message(format!(
-                    "compiled hook AST source must be a plain identifier of at most 36 characters: {source:?}"
-                )));
-            }
-            source
-        }
-    };
+    if raw_source.trim().is_empty() {
+        return Err(HookError::Message(
+            "compiled hook AST is missing source".to_string(),
+        ));
+    }
+    let source = raw_source.to_string();
+    if !is_plain_identifier(&source) || source.len() > 36 {
+        return Err(HookError::Message(format!(
+            "compiled hook AST source must be a plain identifier of at most 36 characters: {source:?}"
+        )));
+    }
     let root = ast
         .get("root")
         .ok_or_else(|| HookError::Message("compiled hook AST root is missing".to_string()))?;
     let expr = expr_from_cloud_value(root)?;
-    match mode {
-        "subscription" => {
-            let Expr::Subscription {
-                source: node_source,
-                target: node_target,
-            } = &expr
-            else {
-                return Err(HookError::Message(
-                    "compiled subscription hook AST root must be a subscription node".to_string(),
-                ));
-            };
-            if node_source != &target_source || node_target != &target_signal {
-                return Err(HookError::Message(
-                    "compiled subscription hook AST subscriptionTarget does not match the root subscription node"
-                        .to_string(),
-                ));
-            }
-        }
-        "normal" if contains_nested_subscription(&expr) => {
-            return Err(HookError::Message(
-                "compiled normal hook AST must not contain subscription nodes".to_string(),
-            ));
-        }
-        _ => {}
-    }
     match gate {
         Gate::Hook => validate_hook(&expr)?,
         Gate::Filter => validate_filter_hook(&expr)?,
     }
-    Ok(DecodedCompiledHook {
-        mode: if mode == "subscription" {
-            HookMode::Subscription
-        } else {
-            HookMode::Normal
-        },
-        source,
-        expr,
-    })
+    Ok(DecodedCompiledHook { source, expr })
 }
 
 pub fn eval_compiled_hook(req: EvalCompiledHookRequest) -> Result<EvalCompiledHookOutput> {
@@ -374,49 +244,6 @@ fn expr_from_cloud_value_at_depth(value: &Value, depth: usize) -> Result<Expr> {
                 )));
             }
             Ok(Expr::Signal(signal.to_string()))
-        }
-        "subscription" => {
-            reject_unknown_keys(
-                value.as_object().ok_or_else(|| {
-                    HookError::Message(
-                        "compiled subscription AST node must be an object".to_string(),
-                    )
-                })?,
-                &["type", "source", "signal"],
-                "compiled subscription AST node",
-            )?;
-            let source = value
-                .get("source")
-                .and_then(Value::as_str)
-                .filter(|source| !source.trim().is_empty())
-                .ok_or_else(|| {
-                    HookError::Message(
-                        "compiled subscription AST node is missing source".to_string(),
-                    )
-                })?;
-            let signal = value
-                .get("signal")
-                .and_then(Value::as_str)
-                .filter(|signal| !signal.trim().is_empty())
-                .ok_or_else(|| {
-                    HookError::Message(
-                        "compiled subscription AST node is missing signal".to_string(),
-                    )
-                })?;
-            if !is_plain_identifier(source) || source.len() > 36 {
-                return Err(HookError::Message(format!(
-                    "compiled subscription AST node source must be a plain identifier of at most 36 characters: {source:?}"
-                )));
-            }
-            if !valid_signal_identity(signal) {
-                return Err(HookError::Message(format!(
-                    "compiled subscription AST node signal must use stage.signal and be at most 100 characters: {signal:?}"
-                )));
-            }
-            Ok(Expr::Subscription {
-                source: source.to_string(),
-                target: signal.to_string(),
-            })
         }
         "neg" => {
             reject_unknown_keys(
@@ -560,16 +387,6 @@ fn eval_expr(
 ) -> Result<InternalEval> {
     match expr {
         Expr::Signal(signal) => eval_signal(source, signal, signals),
-        Expr::Subscription { .. } => Ok(InternalEval {
-            state: EvalState::NeedsMore,
-            anchors: Vec::new(),
-            ready_at: None,
-            expires_at: None,
-            reason: Some(
-                "subscription hooks are delivered per contributing event by the state machine"
-                    .to_string(),
-            ),
-        }),
         Expr::Not(inner) => {
             let evaluated = eval_expr(inner, source, signals, now)?;
             match evaluated.state {

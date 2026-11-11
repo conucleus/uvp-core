@@ -129,14 +129,11 @@ pub(crate) fn compile_stage_hooks(
     dock_state: &DockState,
 ) -> Result<Vec<Value>> {
     let mut hooks = Vec::new();
-    let is_mint_stage = entry.stage.mint.is_some();
     let entrance_hook_ids = dock_entrance_hook_ids(dock_state);
     let is_zhixu_stage = is_zhixu_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
         let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
-        let order_trigger_kind = if is_mint_stage {
-            "mint"
-        } else if entrance_hook_ids.contains(&hook_id) {
+        let order_trigger_kind = if entrance_hook_ids.contains(&hook_id) {
             "dock"
         } else {
             "none"

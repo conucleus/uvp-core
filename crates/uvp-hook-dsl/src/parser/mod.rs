@@ -5,16 +5,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ast::{
-    cloud_ast_for, compatibility_for, hook_mode, hook_to_value, is_plain_identifier,
-    is_strict_signal_ref, normalize_condition, runtime_condition, validate_filter_hook,
-    validate_hook, validate_subscription_position, Compatibility, Expr, HookExpr, HookMode,
-    NormalizeStyle, SubscriptionTarget,
+    cloud_ast_for, compatibility_for, hook_to_value, is_plain_identifier, is_strict_signal_ref,
+    normalize_condition, runtime_condition, validate_filter_hook, validate_hook, Compatibility,
+    Expr, HookExpr, NormalizeStyle,
 };
 use crate::dependency::{extract_dependencies, Dependency};
 use crate::lint::Span;
-use crate::{
-    Gate, HookError, Profile, Result, CORE_VERSION, RETIRED_KEYWORDS_HINT, SEMANTIC_VERSION,
-};
+use crate::{Gate, HookError, Profile, Result, CORE_VERSION, SEMANTIC_VERSION};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,13 +22,10 @@ pub struct ParseHookOutput {
     pub compatibility: Compatibility,
     pub hook_name: String,
     pub source: String,
-    pub mode: HookMode,
     pub raw_hook: String,
     pub raw_condition: String,
     pub runtime_condition: String,
     pub normalized_expression: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subscription_target: Option<SubscriptionTarget>,
     pub dependencies: Vec<Dependency>,
     pub ast: Value,
     pub cloud_ast: Value,
@@ -64,7 +58,6 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
         .split_once("::")
         .map(|(_, cond)| cond.trim().to_string())
         .unwrap_or_default();
-    let mode = hook_mode(&hook.condition);
     let compatibility = compatibility_for(&hook, profile);
     let runtime_condition = runtime_condition(&hook, &hook_name, profile)?;
     let normalized_expression = format!(
@@ -74,13 +67,6 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
     );
     let dependencies = extract_dependencies(&hook, profile);
     let cloud_ast = cloud_ast_for(&hook, &hook_name, profile)?;
-    let subscription_target = match &hook.condition {
-        Expr::Subscription { source, target } => Some(SubscriptionTarget {
-            source: source.clone(),
-            signal_name: target.clone(),
-        }),
-        _ => None,
-    };
 
     Ok(ParseHookOutput {
         uvp_core_version: CORE_VERSION,
@@ -89,12 +75,10 @@ pub fn parse_hook(req: ParseHookRequest) -> Result<ParseHookOutput> {
         compatibility,
         hook_name,
         source: hook.source.clone(),
-        mode,
         raw_hook: req.hook,
         raw_condition,
         runtime_condition,
         normalized_expression,
-        subscription_target,
         dependencies,
         ast: hook_to_value(&hook),
         cloud_ast,
@@ -134,9 +118,9 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
             "hook condition cannot be empty".to_string(),
         ));
     }
-    if source.is_empty() && !starts_cross_source(condition_raw) {
+    if source.is_empty() {
         return Err(HookError::Message(
-            "empty source is only allowed for ANCHOR(@…) subscription hooks".to_string(),
+            "hook source must not be empty".to_string(),
         ));
     }
     if !source.is_empty() {
@@ -155,13 +139,6 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
     let mut parser = Parser::new(condition_raw);
     let condition = parser.parse()?;
     let spans = parser.spans;
-    validate_subscription_position(&condition, true)?;
-    if matches!(condition, Expr::Subscription { .. }) && !source.is_empty() {
-        return Err(HookError::Message(
-            "subscription entries must use an empty source header: ::ANCHOR(@source::stage.signal)"
-                .to_string(),
-        ));
-    }
     Ok((
         HookExpr {
             raw: raw.to_string(),
@@ -170,17 +147,6 @@ pub fn parse_hook_expr_with_spans(raw: &str) -> Result<(HookExpr, Vec<Span>)> {
         },
         spans,
     ))
-}
-
-fn starts_cross_source(value: &str) -> bool {
-    ["ANCHOR", "OUTSIDE", "OUTSOURCE"].iter().any(|keyword| {
-        let Some(rest) = value.strip_prefix(keyword) else {
-            return false;
-        };
-        rest.chars()
-            .next()
-            .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')))
-    })
 }
 
 fn reject_unsupported_operators(condition: &str) -> Result<()> {
@@ -329,93 +295,14 @@ impl<'a> Parser<'a> {
 
         let ident_start = self.index;
         let ident = self.read_identifier()?;
-        match ident.as_str() {
-            "ANCHOR" => self.parse_subscription(ident_start),
-            "OUTSIDE" | "OUTSOURCE" => Err(HookError::Message(format!(
-                "{ident}@ is not supported: {RETIRED_KEYWORDS_HINT}"
-            ))),
-            _ => {
-                if !is_strict_signal_ref(&ident) {
-                    return Err(HookError::Message(format!(
-                        "signal reference must use stage.signal: {ident}"
-                    )));
-                }
-                self.spans
-                    .push(Span::new(ident_start, self.span_end_here()));
-                Ok(Expr::Signal(ident))
-            }
-        }
-    }
-
-    fn parse_subscription(&mut self, anchor_start: usize) -> Result<Expr> {
-        self.skip_ws();
-        if self.peek() == '@' {
+        if !is_strict_signal_ref(&ident) {
             return Err(HookError::Message(format!(
-                "ANCHOR@ header form is not supported: {RETIRED_KEYWORDS_HINT}"
-            )));
-        }
-        if !self.consume("(") {
-            return Err(HookError::Message(format!(
-                "expected '(' after ANCHOR at {}",
-                self.index
-            )));
-        }
-        let target_raw = self.read_balanced_target()?;
-        let target = target_raw.strip_prefix('@').ok_or_else(|| {
-            HookError::Message(format!(
-                "subscription target must be @source::stage.signal: {target_raw:?}"
-            ))
-        })?;
-        let (source, signal) = target.split_once("::").ok_or_else(|| {
-            HookError::Message(format!(
-                "subscription target must be @source::stage.signal: {target_raw:?}"
-            ))
-        })?;
-        if !is_plain_identifier(source) {
-            return Err(HookError::Message(format!(
-                "subscription source must be a plain identifier: {source:?}"
-            )));
-        }
-        if source.len() > 36 {
-            return Err(HookError::Message(format!(
-                "subscription source exceeds the maximum length of 36 characters: {source:?}"
-            )));
-        }
-        if signal.len() > 100 {
-            return Err(HookError::Message(format!(
-                "subscription target signal exceeds the maximum length of 100 characters: {signal:?}"
-            )));
-        }
-        let segments = signal.split('.').collect::<Vec<_>>();
-        if segments.len() != 2 || !segments.iter().all(|part| is_plain_identifier(part)) {
-            return Err(HookError::Message(format!(
-                "subscription target must use stage.signal: {signal:?}"
+                "signal reference must use stage.signal: {ident}"
             )));
         }
         self.spans
-            .push(Span::new(anchor_start, self.span_end_here()));
-        Ok(Expr::Subscription {
-            source: source.to_string(),
-            target: signal.to_string(),
-        })
-    }
-
-    fn read_balanced_target(&mut self) -> Result<String> {
-        let mut depth = 1;
-        let start = self.index;
-        while !self.at_end() {
-            let ch = self.peek();
-            self.index += ch.len_utf8();
-            if ch == '(' {
-                depth += 1;
-            } else if ch == ')' {
-                depth -= 1;
-                if depth == 0 {
-                    return Ok(self.input[start..self.index - 1].to_string());
-                }
-            }
-        }
-        Err(HookError::Message("unterminated @() target".to_string()))
+            .push(Span::new(ident_start, self.span_end_here()));
+        Ok(Expr::Signal(ident))
     }
 
     fn read_duration(&mut self) -> Result<String> {

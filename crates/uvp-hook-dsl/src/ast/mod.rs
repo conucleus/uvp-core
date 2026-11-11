@@ -4,15 +4,11 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::{HookError, Profile, Result, CLOUD_AST_SCHEMA_VERSION, RETIRED_KEYWORDS_HINT};
+use crate::{HookError, Profile, Result, CLOUD_AST_SCHEMA_VERSION};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Signal(String),
-    Subscription {
-        source: String,
-        target: String,
-    },
     Not(Box<Expr>),
     And(Vec<Expr>),
     Or(Vec<Expr>),
@@ -30,47 +26,11 @@ pub struct HookExpr {
     pub condition: Expr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionTarget {
-    pub source: String,
-    pub signal_name: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Compatibility {
     Portable,
     CloudOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HookMode {
-    Normal,
-    Subscription,
-}
-
-pub(crate) fn validate_subscription_position(expr: &Expr, root: bool) -> Result<()> {
-    match expr {
-        Expr::Subscription { .. } => {
-            if !root {
-                return Err(HookError::Message(format!(
-                    "{RETIRED_KEYWORDS_HINT}; a subscription must be the complete hook condition"
-                )));
-            }
-            Ok(())
-        }
-        Expr::Signal(_) => Ok(()),
-        Expr::Not(inner) => validate_subscription_position(inner, false),
-        Expr::And(terms) | Expr::Or(terms) => {
-            for term in terms {
-                validate_subscription_position(term, false)?;
-            }
-            Ok(())
-        }
-        Expr::Delay { expr, .. } => validate_subscription_position(expr, false),
-    }
 }
 
 fn reject_nested_delay(expr: &Expr, inside_delay: bool) -> Result<()> {
@@ -91,7 +51,7 @@ fn reject_nested_delay(expr: &Expr, inside_delay: bool) -> Result<()> {
             }
             Ok(())
         }
-        Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
+        Expr::Signal(_) => Ok(()),
     }
 }
 
@@ -118,7 +78,7 @@ pub(crate) fn validate_hook(expr: &Expr) -> Result<()> {
 pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
     reject_nested_delay(expr, false)?;
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } => Ok(()),
+        Expr::Signal(_) => Ok(()),
         Expr::Not(inner) => match inner.as_ref() {
             Expr::Signal(_) => Ok(()),
             Expr::Delay { .. } => validate_filter_hook(inner),
@@ -147,7 +107,7 @@ pub(crate) fn validate_filter_hook(expr: &Expr) -> Result<()> {
 
 fn validate_anchors(expr: &Expr, veto_slot: bool, inside_delay_operand: bool) -> Result<bool> {
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } => Ok(true),
+        Expr::Signal(_) => Ok(true),
         Expr::Not(inner) => match inner.as_ref() {
             Expr::Signal(_) => Ok(false),
             Expr::Delay {
@@ -217,7 +177,7 @@ fn validate_anchors(expr: &Expr, veto_slot: bool, inside_delay_operand: bool) ->
 
 fn has_positive_anchor(expr: &Expr) -> bool {
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } => true,
+        Expr::Signal(_) => true,
         Expr::Not(_) => false,
         Expr::Delay { expr, .. } => has_positive_anchor(expr),
         Expr::And(terms) | Expr::Or(terms) => terms.iter().any(has_positive_anchor),
@@ -240,9 +200,6 @@ pub(crate) fn normalize_condition(expr: &Expr, style: NormalizeStyle) -> String 
 pub(crate) fn normalize_tight(expr: &Expr) -> String {
     match expr {
         Expr::Signal(signal) => signal.clone(),
-        Expr::Subscription { source, target } => {
-            format!("ANCHOR(@{source}::{target})")
-        }
         Expr::Not(inner) => format!("~{}", normalize_for_unary_tight(inner)),
         Expr::Delay {
             expr, raw_duration, ..
@@ -264,7 +221,7 @@ pub(crate) fn normalize_tight(expr: &Expr) -> String {
 
 fn normalize_for_unary_tight(expr: &Expr) -> String {
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } => normalize_tight(expr),
+        Expr::Signal(_) => normalize_tight(expr),
         _ => format!("({})", normalize_tight(expr)),
     }
 }
@@ -280,9 +237,6 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
     let precedence = precedence(expr);
     let body = match expr {
         Expr::Signal(signal) => signal.clone(),
-        Expr::Subscription { source, target } => {
-            format!("ANCHOR(@{source}::{target})")
-        }
         Expr::Not(inner) => format!("~{}", normalize_cloud(inner, precedence)),
         Expr::Delay {
             expr, raw_duration, ..
@@ -313,7 +267,7 @@ fn precedence(expr: &Expr) -> u8 {
         Expr::Or(_) => 1,
         Expr::And(_) => 2,
         Expr::Not(_) | Expr::Delay { .. } => 3,
-        Expr::Signal(_) | Expr::Subscription { .. } => 4,
+        Expr::Signal(_) => 4,
     }
 }
 
@@ -322,21 +276,9 @@ pub(crate) fn runtime_condition(
     _hook_name: &str,
     profile: Profile,
 ) -> Result<String> {
-    if profile == Profile::EvmStrict {
-        return Ok(normalize_condition(&hook.condition, NormalizeStyle::Tight));
-    }
-    match &hook.condition {
-        Expr::Subscription { .. } => {
-            Ok(normalize_condition(&hook.condition, NormalizeStyle::Tight))
-        }
-        _ => Ok(normalize_condition(&hook.condition, NormalizeStyle::Cloud)),
-    }
-}
-
-pub(crate) fn hook_mode(expr: &Expr) -> HookMode {
-    match expr {
-        Expr::Subscription { .. } => HookMode::Subscription,
-        _ => HookMode::Normal,
+    match profile {
+        Profile::EvmStrict => Ok(normalize_condition(&hook.condition, NormalizeStyle::Tight)),
+        Profile::CloudCompat => Ok(normalize_condition(&hook.condition, NormalizeStyle::Cloud)),
     }
 }
 
@@ -358,11 +300,6 @@ pub(crate) fn hook_to_value(hook: &HookExpr) -> Value {
 fn expr_to_ts_value(expr: &Expr) -> Value {
     match expr {
         Expr::Signal(signal) => json!({ "kind": "signal", "signalName": signal }),
-        Expr::Subscription { source, target } => json!({
-            "kind": "subscription",
-            "source": source,
-            "signal": target
-        }),
         Expr::Not(inner) => json!({ "kind": "not", "expr": expr_to_ts_value(inner) }),
         Expr::And(terms) => {
             json!({ "kind": "and", "terms": terms.iter().map(expr_to_ts_value).collect::<Vec<_>>() })
@@ -384,34 +321,17 @@ fn expr_to_ts_value(expr: &Expr) -> Value {
 }
 
 pub(crate) fn cloud_ast_for(hook: &HookExpr, _hook_name: &str, _profile: Profile) -> Result<Value> {
-    match &hook.condition {
-        Expr::Subscription { source, target } => Ok(json!({
-            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
-            "source": "",
-            "mode": HookMode::Subscription,
-            "subscriptionTarget": {
-                "source": source,
-                "signal": target,
-            },
-            "root": expr_to_cloud_value(&hook.condition)
-        })),
-        _ => Ok(json!({
-            "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
-            "source": hook.source.clone(),
-            "mode": HookMode::Normal,
-            "root": expr_to_cloud_value(&hook.condition)
-        })),
-    }
+    Ok(json!({
+        "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
+        "source": hook.source.clone(),
+        "mode": "normal",
+        "root": expr_to_cloud_value(&hook.condition)
+    }))
 }
 
 fn expr_to_cloud_value(expr: &Expr) -> Value {
     match expr {
         Expr::Signal(signal) => json!({ "type": "signal", "signal": signal }),
-        Expr::Subscription { source, target } => json!({
-            "type": "subscription",
-            "source": source,
-            "signal": target
-        }),
         Expr::Not(inner) => json!({ "type": "neg", "expr": expr_to_cloud_value(inner) }),
         Expr::And(terms) => fold_cloud_terms("and", terms),
         Expr::Or(terms) => fold_cloud_terms("or", terms),
@@ -445,15 +365,6 @@ fn fold_cloud_terms(kind: &str, terms: &[Expr]) -> Value {
         }
     }
     fold_balanced(kind, terms)
-}
-
-pub(crate) fn contains_nested_subscription(expr: &Expr) -> bool {
-    match expr {
-        Expr::Subscription { .. } => true,
-        Expr::Signal(_) => false,
-        Expr::Not(inner) | Expr::Delay { expr: inner, .. } => contains_nested_subscription(inner),
-        Expr::And(terms) | Expr::Or(terms) => terms.iter().any(contains_nested_subscription),
-    }
 }
 
 pub(crate) fn is_strict_signal_ref(value: &str) -> bool {

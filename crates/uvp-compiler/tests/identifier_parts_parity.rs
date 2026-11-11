@@ -43,6 +43,7 @@ fn compile_with_send_signal(
         target: "hook_plan".to_string(),
         definition: corpus_definition(send_signal),
         dock_targets: None,
+        allow_unresolved: false,
     })
 }
 

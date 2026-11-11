@@ -66,63 +66,6 @@
       }
     },
     {
-      "name": "subscription entry fans class events into executor",
-      "profile": "cloud_compat",
-      "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::listing.cmp)",
-      "expect": {
-        "source": "",
-        "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@seller::listing.cmp)",
-        "normalizedExpression": "::ANCHOR(@seller::listing.cmp)",
-        "dependencies": [
-          {
-            "kind": "positive",
-            "source": "seller",
-            "signalName": "listing.cmp"
-          }
-        ]
-      }
-    },
-    {
-      "name": "subscription entry addresses another class in the same domain",
-      "profile": "cloud_compat",
-      "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@buyer::juice_demand.requested)",
-      "expect": {
-        "source": "",
-        "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@buyer::juice_demand.requested)",
-        "normalizedExpression": "::ANCHOR(@buyer::juice_demand.requested)",
-        "dependencies": [
-          {
-            "kind": "positive",
-            "source": "buyer",
-            "signalName": "juice_demand.requested"
-          }
-        ]
-      }
-    },
-    {
-      "name": "subscription entry tolerates whitespace between ANCHOR and target",
-      "profile": "cloud_compat",
-      "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR (@seller::a.b)",
-      "expect": {
-        "source": "",
-        "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@seller::a.b)",
-        "normalizedExpression": "::ANCHOR(@seller::a.b)",
-        "dependencies": [
-          {
-            "kind": "positive",
-            "source": "seller",
-            "signalName": "a.b"
-          }
-        ]
-      }
-    },
-    {
       "name": "cloud delay over grouped operands keeps single parentheses",
       "profile": "cloud_compat",
       "hookName": "TIMEOUT",
@@ -154,25 +97,6 @@
             "source": "buyer",
             "signalName": "ship.cmp",
             "delaySeconds": 5
-          }
-        ]
-      }
-    },
-    {
-      "name": "36-byte subscription target source boundary",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::main.cmp)",
-      "expect": {
-        "source": "",
-        "mode": "subscription",
-        "runtimeCondition": "ANCHOR(@ssssssssssssssssssssssssssssssssssss::main.cmp)",
-        "normalizedExpression": "::ANCHOR(@ssssssssssssssssssssssssssssssssssss::main.cmp)",
-        "dependencies": [
-          {
-            "kind": "positive",
-            "source": "ssssssssssssssssssssssssssssssssssss",
-            "signalName": "main.cmp"
           }
         ]
       }
@@ -743,36 +667,6 @@
       }
     },
     {
-      "name": "subscription entry defers per-event delivery to state machine",
-      "profile": "cloud_compat",
-      "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::listing.cmp)",
-      "now": "2026-04-27T00:00:00.000Z",
-      "signals": [],
-      "expect": {
-        "state": "needs_more",
-        "reasonContains": "delivered per"
-      }
-    },
-    {
-      "name": "subscription stays needs_more even when the target signal is already delivered",
-      "profile": "cloud_compat",
-      "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::listing.cmp)",
-      "now": "2026-04-27T00:00:00.000Z",
-      "signals": [
-        {
-          "source": "seller",
-          "signalName": "listing.cmp",
-          "receivedAt": "2026-04-26T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "needs_more",
-        "reasonContains": "delivered per"
-      }
-    },
-    {
       "name": "or composite delay anchors on earliest maturing branch (waiting)",
       "profile": "evm_strict",
       "hookName": "TRIGGER",
@@ -986,24 +880,6 @@
       "expect": {
         "state": "ready",
         "readyAt": "2026-04-27T00:00:06.000Z"
-      }
-    },
-    {
-      "name": "subscription channel addressing ignores a same-named fact from another source class",
-      "profile": "cloud_compat",
-      "hookName": "SUBSCRIBE",
-      "hook": "::ANCHOR(@seller::listing.cmp)",
-      "now": "2026-04-27T00:00:00.000Z",
-      "signals": [
-        {
-          "source": "buyer",
-          "signalName": "listing.cmp",
-          "receivedAt": "2026-04-27T00:00:00.000Z"
-        }
-      ],
-      "expect": {
-        "state": "needs_more",
-        "reasonContains": "delivered per"
       }
     },
     {
@@ -1326,7 +1202,7 @@
       "profile": "cloud_compat",
       "hookName": "HOOK",
       "hook": "::main.cmp",
-      "messageContains": "empty source is only allowed"
+      "messageContains": "hook source must not be empty"
     },
     {
       "name": "single segment short name",
@@ -1362,97 +1238,6 @@
       "hookName": "HOOK",
       "hook": "buyer::pay.cmp +0s",
       "messageContains": "invalid duration"
-    },
-    {
-      "name": "outside entry is retired",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::OUTSIDE@(seller::main.cmp)",
-      "messageContains": "retired"
-    },
-    {
-      "name": "legacy anchor header form is retired",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR@(main.settle)",
-      "messageContains": "retired"
-    },
-    {
-      "name": "bare outsource is retired",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::OUTSOURCE@(seller::main.cmp)",
-      "messageContains": "retired"
-    },
-    {
-      "name": "bare outside is retired",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "buyer::OUTSIDE",
-      "messageContains": "retired"
-    },
-    {
-      "name": "subscription mixed with operators is rejected",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::main.cmp) & other.cmp",
-      "messageContains": "must be the complete hook condition"
-    },
-    {
-      "name": "headed subscription entry is rejected",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "buyer::ANCHOR(@seller::main.cmp)",
-      "messageContains": "empty source header"
-    },
-    {
-      "name": "subscription target requires full signal name",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::cmp)",
-      "messageContains": "stage.signal"
-    },
-    {
-      "name": "subscription source requires plain identifier",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@::listing.cmp)",
-      "messageContains": "plain identifier"
-    },
-    {
-      "name": "subscription target with extra separator is rejected",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::main.cmp::extra)",
-      "messageContains": "stage.signal"
-    },
-    {
-      "name": "subscription target with embedded space is rejected",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller names::listing.cmp)",
-      "messageContains": "plain identifier"
-    },
-    {
-      "name": "subscription target with three signal segments is rejected",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::a.b.c)",
-      "messageContains": "stage.signal"
-    },
-    {
-      "name": "oversized subscription target signal is rejected",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@seller::main.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)",
-      "messageContains": "maximum length of 100"
-    },
-    {
-      "name": "oversized subscription target source is rejected",
-      "profile": "cloud_compat",
-      "hookName": "HOOK",
-      "hook": "::ANCHOR(@sssssssssssssssssssssssssssssssssssss::main.cmp)",
-      "messageContains": "maximum length of 36"
     },
     {
       "name": "unparenthesized chained delay is rejected",
@@ -1614,33 +1399,126 @@
     }
   ],
   "delayLiteralCases": [
-    { "name": "one second", "literal": "1s", "seconds": 1 },
-    { "name": "sub-minute seconds", "literal": "59s", "seconds": 59 },
-    { "name": "minute-boundary seconds", "literal": "60s", "seconds": 60 },
-    { "name": "one minute", "literal": "1m", "seconds": 60 },
-    { "name": "minutes", "literal": "90m", "seconds": 5400 },
-    { "name": "minutes at the 30d cap", "literal": "43200m", "seconds": 2592000 },
-    { "name": "one hour", "literal": "1h", "seconds": 3600 },
-    { "name": "hours at the 30d cap", "literal": "720h", "seconds": 2592000 },
-    { "name": "one day", "literal": "1d", "seconds": 86400 },
-    { "name": "observation window", "literal": "14d", "seconds": 1209600 },
-    { "name": "cap in days", "literal": "30d", "seconds": 2592000 },
-    { "name": "cap in seconds", "literal": "2592000s", "seconds": 2592000 },
-    { "name": "empty literal", "literal": "" },
-    { "name": "bare integer", "literal": "1" },
-    { "name": "bare unit", "literal": "s" },
-    { "name": "zero duration", "literal": "0s" },
-    { "name": "leading zero", "literal": "05m" },
-    { "name": "signed duration", "literal": "+5s" },
-    { "name": "fractional duration", "literal": "1.5h" },
-    { "name": "week unit", "literal": "10w" },
-    { "name": "non-ascii unit", "literal": "1ü" },
-    { "name": "one second past the cap", "literal": "2592001s" },
-    { "name": "31 days", "literal": "31d" },
-    { "name": "i64 overflow", "literal": "9223372036854775808d" },
-    { "name": "i64 max days", "literal": "9223372036854775807d" },
-    { "name": "18-digit days", "literal": "999999999999999999d" },
-    { "name": "uppercase unit", "literal": "5S" }
+    {
+      "name": "one second",
+      "literal": "1s",
+      "seconds": 1
+    },
+    {
+      "name": "sub-minute seconds",
+      "literal": "59s",
+      "seconds": 59
+    },
+    {
+      "name": "minute-boundary seconds",
+      "literal": "60s",
+      "seconds": 60
+    },
+    {
+      "name": "one minute",
+      "literal": "1m",
+      "seconds": 60
+    },
+    {
+      "name": "minutes",
+      "literal": "90m",
+      "seconds": 5400
+    },
+    {
+      "name": "minutes at the 30d cap",
+      "literal": "43200m",
+      "seconds": 2592000
+    },
+    {
+      "name": "one hour",
+      "literal": "1h",
+      "seconds": 3600
+    },
+    {
+      "name": "hours at the 30d cap",
+      "literal": "720h",
+      "seconds": 2592000
+    },
+    {
+      "name": "one day",
+      "literal": "1d",
+      "seconds": 86400
+    },
+    {
+      "name": "observation window",
+      "literal": "14d",
+      "seconds": 1209600
+    },
+    {
+      "name": "cap in days",
+      "literal": "30d",
+      "seconds": 2592000
+    },
+    {
+      "name": "cap in seconds",
+      "literal": "2592000s",
+      "seconds": 2592000
+    },
+    {
+      "name": "empty literal",
+      "literal": ""
+    },
+    {
+      "name": "bare integer",
+      "literal": "1"
+    },
+    {
+      "name": "bare unit",
+      "literal": "s"
+    },
+    {
+      "name": "zero duration",
+      "literal": "0s"
+    },
+    {
+      "name": "leading zero",
+      "literal": "05m"
+    },
+    {
+      "name": "signed duration",
+      "literal": "+5s"
+    },
+    {
+      "name": "fractional duration",
+      "literal": "1.5h"
+    },
+    {
+      "name": "week unit",
+      "literal": "10w"
+    },
+    {
+      "name": "non-ascii unit",
+      "literal": "1ü"
+    },
+    {
+      "name": "one second past the cap",
+      "literal": "2592001s"
+    },
+    {
+      "name": "31 days",
+      "literal": "31d"
+    },
+    {
+      "name": "i64 overflow",
+      "literal": "9223372036854775808d"
+    },
+    {
+      "name": "i64 max days",
+      "literal": "9223372036854775807d"
+    },
+    {
+      "name": "18-digit days",
+      "literal": "999999999999999999d"
+    },
+    {
+      "name": "uppercase unit",
+      "literal": "5S"
+    }
   ],
   "replayCases": [
     {
@@ -1669,7 +1547,7 @@
                     "signalKey": "0x0000000000000000000000000000000000000000000000000000000000000f01"
                   }
                 ],
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "trigger",
                 "emitReady": true
               }
             ],
@@ -1899,7 +1777,7 @@
                     "arity": 2
                   }
                 ],
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "trigger",
                 "emitReady": true
               }
             ],
@@ -2310,7 +2188,7 @@
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c07",
                 "stageIdentifier": "stage",
                 "hookName": "BIRTH",
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "trigger",
                 "emitReady": true,
                 "instructions": [
                   {
@@ -2463,7 +2341,7 @@
                 "stageId": "0x0000000000000000000000000000000000000000000000000000000000000c08",
                 "stageIdentifier": "stage",
                 "hookName": "BIRTH",
-                "orderTriggerKind": "mint",
+                "orderTriggerKind": "trigger",
                 "emitReady": true,
                 "instructions": [
                   {

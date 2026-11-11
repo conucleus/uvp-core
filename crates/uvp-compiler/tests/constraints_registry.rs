@@ -264,40 +264,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             "fileType must be one of",
         ),
     ));
-    probes.push((
-        "birth-channel-key-union-uniqueness".into(),
-        (
-            || probe_compile(base_definition()),
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    stage_mut(&mut d)["receiveSignals"] = json!({
-                        "START": "buyer::work.cmp",
-                        "GO": "buyer::work.seed"
-                    });
-                    d["spec"]["dockInterface"] = json!({
-                        "service": {
-                            "orderModes": ["new"],
-                            "inputs": { "enter": { "hook": "work#GO" } }
-                        }
-                    });
-                    d["spec"]["stages"][0]["sendSignals"] =
-                        json!([{ "name": "str" }, { "name": "cmp" }, { "name": "seed" }]);
-                    d["spec"]["stages"].as_array_mut().unwrap().push(json!({
-                        "name": "retail",
-                        "source": "buyer",
-                        "mint": "per-fact",
-                        "receiveSignals": { "SPAWN": "::ANCHOR(@buyer::work.seed)" },
-                        "sendSignals": [{ "name": "ack" }],
-                        "executor": { "supplierType": "organization", "supplierID": "mint-org" }
-                    }));
-                    d
-                })
-            },
-            "出生通道键并集查重",
-        ),
-    ));
-    probes.push((
+        probes.push((
         "stage-entries-max-count".into(),
         (
             || probe_compile(base_definition()),
@@ -629,35 +596,7 @@ fn rust_probes() -> Vec<(String, Probe)> {
             "hook source must be a plain identifier",
         ),
     ));
-    probes.push((
-        "subscription-target-source-max-length".into(),
-        (
-            || probe_hook("cloud_compat", "SUB", "::ANCHOR(@seller::listing.cmp)"),
-            || {
-                probe_hook(
-                    "cloud_compat",
-                    "SUB",
-                    &format!("::ANCHOR(@{}::main.cmp)", oversize_ascii(37, b's')),
-                )
-            },
-            "subscription source exceeds the maximum length of 36",
-        ),
-    ));
-    probes.push((
-        "subscription-target-signal-max-length".into(),
-        (
-            || probe_hook("cloud_compat", "SUB", "::ANCHOR(@seller::listing.cmp)"),
-            || {
-                probe_hook(
-                    "cloud_compat",
-                    "SUB",
-                    &format!("::ANCHOR(@seller::main.{})", oversize_ascii(101, b'a')),
-                )
-            },
-            "subscription target signal exceeds the maximum length of 100",
-        ),
-    ));
-    probes.push((
+            probes.push((
         "hook-delay-seconds-range".into(),
         (
             || probe_hook("evm_strict", "TIMEOUT", "buyer::(pay.cmp +2592000s)"),
@@ -833,6 +772,75 @@ fn rust_probes() -> Vec<(String, Probe)> {
         ),
     ));
 
+    probes.push((
+        "stage-trigger-subset-of-send-signals".into(),
+        (
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
+                    d
+                })
+            },
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["trigger"] = json!(["nope"]);
+                    d
+                })
+            },
+            "not declared in work.sendSignals",
+        ),
+    ));
+    probes.push((
+        "stage-trigger-no-duplicates".into(),
+        (
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
+                    d
+                })
+            },
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["trigger"] = json!(["cmp", "cmp"]);
+                    d
+                })
+            },
+            "trigger entries must be unique",
+        ),
+    ));
+    probes.push((
+        "stage-trigger-static-plain-executor".into(),
+        (
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
+                    d
+                })
+            },
+            || {
+                probe_compile({
+                    let mut d = base_definition();
+                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
+                    stage_mut(&mut d)["executor"] = json!({
+                        "supplierType": "zhixu",
+                        "zhixuExecutorConfig": {
+                            "target": null,
+                            "interface": "svc",
+                            "order": { "mode": "existing" },
+                            "signalMap": { "cmp": "done" }
+                        }
+                    });
+                    d
+                })
+            },
+            "trigger requires its own static non-zhixu executor with supplierID",
+        ),
+    ));
     probes.push((
         "dock-birth-hook-single-atom-syntax".into(),
         (

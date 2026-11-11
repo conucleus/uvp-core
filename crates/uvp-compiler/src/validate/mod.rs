@@ -1,4 +1,4 @@
-//! 定义校验：形状/尺寸闸、执行器绑定、物化门、mint/订阅/信号引用等
+//! 定义校验：形状/尺寸闸、执行器绑定、trigger 闭集与物化门、信号引用等
 //! 全部编译期校验规则的汇集地。
 
 use serde_json::Value;
@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use uvp_hook_dsl::ParseHookOutput;
 use uvp_model::{ZhixuDefinition, ZhixuExecutor, ZhixuStage};
 
-use crate::lower::{is_zhixu_executor_stage, parse_hook_for_compiler, value_str, StageEntry};
+use crate::lower::{parse_hook_for_compiler, value_str, StageEntry};
 
 const MAX_STAGE_SOURCE_BYTES: usize = 36;
 const MAX_SUPPLIER_ID_BYTES: usize = 36;
@@ -281,13 +281,6 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
         if has_static_executor(entry.stage.executor.as_ref()) {
             continue;
         }
-        if stage_is_subscription(&entry.stage) {
-            issues.push(format!(
-                "{} is a subscription stage and requires its own static executor; selectedStages reachability cannot bind it because subscription stages reject runtime executor patches",
-                entry.stage_identifier
-            ));
-            continue;
-        }
         if anchored.contains(&entry.stage_identifier) {
             continue;
         }
@@ -299,33 +292,24 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
     issues
 }
 
-pub(crate) fn stage_is_subscription(stage: &ZhixuStage) -> bool {
-    stage.receive_signals.values().any(|raw| {
-        parse_hook_for_compiler("HOOK", raw)
-            .map(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
-            .unwrap_or(false)
-    })
-}
-
 pub(crate) fn validate_onchain_stage_materialization(
     entries: &[StageEntry],
     entrance_hook_ids: &BTreeSet<String>,
-    implicit_entry: Option<&str>,
 ) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
         if entry.stage.receive_signals.is_empty() {
-            if implicit_entry == Some(entry.stage_identifier.as_str()) {
+            if !entry.stage.trigger.is_empty() {
                 continue;
             }
             issues.push(format!(
-                "{} declares no receiveSignals and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare receiveSignals carrying a mint/dock entrance or a static executor",
+                "{} declares no receiveSignals and no trigger and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare a trigger set, receiveSignals carrying a dock entrance, or a static executor with a receive hook",
                 entry.stage_identifier
             ));
             continue;
         }
         let has_materializing_hook = entry.stage.executor.is_some()
-            || entry.stage.mint.is_some()
+            || !entry.stage.trigger.is_empty()
             || entry.stage.receive_signals.keys().any(|hook_name| {
                 entrance_hook_ids.contains(&format!("{}#{hook_name}", entry.stage_identifier))
             });
@@ -334,7 +318,7 @@ pub(crate) fn validate_onchain_stage_materialization(
         }
         for hook_name in entry.stage.receive_signals.keys() {
             issues.push(format!(
-                "{}.receiveSignals.{}: stage has no order-trigger or EMIT_READY hook; its hooks compile to flags=0 watchers which can never materialize the stage on-chain (deadlock, no recovery path) — declare a static executor or drop receiveSignals from this stage",
+                "{}.receiveSignals.{}: stage has no trigger set, order-trigger or EMIT_READY hook; its hooks compile to flags=0 watchers which can never materialize the stage on-chain (deadlock, no recovery path) — declare a trigger set, a static executor, or drop receiveSignals from this stage",
                 entry.stage_identifier, hook_name
             ));
         }
@@ -342,234 +326,60 @@ pub(crate) fn validate_onchain_stage_materialization(
     issues
 }
 
-pub(crate) fn validate_subscription_delegation(entries: &[StageEntry]) -> Vec<String> {
-    let minted_sources: BTreeSet<&str> = entries
-        .iter()
-        .filter(|entry| entry.stage.mint.is_some())
-        .map(|entry| entry.stage.source.as_str())
-        .collect();
+pub(crate) fn validate_stage_triggers(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
-        if entry.stage.mint.is_some() || !is_zhixu_executor_stage(entry) {
+        if entry.stage.trigger.is_empty() {
             continue;
         }
-        if minted_sources.contains(entry.stage.source.as_str()) {
-            continue;
-        }
-        for (hook_name, raw_expression) in &entry.stage.receive_signals {
-            let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
-                continue;
-            };
-            if parsed.mode == uvp_hook_dsl::HookMode::Subscription {
-                issues.push(format!(
-                    "{}.receiveSignals.{hook_name}: unanchored fan-in subscription stage cannot bind a zhixu delegation executor (fan-in delivery has no order context; the delegation envelope only carries same-order child signals)",
-                    entry.stage_identifier
-                ));
-            }
-        }
-    }
-    issues
-}
-
-pub(crate) fn validate_mint_anchors(
-    entries: &[StageEntry],
-    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
-) -> Vec<String> {
-    let mut issues = Vec::new();
-    for entry in entries {
-        if let Some(mint) = &entry.stage.mint {
-            if mint != "per-fact" {
-                issues.push(format!(
-                    "{}.mint only supports per-fact: {}",
-                    entry.stage_identifier, mint
-                ));
-            }
-            if !has_static_executor(entry.stage.executor.as_ref()) {
-                issues.push(format!(
-                    "{}.mint stage requires a static executor (subscription/birth stages cannot be patched at runtime)",
-                    entry.stage_identifier
-                ));
-            }
-            if entry.stage.executor.is_some() {
-                let executor_type = entry
-                    .stage
-                    .executor
-                    .as_ref()
-                    .map(|executor| executor.supplier_type.clone())
-                    .unwrap_or_default();
-                if executor_type == "zhixu" {
+        let stage_prefix = format!("{}.", entry.stage_identifier);
+        let mut seen = BTreeSet::new();
+        for (index, declared) in entry.stage.trigger.iter().enumerate() {
+            let normalized = if declared.contains('.') {
+                if !declared.starts_with(&stage_prefix) {
                     issues.push(format!(
-                        "{}.mint stage cannot use a zhixu delegation executor",
+                        "{}.trigger[{index}] {declared:?} must address the declaring stage: expected {stage_prefix}<signal>",
                         entry.stage_identifier
                     ));
+                    continue;
                 }
-            }
-            let subscription_count = entry
-                .stage
-                .receive_signals
-                .values()
-                .filter_map(|raw| parse_hook_for_compiler("HOOK", raw).ok())
-                .filter(|parsed| parsed.mode == uvp_hook_dsl::HookMode::Subscription)
-                .count();
-            if subscription_count == 0 {
+                declared.clone()
+            } else {
+                format!("{stage_prefix}{declared}")
+            };
+            if !seen.insert(normalized.clone()) {
                 issues.push(format!(
-                    "{}.mint stage must declare at least one ANCHOR(@…) subscription",
+                    "{}.trigger[{index}] duplicates {normalized}: trigger entries must be unique",
                     entry.stage_identifier
                 ));
-            }
-            for (hook_name, raw_expression) in &entry.stage.receive_signals {
-                match parse_hook_for_compiler("HOOK", raw_expression) {
-                    Err(_) => {}
-                    Ok(parsed) if parsed.mode == uvp_hook_dsl::HookMode::Subscription => {
-                        if let Some(target) = &parsed.subscription_target {
-                            if target.source == entry.stage.source {
-                                issues.push(format!(
-                                    "{}.receiveSignals.{hook_name}: mint stage must not subscribe its own source class {}; per-fact mint would chain without bound",
-                                    entry.stage_identifier, target.source
-                                ));
-                            }
-                        }
-                    }
-                    Ok(_) => {
-                        issues.push(format!(
-                            "{}.receiveSignals.{hook_name}: mint stage accepts ANCHOR(@…) subscription entries only; plain birth-entry hooks are retired",
-                            entry.stage_identifier
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    issues.extend(validate_mint_subscription_cycles(entries));
-    issues.extend(validate_birth_channel_key_uniqueness(
-        entries,
-        entrance_fact_keys,
-    ));
-    issues
-}
-
-fn validate_mint_subscription_cycles(entries: &[StageEntry]) -> Vec<String> {
-    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for entry in entries {
-        if entry.stage.mint.is_none() {
-            continue;
-        }
-        let source = entry.stage.source.clone();
-        for raw_expression in entry.stage.receive_signals.values() {
-            let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
                 continue;
-            };
-            let Some(target) = &parsed.subscription_target else {
-                continue;
-            };
-            if target.source != source {
-                edges
-                    .entry(source.clone())
-                    .or_default()
-                    .insert(target.source.clone());
             }
-        }
-    }
-    match find_first_cycle(&edges) {
-        Some(cycle) => vec![format!(
-            "mint subscriptions form an unbounded re-mint cycle (mint 订阅构成无界代铸环): {}",
-            cycle.join(" -> ")
-        )],
-        None => Vec::new(),
-    }
-}
-
-fn validate_birth_channel_key_uniqueness(
-    entries: &[StageEntry],
-    entrance_fact_keys: &BTreeMap<(String, String), Vec<String>>,
-) -> Vec<String> {
-    let mut stages_by_key: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
-    for entry in entries {
-        if entry.stage.mint.is_none() {
-            continue;
-        }
-        for raw_expression in entry.stage.receive_signals.values() {
-            let Ok(parsed) = parse_hook_for_compiler("HOOK", raw_expression) else {
-                continue;
-            };
-            let Some(target) = &parsed.subscription_target else {
-                continue;
-            };
-            stages_by_key
-                .entry((target.source.clone(), target.signal_name.clone()))
-                .or_default()
-                .insert(entry.stage_identifier.as_str());
-        }
-    }
-    let mut keys: BTreeSet<&(String, String)> = stages_by_key.keys().collect();
-    keys.extend(entrance_fact_keys.keys());
-    keys.into_iter()
-        .filter_map(|key| {
-            let stages: Vec<&str> = stages_by_key
-                .get(key)
-                .map(|stages| stages.iter().copied().collect())
-                .unwrap_or_default();
-            let ports: Vec<&str> = entrance_fact_keys
-                .get(key)
-                .map(|ports| ports.iter().map(String::as_str).collect())
-                .unwrap_or_default();
-            if stages.len() + ports.len() < 2 {
-                return None;
-            }
-            let (source, signal) = (&key.0, &key.1);
-            if ports.is_empty() {
-                let stages = stages.join(", ");
-                return Some(format!(
-                    "{source}::{signal} is declared as the birth entry by multiple mint stages ({stages}): one fact mints at most one order (一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖)"
+            if !declares_signal_expanding_to(
+                &entry.stage.send_signals,
+                &entry.stage_identifier,
+                &normalized,
+            ) {
+                issues.push(format!(
+                    "{}.trigger[{index}] references signal {normalized} that is not declared in {}.sendSignals",
+                    entry.stage_identifier, entry.stage_identifier
                 ));
             }
-            let mut claimants = Vec::new();
-            if !stages.is_empty() {
-                claimants.push(format!("mint stage(s) ({})", stages.join(", ")));
-            }
-            if ports.len() > 1 || !stages.is_empty() {
-                claimants.push(format!("dock entrance port(s) ({})", ports.join(", ")));
-            }
-            Some(format!(
-                "{source}::{signal} is declared as a birth channel by both {}: one fact keys at most one birth channel in the plan (出生通道键并集查重：mint 出生键 ∪ dock entrance 键内不得重复)",
-                claimants.join(" and ")
-            ))
-        })
-        .collect()
-}
-
-fn find_first_cycle(edges: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
-    for start in edges.keys() {
-        let mut parents: BTreeMap<String, String> = BTreeMap::new();
-        let mut queue: VecDeque<&String> = VecDeque::new();
-        for next in edges.get(start).into_iter().flatten() {
-            if next == start {
-                return Some(vec![start.clone(), start.clone()]);
-            }
-            if parents.insert(next.clone(), start.clone()).is_none() {
-                queue.push_back(next);
-            }
         }
-        while let Some(current) = queue.pop_front() {
-            for next in edges.get(current).into_iter().flatten() {
-                if *next == *start {
-                    let mut cycle = vec![current.clone()];
-                    let mut node = current.clone();
-                    while node != *start {
-                        node = parents[&node].clone();
-                        cycle.push(node.clone());
-                    }
-                    cycle.reverse();
-                    cycle.push(start.clone());
-                    return Some(cycle);
-                }
-                if parents.insert(next.clone(), current.clone()).is_none() {
-                    queue.push_back(next);
-                }
-            }
+        let static_plain_executor = entry.stage.executor.as_ref().is_some_and(|executor| {
+            executor.supplier_type != "zhixu"
+                && executor
+                    .supplier_id
+                    .as_deref()
+                    .is_some_and(|supplier_id| !supplier_id.trim().is_empty())
+        });
+        if !static_plain_executor {
+            issues.push(format!(
+                "{}.trigger requires its own static non-zhixu executor with supplierID: trigger stages birth orders and cannot be delegated or patched at runtime",
+                entry.stage_identifier
+            ));
         }
     }
-    None
+    issues
 }
 
 pub(crate) fn validate_receive_signal_references(

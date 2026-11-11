@@ -6,8 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use uvp_hook_dsl::{
-    decode_compiled_hook, parse_hook, DecodedCompiledHook, Expr, Gate, HookMode, ParseHookRequest,
-    Profile,
+    decode_compiled_hook, parse_hook, DecodedCompiledHook, Expr, Gate, ParseHookRequest, Profile,
 };
 use uvp_model::ZhixuDefinition;
 
@@ -48,11 +47,6 @@ pub fn parse_predicate(raw: &str) -> std::result::Result<DecodedCompiledHook, St
         hook: raw.to_string(),
     })
     .map_err(|err| format!("predicate {raw:?} does not parse: {err}"))?;
-    if parsed.mode == HookMode::Subscription {
-        return Err(format!(
-            "predicate {raw:?} must be a per-order state judgment and must not contain subscription atoms"
-        ));
-    }
     decode_compiled_hook(&parsed.cloud_ast, Gate::Filter)
         .map_err(|err| format!("predicate {raw:?} failed to decode: {err}"))
 }
@@ -69,7 +63,6 @@ pub fn signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
                     walk(term, source, out);
                 }
             }
-            Expr::Subscription { .. } => {}
         }
     }
     walk(expr, source, &mut out);
@@ -88,7 +81,6 @@ pub fn positive_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
                     walk(term, source, out);
                 }
             }
-            Expr::Subscription { .. } => {}
         }
     }
     walk(expr, source, &mut out);
@@ -110,7 +102,7 @@ pub fn conjunctive_positive_atoms(expr: &Expr, source: &str) -> Vec<String> {
                     walk(term, source, out);
                 }
             }
-            Expr::Or(_) | Expr::Subscription { .. } => {}
+            Expr::Or(_) => {}
         }
     }
     walk(expr, source, &mut out);
@@ -135,7 +127,7 @@ pub fn negative_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
                     conjunctive_negations(term, source, out);
                 }
             }
-            Expr::Or(_) | Expr::Delay { .. } | Expr::Signal(_) | Expr::Subscription { .. } => {}
+            Expr::Or(_) | Expr::Delay { .. } | Expr::Signal(_) => {}
         }
     }
     fn appears_positive(expr: &Expr, source: &str, atom: &str, positive: bool) -> bool {
@@ -146,7 +138,6 @@ pub fn negative_signal_atoms(expr: &Expr, source: &str) -> Vec<String> {
             Expr::And(terms) | Expr::Or(terms) => terms
                 .iter()
                 .any(|term| appears_positive(term, source, atom, positive)),
-            Expr::Subscription { .. } => false,
         }
     }
     let mut candidates = Vec::new();
@@ -373,7 +364,7 @@ fn collect_delay_sites(decoded: &DecodedCompiledHook, sites: &mut Vec<DelaySite>
                     walk(term, source, sites);
                 }
             }
-            Expr::Signal(_) | Expr::Subscription { .. } | Expr::Delay { .. } => {}
+            Expr::Signal(_) | Expr::Delay { .. } => {}
         }
     }
     walk(&decoded.expr, &decoded.source, sites);

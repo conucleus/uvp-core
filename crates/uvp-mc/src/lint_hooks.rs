@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::Value;
-use uvp_hook_dsl::{decode_compiled_hook, DecodedCompiledHook, Expr, Gate, HookMode};
+use uvp_hook_dsl::{decode_compiled_hook, DecodedCompiledHook, Expr, Gate};
 
 use crate::vocab::{signal_atoms, Vocabulary};
 use crate::Result;
@@ -31,7 +31,6 @@ pub struct HookConjunctFinding {
 pub struct LintHooksReport {
     pub zhixu_name: String,
     pub guards_examined: usize,
-    pub subscription_guards_skipped: usize,
     pub conjuncts_examined: usize,
     pub search_budget_exhausted: bool,
     pub findings: Vec<HookConjunctFinding>,
@@ -138,7 +137,6 @@ fn collect(
             }
             out
         }
-        Expr::Subscription { .. } => Vec::new(),
     }
 }
 
@@ -301,14 +299,9 @@ pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
     }
 
     let mut findings = Vec::new();
-    let mut skipped = 0usize;
     let mut conjuncts = 0usize;
     let mut budget_exhausted = false;
     for guard in &guards {
-        if guard.decoded.mode == HookMode::Subscription {
-            skipped += 1;
-            continue;
-        }
         let terms: Vec<&Expr> = flatten_conjuncts(&guard.decoded.expr);
         if terms.len() < 2 {
             continue;
@@ -346,8 +339,7 @@ pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
 
     Ok(LintHooksReport {
         zhixu_name: vocab.zhixu_name.clone(),
-        guards_examined: guards.len() - skipped,
-        subscription_guards_skipped: skipped,
+        guards_examined: guards.len(),
         conjuncts_examined: conjuncts,
         search_budget_exhausted: budget_exhausted,
         findings,
@@ -462,7 +454,6 @@ fn flatten_conjuncts(expr: &Expr) -> Vec<&Expr> {
 fn render_expr(expr: &Expr) -> String {
     match expr {
         Expr::Signal(name) => name.clone(),
-        Expr::Subscription { target, .. } => format!("@{target}"),
         Expr::Not(inner) => format!("~{}", render_expr(inner)),
         Expr::And(terms) => terms
             .iter()

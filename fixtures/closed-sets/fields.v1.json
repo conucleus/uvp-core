@@ -6,7 +6,7 @@
   "spec": ["platform", "nucleation", "stages", "dockInterface"],
   "platform": ["type", "provider", "network", "version", "params"],
   "nucleation": ["id", "params"],
-  "stage": ["name", "source", "mint", "executor", "selectedStages", "sendSignals", "receiveSignals", "fileResources", "fileWriters"],
+  "stage": ["name", "source", "trigger", "executor", "selectedStages", "sendSignals", "receiveSignals", "fileResources", "fileWriters"],
   "sendSignalEntry": ["name", "validWhen"],
   "executor": ["supplierType", "supplierID", "zhixuExecutorConfig", "selectableResource"],
   "dockInterfaceEntry": ["orderModes", "inputs", "outputs"],

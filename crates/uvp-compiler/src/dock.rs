@@ -521,7 +521,6 @@ pub struct InterfaceDeclaration {
 #[derive(Debug, Clone)]
 pub struct CompiledInterfaces {
     pub declarations: Vec<InterfaceDeclaration>,
-    pub entrance_fact_keys: BTreeMap<(String, String), Vec<String>>,
 }
 
 impl InterfaceDeclaration {
@@ -558,7 +557,6 @@ pub fn compile_dock_interface(
         .collect();
     let mut hooks_claimed: BTreeMap<String, String> = BTreeMap::new();
     let mut interfaces = Vec::new();
-    let mut entrance_fact_keys: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
 
     for (interface_name, spec) in dock {
         let base_path = format!("spec.dockInterface.{interface_name}");
@@ -594,7 +592,6 @@ pub fn compile_dock_interface(
 
         let mut inputs = Vec::new();
         let mut outputs = Vec::new();
-        let mut entrance_atoms: Vec<(String, String, String)> = Vec::new();
 
         for (port_name, port) in &spec.inputs {
             let path = format!("{base_path}.inputs.{port_name}");
@@ -679,7 +676,7 @@ pub fn compile_dock_interface(
                 issues.push(DockIssue::new(
                     "D013",
                     format!("{stage_identifier}.receiveSignals.{hook_name}"),
-                    "input port hook must be exactly one positive canonical signal atom (no &, |, ~, timers, aggregation, or ANCHOR)",
+                    "input port hook must be exactly one positive canonical signal atom (no &, |, ~, timers, or aggregation)",
                 ));
                 continue;
             }
@@ -709,12 +706,6 @@ pub fn compile_dock_interface(
                 ));
                 continue;
             }
-            entrance_atoms.push((
-                port_name.clone(),
-                dependency.source.clone(),
-                dependency.signal_name.clone(),
-            ));
-
             inputs.push(InterfacePortInput {
                 port: port_name.clone(),
                 source: stage.source.clone(),
@@ -792,15 +783,6 @@ pub fn compile_dock_interface(
             ));
             continue;
         }
-        if spec.order_modes.iter().any(|m| m == ORDER_MODE_NEW) {
-            for (port_name, atom_source, atom_signal) in entrance_atoms {
-                entrance_fact_keys
-                    .entry((atom_source, atom_signal))
-                    .or_default()
-                    .push(format!("{interface_name}.{port_name}"));
-            }
-        }
-
         interfaces.push(InterfaceDeclaration {
             name: interface_name.clone(),
             order_modes: spec.order_modes.clone(),
@@ -815,7 +797,6 @@ pub fn compile_dock_interface(
     interfaces.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(CompiledInterfaces {
         declarations: interfaces,
-        entrance_fact_keys,
     })
 }
 

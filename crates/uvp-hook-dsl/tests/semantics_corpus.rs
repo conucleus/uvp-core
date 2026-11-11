@@ -35,7 +35,6 @@ struct ParseCase {
 #[serde(rename_all = "camelCase")]
 struct ParseExpect {
     source: String,
-    mode: String,
     runtime_condition: String,
     normalized_expression: String,
     dependencies: Vec<Value>,
@@ -143,7 +142,6 @@ fn parses_semantic_corpus() {
         let output_value = serde_json::to_value(&output).expect("parse output should serialize");
 
         assert_eq!(output.source, case.expect.source, "{}", case.name);
-        assert_eq!(output_value["mode"], case.expect.mode, "{}", case.name);
         assert_eq!(
             output.runtime_condition, case.expect.runtime_condition,
             "{}",

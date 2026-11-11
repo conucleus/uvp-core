@@ -228,9 +228,8 @@ fn run_lint_hooks(definition_path: &str, json: bool) -> ExitCode {
             } else {
                 println!("zhixu: {}", report.zhixu_name);
                 println!(
-                    "guards examined: {} (subscription skipped: {}), conjuncts: {}{}",
+                    "guards examined: {}, conjuncts: {}{}",
                     report.guards_examined,
-                    report.subscription_guards_skipped,
                     report.conjuncts_examined,
                     if report.search_budget_exhausted {
                         " [search budget exhausted: unflagged items may hide findings]"

@@ -450,54 +450,6 @@
       "ruling": "单线登记：rust 在 parse 期拒绝空格/Unicode/额外分隔符；go/ts 无独立校验（go 经 FFI 继承，但无本线错误文案）。"
     },
     {
-      "id": "subscription-target-source-max-length",
-      "area": "hook-dsl",
-      "target": "订阅目标 `::ANCHOR(@source::stage.signal)` 的 @source",
-      "constraint": {
-        "type": "max_length",
-        "params": {
-          "max": 36,
-          "unit": "bytes"
-        }
-      },
-      "error": {
-        "rust": "subscription source exceeds the maximum length of 36",
-        "go": null,
-        "ts": null
-      },
-      "applies": [
-        "rust"
-      ],
-      "sources": {
-        "rust": "crates/uvp-hook-dsl/src/lib.rs parse_subscription"
-      },
-      "ruling": "订阅 source 类 ≤36 字节，与标头 source 同值；落库列 hook_dependency.source_zhixu_id 实宽 VARCHAR(64)（uvp/database/core-ddl.sql），36 字节编译期上限三线一致且严于列宽，注记按 DDL 真源修正。"
-    },
-    {
-      "id": "subscription-target-signal-max-length",
-      "area": "hook-dsl",
-      "target": "订阅目标 signal 全名",
-      "constraint": {
-        "type": "max_length",
-        "params": {
-          "max": 100,
-          "unit": "bytes"
-        }
-      },
-      "error": {
-        "rust": "subscription target signal exceeds the maximum length of 100",
-        "go": null,
-        "ts": null
-      },
-      "applies": [
-        "rust"
-      ],
-      "sources": {
-        "rust": "crates/uvp-hook-dsl/src/lib.rs parse_subscription"
-      },
-      "ruling": "订阅目标信号名 ≤100 字节（signal_name VARCHAR(100)）。"
-    },
-    {
       "id": "hook-delay-seconds-range",
       "area": "hook-dsl",
       "target": "delay 操作的 durationSeconds（DSL `+<duration>` / on-chain instruction delaySeconds）",
@@ -578,6 +530,78 @@
         "ts": "packages/compiler/src/onchain/validate/limits.ts MAX_PLAN_DEPENDENCIES = 1024（镜像 UVPStateMachine.MAX_PLAN_DEPENDENCIES，reverts TooManyDependencies）"
       },
       "ruling": "单线登记：MAX_PLAN_DEPENDENCIES=1024 权威在 Solidity 契约 UVPStateMachine，TS preflight 同口径预检；rust/go 编译线无此上限。"
+    },
+    {
+      "id": "stage-trigger-subset-of-send-signals",
+      "area": "zhixu",
+      "target": "spec.stages[].trigger[]",
+      "constraint": {
+        "type": "forbidden",
+        "params": {
+          "scope": "非空 trigger 的每一项必须展开为同阶段 sendSignals 中声明的信号",
+          "expansion": "裸 <signal> 展开为 <stageIdentifier>.<signal>；两段式项必须指向声明阶段自身"
+        }
+      },
+      "error": {
+        "rust": "references signal {stage}.{signal} that is not declared in {stage}.sendSignals",
+        "go": null,
+        "ts": null
+      },
+      "applies": [
+        "rust"
+      ],
+      "sources": {
+        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_stage_triggers"
+      },
+      "ruling": "trigger 是 sendSignals 的可空子集：裸名按声明阶段展开，两段式只允许自指；子集外引用编译期拒绝（链轨 lowering 逐项合成出生 hook，不做二次成员校验）。"
+    },
+    {
+      "id": "stage-trigger-no-duplicates",
+      "area": "zhixu",
+      "target": "spec.stages[].trigger[]",
+      "constraint": {
+        "type": "forbidden",
+        "params": {
+          "scope": "展开后同一阶段内 trigger 项不得重复"
+        }
+      },
+      "error": {
+        "rust": "duplicates {fullSignal}: trigger entries must be unique",
+        "go": null,
+        "ts": null
+      },
+      "applies": [
+        "rust"
+      ],
+      "sources": {
+        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_stage_triggers"
+      },
+      "ruling": "一个 trigger 信号对应一条出生事实/一条 order-trigger hook；重复项会让出生事实在承诺面被计两次并产生重复 hookId，编译期拒绝。"
+    },
+    {
+      "id": "stage-trigger-static-plain-executor",
+      "area": "zhixu",
+      "target": "spec.stages[].trigger（非空时）的 executor",
+      "constraint": {
+        "type": "required",
+        "params": {
+          "supplierType": "!= zhixu",
+          "supplierID": "non-empty",
+          "scope": "非空 trigger 的阶段必须自带静态非 zhixu 执行者"
+        }
+      },
+      "error": {
+        "rust": "trigger requires its own static non-zhixu executor with supplierID",
+        "go": null,
+        "ts": null
+      },
+      "applies": [
+        "rust"
+      ],
+      "sources": {
+        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_stage_triggers"
+      },
+      "ruling": "出生阶段必须静态绑定执行者且不得委托/运行时 patch：出生权不能随委托或 patch 漂移。"
     },
     {
       "id": "dock-order-mode-closed-enum",
@@ -920,33 +944,6 @@
       "ruling": "fileType 闭集 {local, http, txcloud, plain_text}：fileResources 与 executor.selectableResource 同口径。TS 线在编译入口同集拒绝（闭集常量与语料对拍、精确匹配不 trim）；Go/合约侧镜像状态见 rejectionSurfaces 矩阵 supplier-type-closed-set 行（fileType 与 supplierType 同属链上承诺词表族）。"
     },
     {
-      "id": "birth-channel-key-union-uniqueness",
-      "area": "zhixu",
-      "target": "出生通道键并集：mint 阶段 ANCHOR 订阅的出生事实键 (source, stage.signal) ∪ dockInterface entrance 端口（orderModes 含 new 的接口的 input 端口）atom 的事实键",
-      "constraint": {
-        "type": "forbidden",
-        "params": {
-          "scope": "并集内同一 (source, stage.signal) 事实键被重复声明为出生通道",
-          "arms": {
-            "mint-union-dock / dock-union-dock": "三方一致拒绝：跨通道共享键会让任一侧的出生事务把另一侧的出生线一并推 Ready、物化幻影阶段；dock entrance 键按 route 钉死（planHookDependsOn），一键挂两条 entrance 时任一 route 的子单会物化另一 route 的阶段",
-            "mint-union-mint": "分叉现状（三线未收敛），含两臂：①「跨 stage 多 mint 线」——同一事实被多个 mint 阶段声明为出生键，rust 编译期拒绝——一事实多 mint 各铸一单，\"该事实对应哪个订单\"三线发散，一事一单在编译期收口；②「同 stage 双 mint 钩」——同一 mint 阶段内多条 mint 钩共享出生键（同 stage 多钩臂），rust 编译期按 stage 集合去重放行（查重以 stage 计数，同 stage 多钩不构成跨阶段重复），Solidity 注册门与 TS 编译器同口径放行——一事实扇出多条 mint 出生线是产品现行形态（customs 基准 plan：order::registered 同时出生执行者选择与资源发布两阶段），同一 mint 出生上下文内物化、不产生幻影阶段；运行期单数分叉：云轨代铸派生键含 stage+hook 维——同一事实逐 hook 铸 N 单，链轨同出生上下文铸 1 单（定义作者在两轨得到不同单数）"
-          }
-        }
-      },
-      "error": {
-        "rust": "一事一单：同一事实至多铸一单；多阶段消费请改用 hook 依赖；出生通道键并集查重：mint 出生键 ∪ dock entrance 键内不得重复",
-        "go": null,
-        "ts": null
-      },
-      "applies": [
-        "rust"
-      ],
-      "sources": {
-        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_birth_channel_key_uniqueness（mint∪dock / dock∪dock 跨通道臂与 mint∪mint 跨 stage 线拒绝；同 stage 双 mint 钩按 stage 集合去重放行）"
-      },
-      "ruling": "登记为分叉现状，不宣称三线一致：mint∪dock、dock∪dock 两臂三方（rust 编译期、合约注册门 DuplicateBirthChannelKey、TS 编译器镜像 duplicateBirthChannelKeyIssues）一致拒绝；mint∪mint 臂仅「跨 stage 多 mint 线」被 rust 编译期拒绝（一事一单），「同 stage 双 mint 钩」按 stage 集合去重后 rust 亦放行——合约（UVPPlanRegistration._registerPlanHook 按 dock 标志分界）与 TS（按 orderTriggerKind=dock 分界）对 mint∪mint 全形态放行；运行期单数云 N/链 1（云代铸键含 stage+hook 维），跨轨对账单数不可比（uvp-chain.md 附录 B 对照行）。error.rust 两段锚点分属两臂：前段（一事一单…改用 hook 依赖）钉 mint∪mint 跨 stage 线文案，后段（出生通道键并集查重…不得重复）钉 mint∪dock / dock∪dock 跨通道臂文案。镜像状态另见 rejectionSurfaces 矩阵 duplicate-birth-channel-key 行。"
-    },
-    {
       "id": "stage-entries-max-count",
       "area": "zhixu",
       "target": "spec.stages 条目数",
@@ -1060,7 +1057,7 @@
     },
     {
       "id": "signal-capability-vocabulary-gate",
-      "surface": "提交的事实键必须落在 plan 声明的 signalCapabilities 词表内，词表外 revert InvalidSignalCapability（mint 通道与跨订单 relation≠0 通道，UVPStateMachine/UVPDerivedSignalModule）",
+      "surface": "提交的事实键必须落在 plan 声明的 signalCapabilities 词表内，词表外 revert InvalidSignalCapability（trigger 出生通道复用 ORDER_TRIGGER_MINT 位，与跨订单 relation≠0 通道，UVPStateMachine/UVPDerivedSignalModule）",
       "mirrors": {
         "rust": "none",
         "go": "none",
@@ -1107,13 +1104,13 @@
     },
     {
       "id": "duplicate-birth-channel-key",
-      "surface": "order-trigger 依赖键跨出生通道重复 revert DuplicateBirthChannelKey（UVPPlanRegistration._registerPlanHook，按 dock 标志分界：mint∪dock 与 dock∪dock 两臂拒绝）",
+      "surface": "order-trigger 依赖键跨 dock 出生通道重复 revert DuplicateBirthChannelKey（UVPPlanRegistration._registerPlanHook；mint 臂已随出生模型改造删除，dock∪dock 保留）",
       "mirrors": {
-        "rust": "mirrored:rule birth-channel-key-union-uniqueness（mint∪dock / dock∪dock 与 mint∪mint 跨 stage 线拒绝；同 stage 双 mint 钩按 stage 去重放行）",
+        "rust": "none（mint 出生键查重已删除；dock∪dock 由合约注册门与 TS 预检持有）",
         "go": "none",
-        "ts": "mirrored（duplicateBirthChannelKeyIssues：mint∪dock、dock∪dock 两臂拒绝）"
+        "ts": "mirrored（duplicateBirthChannelKeyIssues：dock∪dock 臂保留，mint 臂删除）"
       },
-      "note": "分叉现状：mint∪mint 臂合约不 revert（放行）、TS 同口径放行，rust 编译期仅拒跨 stage 多 mint 线（一事一单）、同 stage 双 mint 钩按 stage 去重亦放行——三线收敛前按各侧行为如实登记，详见 rule birth-channel-key-union-uniqueness。"
+      "note": "trigger 出生键由 trigger 集与 dock entrance 分别表达：trigger 的「同一信号至多一个出生阶段」由 plan 级 trigger 承诺与合约 hook 注册裁决，不再由 rust 出生通道键并集承担。"
     }
   ]
 }

@@ -343,7 +343,6 @@ fn spanned_tree_matches_parser_side_table() {
         "buyer::a.cmp",
         "buyer::a.cmp & ~b.cmp",
         "buyer::(a.cmp +10s) & (b.cmp | c.cmp)",
-        "::ANCHOR(@seller::listing.cmp)",
         "buyer::~a.cmp & (b.cmp & c.cmp)",
     ] {
         let (hook_expr, spans) =
@@ -361,7 +360,7 @@ fn spanned_tree_matches_parser_side_table() {
 
 fn count_nodes(expr: &Expr) -> usize {
     match expr {
-        Expr::Signal(_) | Expr::Subscription { .. } => 1,
+        Expr::Signal(_) => 1,
         Expr::Not(inner) => 1 + count_nodes(inner),
         Expr::And(terms) | Expr::Or(terms) => 1 + terms.iter().map(count_nodes).sum::<usize>(),
         Expr::Delay { expr: inner, .. } => 1 + count_nodes(inner),

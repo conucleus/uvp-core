@@ -2,7 +2,7 @@
 //! 输入（对接接口/路由链接的权威实现在 `crate::dock` 模块）。
 
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use uvp_model::{ZhixuDefinition, ZhixuStage};
 
 use crate::{dock, CompilerError, Result};
@@ -21,8 +21,6 @@ pub(crate) struct DockState {
     pub(crate) unresolved_json: Vec<Value>,
     pub(crate) input_port_hook_ids: BTreeSet<String>,
     pub(crate) entrance_hook_ids: BTreeSet<String>,
-    pub(crate) entrance_fact_keys: BTreeMap<(String, String), Vec<String>>,
-    pub(crate) output_relay_signals: BTreeSet<String>,
 }
 
 pub(crate) fn compile_dock_state(
@@ -33,17 +31,6 @@ pub(crate) fn compile_dock_state(
 ) -> Result<DockState> {
     let unlinked =
         dock::collect_unlinked_routes(stage_pairs).map_err(|issues| issues_from_dock(&issues))?;
-
-    let output_relay_signals = unlinked
-        .iter()
-        .flat_map(|route| {
-            route
-                .config
-                .signal_map
-                .keys()
-                .map(|key| format!("{}.{}", route.stage_identifier, key))
-        })
-        .collect();
 
     let mut static_routes = Vec::new();
     let mut unresolved_json = Vec::new();
@@ -101,17 +88,12 @@ pub(crate) fn compile_dock_state(
     let interface_json = interfaces
         .as_ref()
         .map(|compiled| dock::interface_declarations_json(&compiled.declarations));
-    let entrance_fact_keys = interfaces
-        .map(|compiled| compiled.entrance_fact_keys)
-        .unwrap_or_default();
     Ok(DockState {
         interface_json,
         routes_json,
         unresolved_json,
         input_port_hook_ids,
         entrance_hook_ids,
-        entrance_fact_keys,
-        output_relay_signals,
     })
 }
 

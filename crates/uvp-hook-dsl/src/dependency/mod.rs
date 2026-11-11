@@ -32,9 +32,6 @@ pub(crate) fn extract_dependencies(hook: &HookExpr, _profile: Profile) -> Vec<De
 fn collect_positive_anchors(expr: &Expr, source: &str, out: &mut Vec<(String, String)>) {
     match expr {
         Expr::Signal(signal) => out.push((source.to_string(), signal.clone())),
-        Expr::Subscription { source, target } => {
-            out.push((source.clone(), target.clone()));
-        }
         Expr::Not(_) => {}
         Expr::Delay { expr, .. } => collect_positive_anchors(expr, source, out),
         Expr::And(terms) | Expr::Or(terms) => {
@@ -57,14 +54,6 @@ fn collect_dependencies(expr: &Expr, source: &str, negated: bool, out: &mut Vec<
             signal_name: signal.clone(),
             delay_seconds: None,
         }),
-        Expr::Subscription { source, target } => {
-            out.push(Dependency {
-                kind: DependencyKind::Positive,
-                source: source.clone(),
-                signal_name: target.clone(),
-                delay_seconds: None,
-            });
-        }
         Expr::Not(inner) => collect_dependencies(inner, source, !negated, out),
         Expr::Delay {
             expr,

@@ -267,6 +267,63 @@
       "notes": "Retryable because the on-chain commit is done and binding is a service-side state transition: the failed bind is audited, the evidence references stay persisted on the submission record, and the reconcile worker's evidence-bind sweep retries the binding from those references each poll until the proof reports bound."
     },
     {
+      "code": "not_trigger_signal",
+      "condition": "A signal was submitted with an empty orderId but is not in its stage's trigger set; only trigger signals may birth an order. The rejection is deterministic for the given definition and fact.",
+      "layer": "application",
+      "producers": ["go-cloud-engine"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["NOT_TRIGGER_SIGNAL"]
+      },
+      "notes": "Trigger pipeline step: empty orderId + signal in stage.trigger births the order; empty orderId + any other signal is rejected by name. Same inputs can never succeed; the caller must send a trigger signal or provide an existing orderId."
+    },
+    {
+      "code": "signal_not_in_send_signals",
+      "condition": "The submitted signal is not declared in the target stage's sendSignals. Deterministic definition-scope rejection at ingress, before any order or fact lookup.",
+      "layer": "application",
+      "producers": ["go-cloud-engine"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["SIGNAL_NOT_IN_SEND_SIGNALS"]
+      },
+      "notes": "Requires the cloud projection to carry sendSignals for every stage; a definition cannot accept signals it never declared. Retrying identical bytes re-fails identically."
+    },
+    {
+      "code": "order_not_found",
+      "condition": "A signal carrying an orderId whose order does not exist (and no trigger birth applies).",
+      "layer": "application",
+      "producers": ["go-cloud-engine"],
+      "retryable": true,
+      "backoff": "exponential",
+      "dead_letter": false,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["ORDER_NOT_FOUND"]
+      },
+      "notes": "Usually transient: the order registration may still be committing in parallel. Retry after backoff; the rejected submission was not absorbed, so the retry is not a duplicate fact. Chain-side counterpart is unknown_order (retryable=true)."
+    },
+    {
+      "code": "signal_admission_rejected",
+      "condition": "Signal admission (validWhen) is not Ready for the target pre-state; birth triggers evaluate in the empty-order context. The chain reverts SignalAdmissionRejected(orderId, sourceId, signalId); cloud answers a typed non-retryable business rejection naming the signal and the failed expression.",
+      "layer": "chain",
+      "producers": ["go-cloud-engine", "chain-services"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": true,
+      "benign_scan_outcome": false,
+      "internal_names": {
+        "go-cloud-engine": ["SIGNAL_ADMISSION_REJECTED"],
+        "chain-services": ["SignalAdmissionRejected"]
+      },
+      "notes": "Rejection writes no fact/delivery row. Not retryable with unchanged inputs: the caller must supply the missing dependency facts and submit a new attempt (a new attempt is not a duplicate because the rejected emission never landed). The chain's receipt-level classification is also caught by transaction_reverted; this entry names the condition for pre-broadcast/cloud classification."
+    },
+    {
       "code": "malformed_payload",
       "condition": "Deterministic caller-input defect: payload fails validation before any side effect (missing/oversized/illegal fields, unsigned/malformed envelope, prepared submission without planId).",
       "layer": "application",
@@ -276,7 +333,7 @@
       "dead_letter": true,
       "benign_scan_outcome": false,
       "internal_names": {
-        "go-cloud-engine": ["statemachine.PermanentError (signal validation paths: 缺少 order_id、空白 parent_order_ids、dock 保留命名空间、超宽字段、引用不存在的阶段)", "dbops.ValidationError", "compiler zhixu_handler ValidationError (超宽标识 22001 双保险)"],
+        "go-cloud-engine": ["statemachine.PermanentError (signal validation paths: 空白 parent_order_ids、dock 保留命名空间、超宽字段、引用不存在的阶段)", "dbops.ValidationError", "compiler zhixu_handler ValidationError (超宽标识 22001 双保险)"],
         "chain-services": ["malformed_relay_payload", "missing_order_id", "missing_nonce", "order_plan_unresolved"],
         "executor-kit": ["validation_failure", "VALIDATION_FAILURE", "ValidationError type"]
       },

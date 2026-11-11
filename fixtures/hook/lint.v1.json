@@ -146,12 +146,6 @@
       ]
     },
     {
-      "name": "subscription hook carries no layer-1 diagnostics",
-      "hookName": "SUB",
-      "hook": "::ANCHOR(@seller::listing.cmp)",
-      "expectCodes": []
-    },
-    {
       "name": "identical delays are duplicate terms, not dominated delays",
       "hookName": "DUP",
       "hook": "buyer::(a.cmp +10s) & (a.cmp +10s)",
