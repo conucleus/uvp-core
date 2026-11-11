@@ -32,6 +32,6 @@ The current delay contract is part of the shared semantic surface:
   persist waits in `hook_state` rather than creating one thread per wait.
 
 See [`docs/specs/subscription-mint-spec.md`](docs/specs/subscription-mint-spec.md)
-for the cross-order semantic contract and
+for the trigger birth and dock collaboration model and
 [`../uvp/zhixu-dsl-grammar.md`](../uvp/zhixu-dsl-grammar.md)
 for the Cloud-facing Zhixu DSL reference.

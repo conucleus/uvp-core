@@ -51,7 +51,7 @@
 
 ### 7. 规格 + 附录 B 差异行
 
-- [ ] `docs/specs/subscription-mint-spec.md` 需要改写的条款已改（本规格是跨秩序协作唯一权威出处）
+- [ ] `docs/specs/subscription-mint-spec.md` 需要改写的条款已改（本规格是 trigger 出生与跨秩序协作的唯一权威出处）
 - [ ] 两轨运行差异需要登记的，登记到 uvp-eth 根 `uvp-chain.md` 附录 B（语法点接受域）或 wiki 运行差异页（运行时行为），不与 spec 抢权威
 
 ## 关批动作
