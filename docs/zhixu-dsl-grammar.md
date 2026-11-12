@@ -403,15 +403,16 @@ spec:
     zhixu: zx-2f7a1c9b4e6d8053a1c2b3d4e5f60718
     stage: packing
   signalMap:
-    # 示意：表达式的 atoms 必须已由 from 定义中 from.source 的阶段的 sendSignals 声明
-    cmp: "seller::packing.str & ~seller::packing.cmp"
+    # 示意：header source 固定为 spec.from.source，表达式不带 header，只写 <stage>.<signal>；
+    # atoms 必须已由 from 定义中 from.source 的阶段的 sendSignals 声明
+    cmp: "packing.str & ~packing.cmp"
 ```
 
 | 路径 | 类型 | 必填 | 约束 |
 |---|---|---|---|
 | `spec.from.zhixu` / `.source` | `string` | 是 | 定义 uid（`zx-<32hex>`，内容派生，§2.1）与 A 侧 source 名（须由 `from.zhixu` 的某个 stage 声明）。 |
 | `spec.to.zhixu` / `.stage` | `string` | 是 | B 侧定义 uid 与目标阶段名（须存在，且该 stage 以 `executor.supplierType: dock` 承接、输出信号由 `sendSignals` 声明）。 |
-| `spec.signalMap` | `map[string]string` | 是 | 至少一条：key 是 B 侧输出信号名（1-100 字节，不含 `.`/`#`/空白），必须已在 `to.stage.sendSignals` 中声明；value 是 A 侧 `validWhen` 表达式，header source 固定 = `spec.from.source`，按 Filter 档解析（与 §5.6 适格位同词表），atoms 必须落在 `from.source` 的阶段的 `sendSignals` 上。同一定义内（from.zhixu == to.zhixu）时表达式只引用该 output 之外的 A 侧事实。 |
+| `spec.signalMap` | `map[string]string` | 是 | 至少一条：key 是 B 侧输出信号名（1-100 字节，不含 `.`/`#`/空白），必须已在 `to.stage.sendSignals` 中声明；value 是 A 侧 `validWhen` 表达式（不带 header，只写 `<stage>.<signal>`；header source 由 `spec.from.source` 固定），按 Filter 档解析（与 §5.6 适格位同词表），atoms 必须落在 `from.source` 的阶段的 `sendSignals` 上。同一定义内（from.zhixu == to.zhixu）时表达式只引用该 output 之外的 A 侧事实。 |
 
 编译期校验（uvp-core `analyzeDock`；DK 族报错逐条定位到字段路径）：`apiVersion`/`kind`/`metadata.name` 形状按 §3；`from.zhixu`/`to.zhixu` 必须是已发布定义的内容派生 uid（编译请求 `analyze_dock_json({dock, published})` 携 `published` 定义集合，上限 256，uvp-core 校验 uid 与内容哈希一致）；`from.source` 存在性；`to.stage` 存在、为 dock 执行者阶段、其输出信号由 `sendSignals` 声明；`signalMap` 非空且 ≤64 条；output 名与声明集合的归一展开规则同 §4；表达式按 EvmStrict + Filter 档解析；atoms 必须 `<stage>.<signal>`、属 `from.source`、且已在其 stage `sendSignals` 中声明；单条表达式 atoms ≤64；同定义内表达式与正在发射的输出信号相互独立。
 
@@ -613,8 +614,8 @@ spec:
     zhixu: zx-9c41f0d27a3e5b86c4d1af0b7e285c36
     stage: main
   signalMap:
-    str: "settlement::on_deal.str"
-    cmp: "settlement::on_deal.str & ~settlement::on_deal.cmp"
+    str: "on_deal.str"
+    cmp: "on_deal.str & ~on_deal.cmp"
 ```
 
 ### 8.3 建模范式
