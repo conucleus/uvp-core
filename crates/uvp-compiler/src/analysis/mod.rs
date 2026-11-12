@@ -1,4 +1,4 @@
-//! 中立分析入口：共享校验 + hook IR + trigger 集 + dock state + EvmStrict
+//! 中立分析入口：共享校验 + hook IR + trigger 集 + EvmStrict
 //! capabilities/admissions，供链轨 TS 接管 hook_plan lowering（不生成链装饰、
 //! dependencyIndex、executorRoutes 与 shell）。
 
@@ -7,7 +7,6 @@ use uvp_hook_dsl::Profile;
 use uvp_model::ZhixuDefinition;
 
 use crate::artifact::{build_signal_admissions, build_signal_capabilities};
-use crate::docking::{compile_dock_state, dock_entrance_hook_ids};
 use crate::lower::{
     build_selected_stage_bindings, flatten_stages, normalize_platform_value,
     parse_hook_for_compiler, StageEntry,
@@ -19,13 +18,9 @@ use crate::validate::{
 };
 use crate::{join_issues_bounded, CompilerError, Result};
 
-pub(crate) const ZHIXU_ANALYSIS_SCHEMA_VERSION: &str = "uvp.zhixuAnalysis.v2";
+pub(crate) const ZHIXU_ANALYSIS_SCHEMA_VERSION: &str = "uvp.zhixuAnalysis.v4";
 
-pub fn compile_zhixu_analysis(
-    definition_value: &Value,
-    dock_targets: Option<&Value>,
-    allow_unresolved: bool,
-) -> Result<Value> {
+pub fn compile_zhixu_analysis(definition_value: &Value) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
         .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
     let issues = validate_zhixu_shape(&definition);
@@ -34,32 +29,21 @@ pub fn compile_zhixu_analysis(
     }
 
     let stage_entries = flatten_stages(&definition)?;
-    let stage_pairs = stage_entries
-        .iter()
-        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
-        .collect::<Vec<_>>();
     let stage_ids = stage_entries
         .iter()
         .map(|entry| entry.stage_identifier.clone())
         .collect::<std::collections::BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-    let dock_state = compile_dock_state(&definition, &stage_pairs, dock_targets, allow_unresolved)?;
 
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_stage_executors(
         &stage_entries,
         &selected_stage_bindings,
     ));
-    validation_issues.extend(validate_onchain_stage_materialization(
-        &stage_entries,
-        &dock_entrance_hook_ids(&dock_state),
-    ));
+    validation_issues.extend(validate_onchain_stage_materialization(&stage_entries));
     validation_issues.extend(validate_stage_triggers(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
-    validation_issues.extend(validate_receive_signal_references(
-        &stage_entries,
-        &dock_state.input_port_hook_ids,
-    ));
+    validation_issues.extend(validate_receive_signal_references(&stage_entries));
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(join_issues_bounded(
             &validation_issues,
@@ -75,23 +59,13 @@ pub fn compile_zhixu_analysis(
 
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
     let admissions = build_signal_admissions(&stage_entries, Profile::EvmStrict)?;
-    let dock_entrance_ids = dock_entrance_hook_ids(&dock_state)
-        .into_iter()
-        .collect::<Vec<_>>();
-    let dock_interface = dock_state.interface_json.unwrap_or(Value::Null);
-    let dock_routes = Value::Array(dock_state.routes_json);
-    let unresolved_dock_routes = Value::Array(dock_state.unresolved_json);
 
     Ok(json!({
         "schemaVersion": ZHIXU_ANALYSIS_SCHEMA_VERSION,
         "zhixuName": definition.metadata.name,
         "platform": platform,
         "stages": stages,
-        "dockEntranceHookIds": dock_entrance_ids,
         "selectedStageBindings": selected_stage_bindings,
-        "dockInterface": dock_interface,
-        "dockRoutes": dock_routes,
-        "unresolvedDockRoutes": unresolved_dock_routes,
         "signalCapabilities": signal_capabilities,
         "admissions": admissions,
     }))
@@ -154,18 +128,7 @@ fn stage_analysis(entry: &StageEntry) -> Result<Value> {
 }
 
 pub(crate) fn trigger_signal_names(entry: &StageEntry) -> Vec<String> {
-    entry
-        .stage
-        .trigger
-        .iter()
-        .map(|declared| {
-            if declared.contains('.') {
-                declared.clone()
-            } else {
-                format!("{}.{}", entry.stage_identifier, declared)
-            }
-        })
-        .collect()
+    entry.stage.trigger_signal_names()
 }
 
 fn hook_analysis(hook_name: &str, raw_expression: &str) -> Result<Value> {

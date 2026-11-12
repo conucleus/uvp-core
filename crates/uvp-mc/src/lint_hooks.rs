@@ -242,7 +242,7 @@ struct Guard {
 
 pub fn lint_hooks(definition_value: &Value) -> Result<LintHooksReport> {
     let vocab = Vocabulary::build(definition_value, &[])?;
-    let cloud = uvp_compiler::compile_cloud_artifact(definition_value, None, true)?;
+    let cloud = uvp_compiler::compile_cloud_artifact(definition_value)?;
 
     // 守卫不进检查词表；本面自建解析域：声明与适格原子之外，并入守卫
     // 原子，否则守卫里的信号在 resolve 中缺席会静默降级分析。

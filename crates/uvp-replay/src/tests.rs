@@ -1492,7 +1492,7 @@ fn order_link_birth_requires_structural_hook_fields() {
 
 #[test]
 fn order_trigger_hook_with_delay_is_a_structural_error() {
-    for kind in ["trigger", "dock"] {
+    for kind in ["trigger"] {
         let events = vec![json!({
             "eventName": "PlanRegistered",
             "blockNumber": 1,

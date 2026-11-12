@@ -440,20 +440,6 @@
       "notes": "Deterministic row-level defect; last_error must point at the real cause (missing config), not a misleading JSON-unmarshal message."
     },
     {
-      "code": "dock_route_unpublished",
-      "condition": "Dock routing defect: no published dock route for the zhixu/stage, route schema/parse failures, missing identity/entrance bindings, hook not bound on route, or target zhixu not published.",
-      "layer": "application",
-      "producers": ["go-cloud-engine"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "go-cloud-engine": ["docking.PermanentError", "docking.Permanentf (has no published dock route / route schemaVersion / orderIdPolicy / missing identity or entrance / hook not bound / target zhixu not published)"]
-      },
-      "notes": "Configuration is deterministic: retrying cannot publish the route."
-    },
-    {
       "code": "db_deterministic_violation",
       "condition": "PostgreSQL error codes whose outcome is fully determined by the input: 22001 string_data_right_truncation, 22003 numeric_value_out_of_range, 23503 foreign_key_violation, 23514 check_violation, P0001 raise_exception (deterministic RAISE from DDL trigger/function).",
       "layer": "db",
@@ -466,7 +452,7 @@
         "go-cloud-engine": [
           "deterministicPGErrorCodes (22001, 22003, 23503, 23514, P0001)",
           "22003 numeric_value_out_of_range (value exceeds the column domain: e.g. an over-bound retry-times option slipping the pre-check so max_attempts overflows int4)",
-          "P0001 raise_exception (dock reserved-namespace squatting rejection raised by a DDL trigger/function; transient faults never surface as P0001)"
+          "P0001 raise_exception (deterministic RAISE from a DDL trigger/function; transient faults never surface as P0001)"
         ]
       },
       "notes": "Same verdict on both pgx (pgconn.PgError) and lib/pq paths. 22001 is double-guarded by the compiler-side ValidationError pre-check."

@@ -13,8 +13,6 @@ struct ProfileFixture {
     #[allow(dead_code)]
     portable: bool,
     input: Value,
-    #[serde(default)]
-    dock_targets: Option<Value>,
     expect: FixtureExpect,
 }
 
@@ -31,8 +29,6 @@ struct FixtureExpect {
     hook_dependency_counts: Option<BTreeMap<String, usize>>,
     #[serde(default)]
     cloud_hook_modes: Option<BTreeMap<String, String>>,
-    #[serde(default)]
-    dock_route_count: Option<usize>,
 }
 
 use std::collections::BTreeMap;
@@ -68,7 +64,7 @@ fn compiles_profile_fixtures() {
         }
     }
     assert!(
-        discovered >= 10,
+        discovered >= 9,
         "profile fixture discovery regressed: only {discovered} fixtures found"
     );
 }
@@ -77,8 +73,6 @@ fn run_fixture(fixture: &ProfileFixture) {
     let result = compile_request(&CompileRequest {
         target: fixture.target.clone(),
         definition: fixture.input.clone(),
-        dock_targets: fixture.dock_targets.clone(),
-        allow_unresolved: false,
     });
     match (&fixture.expect.error_contains, result) {
         (Some(expected), Err(err)) => {
@@ -150,17 +144,6 @@ fn assert_success_fields(fixture: &ProfileFixture, value: &Value) {
             );
         }
     }
-    if let Some(expected_count) = &fixture.expect.dock_route_count {
-        let actual = value["dockRoutes"]
-            .as_array()
-            .map(Vec::len)
-            .unwrap_or_default();
-        assert_eq!(
-            &actual, expected_count,
-            "{} dock route count mismatch",
-            fixture.name
-        );
-    }
     if let Some(expected_modes) = &fixture.expect.cloud_hook_modes {
         let hooks = value["hooks"]
             .as_array()
@@ -195,8 +178,6 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
     let rerun = compile_request(&CompileRequest {
         target: fixture.target.clone(),
         definition: fixture.input.clone(),
-        dock_targets: fixture.dock_targets.clone(),
-        allow_unresolved: false,
     })
     .unwrap_or_else(|err| {
         panic!(
@@ -214,7 +195,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
     match fixture.target.as_str() {
         "hook_plan" | "evm" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.hookPlan.v5",
+                value["schemaVersion"], "uvp.hookPlan.v7",
                 "{}",
                 fixture.name
             );
@@ -222,7 +203,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
         }
         "cloud" | "cloud_db" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.cloudArtifact.v6",
+                value["schemaVersion"], "uvp.cloudArtifact.v8",
                 "{}",
                 fixture.name
             );

@@ -26,6 +26,13 @@ pub fn parse_hook_json(request_json: String) -> Result<String> {
 }
 
 #[napi]
+pub fn analyze_dock_json(request_json: String) -> Result<String> {
+    run_json("analyzeDockJson", || {
+        uvp_compiler::analyze_dock_json(&request_json)
+    })
+}
+
+#[napi]
 pub fn eval_compiled_hook_json(request_json: String) -> Result<String> {
     run_json("evalCompiledHookJson", || {
         uvp_hook_dsl::eval_compiled_hook_json(&request_json)
@@ -85,9 +92,9 @@ mod tests {
         assert_eq!(uvp_hook_dsl::SEMANTIC_VERSION, "uvp.semantic.v1");
         assert_eq!(
             uvp_compiler::HOOK_PLAN_SCHEMA_VERSION,
-            "uvp.hookPlan.v5",
+            "uvp.hookPlan.v7",
             "TS authority literal is uvp.protocol compiler HOOK_PLAN_SCHEMA_VERSION"
         );
-        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v5");
+        assert_eq!(super::hook_plan_schema_version(), "uvp.hookPlan.v7");
     }
 }

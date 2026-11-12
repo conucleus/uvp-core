@@ -42,8 +42,6 @@ fn compile_with_send_signal(
     uvp_compiler::compile_request(&uvp_compiler::CompileRequest {
         target: "hook_plan".to_string(),
         definition: corpus_definition(send_signal),
-        dock_targets: None,
-        allow_unresolved: false,
     })
 }
 

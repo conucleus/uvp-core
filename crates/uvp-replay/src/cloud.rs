@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn malformed_ast_fails_loudly() {
         let result = replay_compiled_hook(CloudReplayRequest {
-            ast: json!({"schemaVersion": "uvp.cloudAst.v2", "mode": "normal"}),
+            ast: json!({"schemaVersion": "uvp.cloudAst.v4", "mode": "normal"}),
             facts: vec![],
             now: iso(0),
         });

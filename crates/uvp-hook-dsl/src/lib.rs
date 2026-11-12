@@ -39,7 +39,7 @@ use serde_json::Value;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SEMANTIC_VERSION: &str = "uvp.semantic.v1";
-pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v2";
+pub const CLOUD_AST_SCHEMA_VERSION: &str = "uvp.cloudAst.v4";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

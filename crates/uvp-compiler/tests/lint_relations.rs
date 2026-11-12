@@ -230,11 +230,8 @@ fn lint_zhixu_does_not_change_compile_artifacts() {
             }
         }))
     .expect("test definition should deserialize");
-    let artifact = uvp_compiler::compile_zhixu_hook_plan(
-        &serde_json::to_value(&definition).unwrap(),
-        None,
-        true,
-    );
+    let artifact =
+        uvp_compiler::compile_zhixu_hook_plan(&serde_json::to_value(&definition).unwrap());
     assert!(
         artifact.is_ok(),
         "lint-dirty definition must still compile: {artifact:?}"

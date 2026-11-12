@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use uvp_hook_dsl::{parse_hook, DependencyKind, Gate, ParseHookRequest, Profile};
 use uvp_model::{ZhixuDefinition, ZhixuSendSignal};
 
-use crate::docking::{compile_dock_state, dock_entrance_hook_ids};
 use crate::lower::{
     build_executor_routes, build_selected_stage_bindings, compile_stage_hooks, flatten_stages,
     normalize_platform_value, parse_hook_for_cloud, value_str, StageEntry,
@@ -18,14 +17,10 @@ use crate::validate::{
 };
 use crate::{join_issues_bounded, CompilerError, Result};
 
-pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v5";
-pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v6";
+pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v7";
+pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v8";
 
-pub fn compile_zhixu_hook_plan(
-    definition_value: &Value,
-    dock_targets: Option<&Value>,
-    allow_unresolved: bool,
-) -> Result<Value> {
+pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
         .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
     let issues = validate_zhixu_shape(&definition);
@@ -34,33 +29,21 @@ pub fn compile_zhixu_hook_plan(
     }
 
     let stage_entries = flatten_stages(&definition)?;
-    let stage_pairs = stage_entries
-        .iter()
-        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
-        .collect::<Vec<_>>();
     let stage_ids = stage_entries
         .iter()
         .map(|entry| entry.stage_identifier.clone())
         .collect::<BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
 
-    let dock_state = compile_dock_state(&definition, &stage_pairs, dock_targets, allow_unresolved)?;
-
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_stage_executors(
         &stage_entries,
         &selected_stage_bindings,
     ));
-    validation_issues.extend(validate_onchain_stage_materialization(
-        &stage_entries,
-        &dock_entrance_hook_ids(&dock_state),
-    ));
+    validation_issues.extend(validate_onchain_stage_materialization(&stage_entries));
     validation_issues.extend(validate_stage_triggers(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
-    validation_issues.extend(validate_receive_signal_references(
-        &stage_entries,
-        &dock_state.input_port_hook_ids,
-    ));
+    validation_issues.extend(validate_receive_signal_references(&stage_entries));
     if !validation_issues.is_empty() {
         return Err(CompilerError::Issues(join_issues_bounded(
             &validation_issues,
@@ -71,39 +54,28 @@ pub fn compile_zhixu_hook_plan(
 
     let mut compiled_hooks = Vec::new();
     for entry in &stage_entries {
-        compiled_hooks.extend(compile_stage_hooks(entry, &dock_state)?);
+        compiled_hooks.extend(compile_stage_hooks(entry)?);
     }
     let dependency_index = build_dependency_index(&compiled_hooks);
     let signal_capabilities = build_signal_capabilities(&stage_entries)?;
     let admissions = build_signal_admissions(&stage_entries, Profile::EvmStrict)?;
     let executor_routes = build_executor_routes(&stage_entries);
 
-    let mut artifact = json!({
+    let artifact = json!({
         "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
         "zhixuName": definition.metadata.name,
         "platform": platform,
         "compiledHooks": compiled_hooks,
         "dependencyIndex": dependency_index,
         "executorRoutes": executor_routes,
-        "dockRoutes": Value::Array(dock_state.routes_json),
         "selectedStageBindings": selected_stage_bindings,
         "signalCapabilities": signal_capabilities,
         "admissions": admissions,
     });
-    if let Some(interface_json) = dock_state.interface_json {
-        artifact["dockInterface"] = interface_json;
-    }
-    if !dock_state.unresolved_json.is_empty() {
-        artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
-    }
     Ok(artifact)
 }
 
-pub fn compile_cloud_artifact(
-    definition_value: &Value,
-    dock_targets: Option<&Value>,
-    allow_unresolved: bool,
-) -> Result<Value> {
+pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
         .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
     let issues = validate_zhixu_shape(&definition);
@@ -112,16 +84,11 @@ pub fn compile_cloud_artifact(
     }
 
     let stage_entries = flatten_stages(&definition)?;
-    let stage_pairs = stage_entries
-        .iter()
-        .map(|entry| (entry.stage_identifier.clone(), entry.stage.clone()))
-        .collect::<Vec<_>>();
     let stage_ids = stage_entries
         .iter()
         .map(|entry| entry.stage_identifier.clone())
         .collect::<BTreeSet<_>>();
     let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-    let dock_state = compile_dock_state(&definition, &stage_pairs, dock_targets, allow_unresolved)?;
 
     let mut validation_issues = Vec::new();
     validation_issues.extend(validate_stage_executors(
@@ -130,10 +97,7 @@ pub fn compile_cloud_artifact(
     ));
     validation_issues.extend(validate_stage_triggers(&stage_entries));
     validation_issues.extend(validate_receive_signal_keys(&stage_entries));
-    validation_issues.extend(validate_receive_signal_references(
-        &stage_entries,
-        &dock_state.input_port_hook_ids,
-    ));
+    validation_issues.extend(validate_receive_signal_references(&stage_entries));
     build_signal_capabilities(&stage_entries)?;
     let admissions = build_signal_admissions(&stage_entries, Profile::CloudCompat)?;
     if !validation_issues.is_empty() {
@@ -158,22 +122,15 @@ pub fn compile_cloud_artifact(
         }
     }
 
-    let mut artifact = json!({
+    let artifact = json!({
         "schemaVersion": CLOUD_ARTIFACT_SCHEMA_VERSION,
         "zhixuName": definition.metadata.name,
         "platform": platform,
         "stages": stages,
         "hooks": hooks,
         "orderStageDefaults": stages,
-        "dockRoutes": Value::Array(dock_state.routes_json),
         "admissions": admissions,
     });
-    if let Some(interface_json) = dock_state.interface_json {
-        artifact["dockInterface"] = interface_json;
-    }
-    if !dock_state.unresolved_json.is_empty() {
-        artifact["unresolvedDockRoutes"] = Value::Array(dock_state.unresolved_json);
-    }
     Ok(artifact)
 }
 

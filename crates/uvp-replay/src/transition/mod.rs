@@ -233,7 +233,7 @@ pub(crate) fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Res
 }
 
 pub(crate) fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
-    Ok(matches!(order_trigger_kind(hook)?, "trigger" | "dock"))
+    Ok(matches!(order_trigger_kind(hook)?, "trigger"))
 }
 
 fn order_trigger_kind(hook: &Value) -> Result<&str> {
@@ -246,7 +246,7 @@ fn order_trigger_kind(hook: &Value) -> Result<&str> {
                 value_str(hook, "hookId").unwrap_or("<unknown>")
             ))
         })?;
-    if matches!(kind, "trigger" | "dock" | "none") {
+    if matches!(kind, "trigger" | "none") {
         Ok(kind)
     } else {
         Err(ReplayError::Message(format!(

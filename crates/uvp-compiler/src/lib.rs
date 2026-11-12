@@ -1,8 +1,8 @@
 //! uvp-compiler：定义到目标产物（hook_plan / cloud artifact）的编译器。
-//! crate 根只保留编译入口（compile_json/compile_request）、supplier 尺寸
-//! 校验入口、请求信封与公共导出；生产逻辑见
-//! `validate/`、`lower/`、`docking/`、`artifact/`、`dock.rs`（对接接口与
-//! 路由链接）与 `lint.rs`。
+//! crate 根只保留编译入口（compile_json/compile_request/analyze_dock_json）、
+//! supplier 尺寸校验入口、请求信封与公共导出；生产逻辑见 `validate/`、
+//! `lower/`、`artifact/`、`dock.rs`（Dock 文档校验与 `uvp.dock.v1` 产物）
+//! 与 `lint.rs`。
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -10,13 +10,13 @@ use thiserror::Error;
 
 pub use analysis::compile_zhixu_analysis;
 pub use artifact::{compile_cloud_artifact, compile_zhixu_hook_plan};
+pub use dock::{compile_dock_artifact, DOCK_ARTIFACT_SCHEMA_VERSION};
 
 pub mod dock;
 pub mod lint;
 
 mod analysis;
 mod artifact;
-mod docking;
 mod lower;
 mod validate;
 
@@ -24,9 +24,6 @@ pub use artifact::{CLOUD_ARTIFACT_SCHEMA_VERSION, HOOK_PLAN_SCHEMA_VERSION};
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-use serde_json::Map;
 
 #[derive(Debug, Error)]
 pub enum CompilerError {
@@ -68,10 +65,13 @@ pub struct CompileRequest {
     #[serde(default = "default_target")]
     pub target: String,
     pub definition: Value,
-    #[serde(default)]
-    pub dock_targets: Option<Value>,
-    #[serde(default)]
-    pub allow_unresolved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AnalyzeDockRequest {
+    pub dock: Value,
+    pub published: Value,
 }
 
 fn default_target() -> String {
@@ -85,13 +85,21 @@ pub fn compile_json(input: &str) -> String {
     envelope_json(result)
 }
 
+pub fn analyze_dock_json(input: &str) -> String {
+    let result = serde_json::from_str::<AnalyzeDockRequest>(input)
+        .map_err(|err| CompilerError::Message(format!("invalid analyze dock request: {err}")))
+        .and_then(|req| {
+            dock::compile_dock_artifact(&req.dock, &req.published)
+                .map_err(|issues| dock::dock_error(&issues))
+        });
+    envelope_json(result)
+}
+
 pub fn compile_request(req: &CompileRequest) -> Result<Value> {
-    let dock_targets = req.dock_targets.as_ref();
     match req.target.as_str() {
-        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition, dock_targets, false),
-        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition, dock_targets, false),
-        "parse" => compile_zhixu_hook_plan(&req.definition, dock_targets, true),
-        "analyze" => compile_zhixu_analysis(&req.definition, dock_targets, req.allow_unresolved),
+        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition),
+        "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition),
+        "analyze" => compile_zhixu_analysis(&req.definition),
         other => Err(CompilerError::Message(format!(
             "unsupported compile target {other:?}"
         ))),

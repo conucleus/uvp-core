@@ -8,8 +8,8 @@
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use uvp_model::{
-    DockInputPortSource, DockInterfaceSpec, DockOutputPortSource, Nucleation, ObjectMeta,
-    ZhixuDefinition, ZhixuExecutor, ZhixuPlatform, ZhixuSendSignal, ZhixuSpec, ZhixuStage,
+    DockDefinition, DockFrom, DockSpec, DockTo, Nucleation, ObjectMeta, ZhixuDefinition,
+    ZhixuExecutor, ZhixuPlatform, ZhixuSendSignal, ZhixuSpec, ZhixuStage,
 };
 
 const FIELDS: &str = include_str!("../../../fixtures/closed-sets/fields.v1.json");
@@ -59,17 +59,16 @@ fn struct_field_sets_match_the_pinned_corpus() {
             stages: vec![ZhixuStage {
                 name: "main".to_string(),
                 source: "buyer".to_string(),
-                trigger: vec!["main.cmp".to_string()],
                 executor: Some(ZhixuExecutor {
                     supplier_type: "organization".to_string(),
                     supplier_id: Some("org".to_string()),
-                    zhixu_executor_config: Some(json!({"target": {}})),
                     selectable_resource: Some(json!({"file": {}})),
                 }),
                 selected_stages: vec!["main".to_string()],
                 send_signals: vec![ZhixuSendSignal {
                     name: "cmp".to_string(),
                     valid_when: Some(vec!["buyer::main.cmp".to_string()]),
+                    trigger: true,
                 }],
                 receive_signals: [("START".to_string(), "buyer::main.seed".to_string())]
                     .into_iter()
@@ -79,34 +78,33 @@ fn struct_field_sets_match_the_pinned_corpus() {
                     .collect(),
                 file_writers: vec!["supervisor".to_string()],
             }],
-            dock_interface: [(
-                "production_service".to_string(),
-                DockInterfaceSpec {
-                    order_modes: vec!["new".to_string()],
-                    inputs: [(
-                        "execute".to_string(),
-                        DockInputPortSource {
-                            hook: "intake#EXECUTE".to_string(),
-                        },
-                    )]
-                    .into_iter()
-                    .collect(),
-                    outputs: [(
-                        "started".to_string(),
-                        DockOutputPortSource {
-                            signal: "factory::intake.str".to_string(),
-                        },
-                    )]
-                    .into_iter()
-                    .collect(),
-                },
-            )]
-            .into_iter()
-            .collect(),
         },
     };
 
-    let cases: [(&str, BTreeSet<String>); 11] = [
+    let dock = DockDefinition {
+        api_version: "uvp/v0".to_string(),
+        kind: "Dock".to_string(),
+        metadata: ObjectMeta {
+            name: "demo_dock".to_string(),
+            labels: [("k".to_string(), "v".to_string())].into_iter().collect(),
+            annotations: [("a".to_string(), "b".to_string())].into_iter().collect(),
+        },
+        spec: DockSpec {
+            from: DockFrom {
+                zhixu: "zx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                source: "buyer".to_string(),
+            },
+            to: DockTo {
+                zhixu: "zx-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                stage: "attach".to_string(),
+            },
+            signal_map: [("started".to_string(), "intake.execute".to_string())]
+                .into_iter()
+                .collect(),
+        },
+    };
+
+    let cases: [(&str, BTreeSet<String>); 12] = [
         ("root", keys_of(&root)),
         ("metadata", keys_of(&root.metadata)),
         ("spec", keys_of(&root.spec)),
@@ -121,18 +119,10 @@ fn struct_field_sets_match_the_pinned_corpus() {
             "executor",
             keys_of(root.spec.stages[0].executor.as_ref().unwrap()),
         ),
-        (
-            "dockInterfaceEntry",
-            keys_of(&root.spec.dock_interface["production_service"]),
-        ),
-        (
-            "dockInputPort",
-            keys_of(&root.spec.dock_interface["production_service"].inputs["execute"]),
-        ),
-        (
-            "dockOutputPort",
-            keys_of(&root.spec.dock_interface["production_service"].outputs["started"]),
-        ),
+        ("dockRoot", keys_of(&dock)),
+        ("dockSpec", keys_of(&dock.spec)),
+        ("dockFrom", keys_of(&dock.spec.from)),
+        ("dockTo", keys_of(&dock.spec.to)),
     ];
     for (group, actual) in cases {
         assert_eq!(

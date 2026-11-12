@@ -91,16 +91,7 @@ fn envelope_message(output: &str) -> (bool, String) {
 }
 
 fn probe_compile(definition: Value) -> (bool, String) {
-    let request = json!({ "target": "parse", "definition": definition });
-    envelope_message(&uvp_compiler::compile_json(&request.to_string()))
-}
-
-fn probe_link(definition: Value, dock_targets: Value) -> (bool, String) {
-    let request = json!({
-        "target": "hook_plan",
-        "definition": definition,
-        "dockTargets": dock_targets,
-    });
+    let request = json!({ "target": "analyze", "definition": definition });
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
 
@@ -157,86 +148,6 @@ fn stage_mut(definition: &mut Value) -> &mut Value {
     definition
         .pointer_mut("/spec/stages/0")
         .expect("base definition has one stage")
-}
-
-fn target_interface_definition() -> Value {
-    json!({
-            "apiVersion": "uvp/v0",
-            "kind": "Zhixu",
-            "metadata": { "name": "constraints_target" },
-            "spec": {
-                "platform": { "type": "cloud" },
-                "nucleation": { "id": "target-core" },
-                "dockInterface": {
-                    "production_service": {
-                        "orderModes": ["new"],
-                        "inputs": {
-                            "execute": { "hook": "work#DOCK_ENTER" }
-                        },
-                        "outputs": {
-                            "done": { "signal": "buyer::work.cmp" }
-                        }
-                    }
-                },
-                "stages": [{
-                            "name": "work",
-                            "source": "buyer",
-                            "receiveSignals": {
-                                "DOCK_ENTER": "buyer::work.enter",
-                                "SELF": "buyer::work.seed"
-                            },
-                            "sendSignals": [
-    { "name": "str" },
-    { "name": "cmp" },
-    { "name": "seed" }
-    ],
-                            "executor": { "supplierType": "organization", "supplierID": "target-org" }
-                        }]
-            }
-        })
-}
-
-const TARGET_UID: &str = "zx-0123456789abcdef0123456789abcdef";
-
-fn target_dock_targets() -> Value {
-    json!([{
-        "uid": TARGET_UID,
-        "definition": target_interface_definition(),
-    }])
-}
-
-fn dock_definition() -> Value {
-    dock_definition_with("new")
-}
-
-fn dock_definition_with(mode: &str) -> Value {
-    let mut definition = base_definition();
-    let stage = stage_mut(&mut definition);
-    stage["receiveSignals"] = json!({ "START": "buyer::work.cmp" });
-    stage["sendSignals"] = json!([{ "name": "str" }, { "name": "cmp" }]);
-    stage["executor"] = json!({
-        "supplierType": "zhixu",
-        "zhixuExecutorConfig": {
-            "target": { "zhixu": TARGET_UID },
-            "interface": "production_service",
-            "order": { "mode": mode },
-            "inputMap": { "START": "execute" },
-            "signalMap": { "str": "done" }
-        }
-    });
-    definition
-}
-
-fn dock_config_mut(definition: &mut Value) -> &mut Value {
-    definition
-        .pointer_mut("/spec/stages/0/executor/zhixuExecutorConfig")
-        .expect("dock definition has a zhixuExecutorConfig")
-}
-
-fn signal_map_mut(definition: &mut Value) -> &mut Value {
-    definition
-        .pointer_mut("/spec/stages/0/executor/zhixuExecutorConfig/signalMap")
-        .expect("dock definition has a signalMap")
 }
 
 fn oversize_ascii(length: usize, byte: u8) -> String {
@@ -304,47 +215,6 @@ fn rust_probes() -> Vec<(String, Probe)> {
                 })
             },
             "receiveSignals channels (compiled hooks) across spec.stages, limit is 512",
-        ),
-    ));
-    probes.push((
-        "interface-ports-max-count".into(),
-        (
-            || probe_compile(base_definition()),
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    let hooks = serde_json::Map::from_iter(
-                        (0..65).map(|i| (format!("GO{i}"), json!("buyer::work.cmp".to_string()))),
-                    );
-                    stage_mut(&mut d)["receiveSignals"] = Value::Object(hooks);
-                    let inputs = serde_json::Map::from_iter((0..65).map(|i| {
-                        (
-                            format!("execute{i}"),
-                            json!({ "hook": format!("work#GO{i}") }),
-                        )
-                    }));
-                    d["spec"]["dockInterface"] = json!({
-                        "service": { "orderModes": ["new"], "inputs": Value::Object(inputs) }
-                    });
-                    d
-                })
-            },
-            "interface exposes",
-        ),
-    ));
-    probes.push((
-        "manifest-definitions-max-count".into(),
-        (
-            || probe_link(dock_definition(), target_dock_targets()),
-            || {
-                let targets: Vec<Value> = (0..257)
-                    .map(|i| {
-                        json!({ "uid": format!("zx-{i:032x}"), "definition": target_interface_definition() })
-                    })
-                    .collect();
-                probe_link(dock_definition(), json!(targets))
-            },
-            "definitions, limit is 256",
         ),
     ));
     probes.push((
@@ -606,254 +476,24 @@ fn rust_probes() -> Vec<(String, Probe)> {
     ));
 
     probes.push((
-        "dock-order-mode-closed-enum".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    dock_config_mut(&mut d)["order"]["mode"] = json!("reused");
-                    d
-                })
-            },
-            "must be \"new\" or \"existing\"",
-        ),
-    ));
-    probes.push((
-        "dock-target-name-slug".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                // 空 uid 先拒；合法 slug 形态但非 zx-uid 的 name 式引用同样
-                // 拒绝——寻址面是内容派生 uid，name 不是寻址面。
-                let mut empty = dock_definition();
-                dock_config_mut(&mut empty)["target"]["zhixu"] = json!("");
-                assert_violate(probe_compile(empty), "D003", "dock-target-name-slug");
-                let mut d = dock_definition();
-                dock_config_mut(&mut d)["target"]["zhixu"] = json!("payment-zhixu");
-                probe_compile(d)
-            },
-            "D003",
-        ),
-    ));
-    probes.push((
-        "dock-port-name-pattern".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    signal_map_mut(&mut d)["str"] = json!("Out-Port");
-                    d
-                })
-            },
-            "value must be a port name matching ^[a-z][a-z0-9_]{0,31}$",
-        ),
-    ));
-    probes.push((
-        "dock-signalmap-key-max-length".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    signal_map_mut(&mut d)[oversize_ascii(27, b'a')] = json!("done");
-                    d
-                })
-            },
-            "D006",
-        ),
-    ));
-    probes.push((
-        "dock-signalmap-key-forbidden-separator".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    signal_map_mut(&mut d)["bad.key"] = json!("done");
-                    d
-                })
-            },
-            "D006",
-        ),
-    ));
-    probes.push((
-        "dock-signalmap-key-combined-max-length".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    let long_stage = oversize_ascii(95, b's');
-                    let stage = stage_mut(&mut d);
-                    stage["name"] = json!(long_stage);
-                    stage["sendSignals"] = json!([]);
-                    stage["receiveSignals"] =
-                        json!({ "START": format!("buyer::{long_stage}.cmp") });
-                    d.pointer_mut("/spec/stages/0/executor/zhixuExecutorConfig/signalMap")
-                        .expect("signalMap path")["s12345"] = json!("done");
-                    d
-                })
-            },
-            "exceeds 100 (individual_record.signal_name)",
-        ),
-    ));
-    probes.push((
-        "dock-at-least-one-mapping".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    let config = dock_config_mut(&mut d).as_object_mut().unwrap();
-                    config.remove("inputMap");
-                    config.remove("signalMap");
-                    d
-                })
-            },
-            "at least one of inputMap/signalMap must bind a port",
-        ),
-    ));
-    probes.push((
-        "dock-new-mode-single-input-binding".into(),
-        (
-            || probe_compile(dock_definition()),
-            || {
-                probe_compile({
-                    let mut d = dock_definition();
-                    let stage = stage_mut(&mut d);
-                    stage["receiveSignals"]["ALSO"] = json!("buyer::work.cmp");
-                    dock_config_mut(&mut d)["inputMap"]["ALSO"] = json!("execute");
-                    d
-                })
-            },
-            "exactly one inputMap binding",
-        ),
-    ));
-
-    probes.push((
-        "dock-interface-name-pattern".into(),
-        (
-            || probe_compile(target_interface_definition()),
-            || {
-                probe_compile({
-                    let mut d = target_interface_definition();
-                    let dock = d["spec"]["dockInterface"].as_object_mut().unwrap();
-                    let spec = dock.remove("production_service").unwrap();
-                    dock.insert("ProductionService".to_string(), spec);
-                    d
-                })
-            },
-            "interface name must match ^[a-z][a-z0-9_]{0,31}$",
-        ),
-    ));
-    probes.push((
-        "dock-interface-order-modes".into(),
-        (
-            || probe_compile(target_interface_definition()),
-            || {
-                probe_compile({
-                    let mut d = target_interface_definition();
-                    d["spec"]["dockInterface"]["production_service"]["orderModes"] = json!([]);
-                    d
-                })
-            },
-            "orderModes must be a non-empty subset of {new, existing}",
-        ),
-    ));
-
-    probes.push((
-        "dock-order-mode-allowed-by-interface".into(),
-        (
-            || probe_link(dock_definition_with("new"), target_dock_targets()),
-            || probe_link(dock_definition_with("existing"), target_dock_targets()),
-            "allows orderModes",
-        ),
-    ));
-
-    probes.push((
-        "stage-trigger-subset-of-send-signals".into(),
-        (
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
-                    d
-                })
-            },
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    stage_mut(&mut d)["trigger"] = json!(["nope"]);
-                    d
-                })
-            },
-            "not declared in work.sendSignals",
-        ),
-    ));
-    probes.push((
-        "stage-trigger-no-duplicates".into(),
-        (
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
-                    d
-                })
-            },
-            || {
-                probe_compile({
-                    let mut d = base_definition();
-                    stage_mut(&mut d)["trigger"] = json!(["cmp", "cmp"]);
-                    d
-                })
-            },
-            "trigger entries must be unique",
-        ),
-    ));
-    probes.push((
         "stage-trigger-static-plain-executor".into(),
         (
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
+                    stage_mut(&mut d)["sendSignals"][1]["trigger"] = json!(true);
                     d
                 })
             },
             || {
                 probe_compile({
                     let mut d = base_definition();
-                    stage_mut(&mut d)["trigger"] = json!(["cmp"]);
-                    stage_mut(&mut d)["executor"] = json!({
-                        "supplierType": "zhixu",
-                        "zhixuExecutorConfig": {
-                            "target": null,
-                            "interface": "svc",
-                            "order": { "mode": "existing" },
-                            "signalMap": { "cmp": "done" }
-                        }
-                    });
+                    stage_mut(&mut d)["sendSignals"][1]["trigger"] = json!(true);
+                    stage_mut(&mut d)["executor"] = json!({ "supplierType": "organization" });
                     d
                 })
             },
-            "trigger requires its own static non-zhixu executor with supplierID",
-        ),
-    ));
-    probes.push((
-        "dock-birth-hook-single-atom-syntax".into(),
-        (
-            || probe_compile(target_interface_definition()),
-            || {
-                probe_compile({
-                    let mut d = target_interface_definition();
-                    d["spec"]["stages"][0]["receiveSignals"]["DOCK_ENTER"] =
-                        json!("buyer::work.enter & buyer::work.enter");
-                    d
-                })
-            },
-            "D013",
+            "trigger requires its own static individual/organization executor with supplierID",
         ),
     ));
 

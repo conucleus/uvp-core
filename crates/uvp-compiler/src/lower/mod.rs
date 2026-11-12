@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 use uvp_hook_dsl::{parse_hook, Compatibility, Gate, ParseHookOutput, ParseHookRequest, Profile};
 use uvp_model::{ZhixuDefinition, ZhixuStage};
 
-use crate::docking::{dock_entrance_hook_ids, DockState};
 use crate::{CompilerError, Result};
 
 #[derive(Debug, Clone)]
@@ -106,7 +105,7 @@ pub(crate) fn build_selected_stage_bindings(
 pub(crate) fn build_executor_routes(entries: &[StageEntry]) -> Value {
     let mut routes = Map::new();
     for entry in entries {
-        if is_zhixu_executor_stage(entry) {
+        if is_dock_executor_stage(entry) {
             continue;
         }
         if entry.stage.executor.is_some() {
@@ -116,30 +115,20 @@ pub(crate) fn build_executor_routes(entries: &[StageEntry]) -> Value {
     Value::Object(routes)
 }
 
-pub(crate) fn is_zhixu_executor_stage(entry: &StageEntry) -> bool {
+pub(crate) fn is_dock_executor_stage(entry: &StageEntry) -> bool {
     entry
         .stage
         .executor
         .as_ref()
-        .is_some_and(|executor| executor.supplier_type == "zhixu")
+        .is_some_and(|executor| executor.supplier_type == "dock")
 }
 
-pub(crate) fn compile_stage_hooks(
-    entry: &StageEntry,
-    dock_state: &DockState,
-) -> Result<Vec<Value>> {
+pub(crate) fn compile_stage_hooks(entry: &StageEntry) -> Result<Vec<Value>> {
     let mut hooks = Vec::new();
-    let entrance_hook_ids = dock_entrance_hook_ids(dock_state);
-    let is_zhixu_stage = is_zhixu_executor_stage(entry);
+    let is_dock_stage = is_dock_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
-        let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
-        let order_trigger_kind = if entrance_hook_ids.contains(&hook_id) {
-            "dock"
-        } else {
-            "none"
-        };
-        let emit_ready = order_trigger_kind != "none" || entry.stage.executor.is_some();
-        let route = if is_zhixu_stage {
+        let emit_ready = entry.stage.executor.is_some();
+        let route = if is_dock_stage {
             None
         } else {
             entry
@@ -152,7 +141,7 @@ pub(crate) fn compile_stage_hooks(
             "receive",
             &entry.stage_identifier,
             hook_name,
-            order_trigger_kind,
+            "none",
             emit_ready,
             raw_expression,
             route,

@@ -154,8 +154,8 @@ impl Vocabulary {
     pub fn build(definition_value: &serde_json::Value, checks: &[Check]) -> Result<Self> {
         let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
             .map_err(|err| McError::Message(format!("invalid Zhixu definition: {err}")))?;
-        let cloud = uvp_compiler::compile_cloud_artifact(definition_value, None, true)?;
-        let hook_plan = uvp_compiler::compile_zhixu_hook_plan(definition_value, None, true)?;
+        let cloud = uvp_compiler::compile_cloud_artifact(definition_value)?;
+        let hook_plan = uvp_compiler::compile_zhixu_hook_plan(definition_value)?;
 
         let mut declared: BTreeSet<String> = BTreeSet::new();
         for capability in hook_plan

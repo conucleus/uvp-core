@@ -90,6 +90,27 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                     executor.supplier_type
                 ));
             }
+            if executor.supplier_type == "dock" {
+                if executor
+                    .supplier_id
+                    .as_deref()
+                    .is_some_and(|supplier_id| !supplier_id.trim().is_empty())
+                {
+                    issues.push(format!(
+                        "spec.stages[{stage_index}].executor.supplierID is forbidden when supplierType is \"dock\": the dock executor identity is bound by a Dock link at runtime"
+                    ));
+                }
+                if stage.receive_signals.is_empty() {
+                    issues.push(format!(
+                        "spec.stages[{stage_index}] supplierType \"dock\" requires receiveSignals: the link attach conditions are evaluated against them"
+                    ));
+                }
+                if stage.has_trigger() {
+                    issues.push(format!(
+                        "spec.stages[{stage_index}] supplierType \"dock\" must not declare a non-empty trigger: trigger stages require a static individual/organization executor"
+                    ));
+                }
+            }
             if let Some(selectable) = &executor.selectable_resource {
                 let path = format!("spec.stages[{stage_index}].executor.selectableResource");
                 match selectable.as_object() {
@@ -239,7 +260,7 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
         let Some(executor) = entry.stage.executor.as_ref() else {
             continue;
         };
-        if executor.supplier_type == "zhixu" {
+        if executor.supplier_type == "dock" {
             continue;
         }
         let supplier_id = executor.supplier_id.as_deref().unwrap_or("");
@@ -292,27 +313,20 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
     issues
 }
 
-pub(crate) fn validate_onchain_stage_materialization(
-    entries: &[StageEntry],
-    entrance_hook_ids: &BTreeSet<String>,
-) -> Vec<String> {
+pub(crate) fn validate_onchain_stage_materialization(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
         if entry.stage.receive_signals.is_empty() {
-            if !entry.stage.trigger.is_empty() {
+            if entry.stage.has_trigger() {
                 continue;
             }
             issues.push(format!(
-                "{} declares no receiveSignals and no trigger and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare a trigger set, receiveSignals carrying a dock entrance, or a static executor with a receive hook",
+                "{} declares no receiveSignals and no trigger and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare a trigger set or a static executor with a receive hook",
                 entry.stage_identifier
             ));
             continue;
         }
-        let has_materializing_hook = entry.stage.executor.is_some()
-            || !entry.stage.trigger.is_empty()
-            || entry.stage.receive_signals.keys().any(|hook_name| {
-                entrance_hook_ids.contains(&format!("{}#{hook_name}", entry.stage_identifier))
-            });
+        let has_materializing_hook = entry.stage.executor.is_some() || entry.stage.has_trigger();
         if has_materializing_hook {
             continue;
         }
@@ -329,52 +343,21 @@ pub(crate) fn validate_onchain_stage_materialization(
 pub(crate) fn validate_stage_triggers(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
-        if entry.stage.trigger.is_empty() {
+        if !entry.stage.has_trigger() {
             continue;
         }
-        let stage_prefix = format!("{}.", entry.stage_identifier);
-        let mut seen = BTreeSet::new();
-        for (index, declared) in entry.stage.trigger.iter().enumerate() {
-            let normalized = if declared.contains('.') {
-                if !declared.starts_with(&stage_prefix) {
-                    issues.push(format!(
-                        "{}.trigger[{index}] {declared:?} must address the declaring stage: expected {stage_prefix}<signal>",
-                        entry.stage_identifier
-                    ));
-                    continue;
-                }
-                declared.clone()
-            } else {
-                format!("{stage_prefix}{declared}")
-            };
-            if !seen.insert(normalized.clone()) {
-                issues.push(format!(
-                    "{}.trigger[{index}] duplicates {normalized}: trigger entries must be unique",
-                    entry.stage_identifier
-                ));
-                continue;
-            }
-            if !declares_signal_expanding_to(
-                &entry.stage.send_signals,
-                &entry.stage_identifier,
-                &normalized,
-            ) {
-                issues.push(format!(
-                    "{}.trigger[{index}] references signal {normalized} that is not declared in {}.sendSignals",
-                    entry.stage_identifier, entry.stage_identifier
-                ));
-            }
-        }
         let static_plain_executor = entry.stage.executor.as_ref().is_some_and(|executor| {
-            executor.supplier_type != "zhixu"
-                && executor
-                    .supplier_id
-                    .as_deref()
-                    .is_some_and(|supplier_id| !supplier_id.trim().is_empty())
+            matches!(
+                executor.supplier_type.as_str(),
+                "individual" | "organization"
+            ) && executor
+                .supplier_id
+                .as_deref()
+                .is_some_and(|supplier_id| !supplier_id.trim().is_empty())
         });
         if !static_plain_executor {
             issues.push(format!(
-                "{}.trigger requires its own static non-zhixu executor with supplierID: trigger stages birth orders and cannot be delegated or patched at runtime",
+                "{}.sendSignals trigger requires its own static individual/organization executor with supplierID: trigger stages birth orders and cannot be delegated, docked or patched at runtime",
                 entry.stage_identifier
             ));
         }
@@ -382,18 +365,11 @@ pub(crate) fn validate_stage_triggers(entries: &[StageEntry]) -> Vec<String> {
     issues
 }
 
-pub(crate) fn validate_receive_signal_references(
-    entries: &[StageEntry],
-    input_port_hook_ids: &BTreeSet<String>,
-) -> Vec<String> {
+pub(crate) fn validate_receive_signal_references(entries: &[StageEntry]) -> Vec<String> {
     let mut issues = Vec::new();
     let catalog = SignalReferenceCatalog::new(entries);
     for entry in entries {
         for (hook_name, raw_expression) in &entry.stage.receive_signals {
-            let hook_id = format!("{}#{hook_name}", entry.stage_identifier);
-            if input_port_hook_ids.contains(&hook_id) {
-                continue;
-            }
             match parse_hook_for_compiler("HOOK", raw_expression) {
                 Ok(parsed) => issues.extend(validate_hook_dependency_references(
                     &parsed,
@@ -544,7 +520,7 @@ pub(crate) fn valid_signal_declaration(value: &str) -> bool {
 fn has_static_executor(executor: Option<&ZhixuExecutor>) -> bool {
     match executor {
         None => false,
-        Some(executor) if executor.supplier_type == "zhixu" => true,
+        Some(executor) if executor.supplier_type == "dock" => true,
         Some(executor) => executor
             .supplier_id
             .as_deref()

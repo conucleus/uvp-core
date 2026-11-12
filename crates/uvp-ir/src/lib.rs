@@ -4,6 +4,8 @@ use thiserror::Error;
 
 pub const DEFINITION_UID_DOMAIN: &str = "uvp:definition-uid:v2";
 
+pub const DOCK_UID_DOMAIN: &str = "uvp:dock-uid:v1";
+
 pub const HOOK_PLAN_HASH_DOMAIN: &str = "uvp:hook-plan-artifact:v1";
 
 pub const ONCHAIN_PLAN_HASH_DOMAIN: &str = "uvp:onchain-hook-plan-artifact:v1";
@@ -70,17 +72,44 @@ fn strip_definition_display_fields(mut definition: Value) -> Value {
     definition
 }
 
-pub fn derive_definition_uid(definition: &Value) -> Result<String> {
-    let stripped = strip_definition_display_fields(canonicalize(definition)?);
-    let canonical = canonical_stringify(&stripped)?;
-    let preimage = format!("{DEFINITION_UID_DOMAIN}:{canonical}");
+fn keccak_hex(preimage: &str) -> String {
     let digest = Keccak256::digest(preimage.as_bytes());
-    let mut uid = String::with_capacity(3 + 64);
-    uid.push_str("zx-");
-    for byte in digest.iter().take(16) {
-        uid.push_str(&format!("{byte:02x}"));
-    }
-    Ok(uid)
+    format!(
+        "0x{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn content_digest(domain: &str, document: &Value) -> Result<String> {
+    let stripped = strip_definition_display_fields(canonicalize(document)?);
+    let canonical = canonical_stringify(&stripped)?;
+    Ok(keccak_hex(&format!("{domain}:{canonical}")))
+}
+
+pub fn derive_definition_uid(definition: &Value) -> Result<String> {
+    let digest = content_digest(DEFINITION_UID_DOMAIN, definition)?;
+    Ok(format!("zx-{}", &digest[2..34]))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockIdentity {
+    pub dkid: String,
+    pub doc_hash: String,
+}
+
+pub fn derive_dock_identity(dock: &Value) -> Result<DockIdentity> {
+    let doc_hash = content_digest(DOCK_UID_DOMAIN, dock)?;
+    Ok(DockIdentity {
+        dkid: format!("zd-{}", &doc_hash[2..34]),
+        doc_hash,
+    })
+}
+
+pub fn keccak256_utf8_hex(value: &str) -> String {
+    keccak_hex(value)
 }
 
 fn canonicalize_number(number: &Number) -> Result<Value> {

@@ -28,8 +28,6 @@ pub struct ZhixuSpec {
     pub nucleation: Nucleation,
     #[serde(default)]
     pub stages: Vec<ZhixuStage>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub dock_interface: BTreeMap<String, DockInterfaceSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,8 +58,6 @@ pub struct Nucleation {
 pub struct ZhixuStage {
     pub name: String,
     pub source: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub trigger: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executor: Option<ZhixuExecutor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -105,6 +101,28 @@ pub struct ZhixuSendSignal {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_when: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub trigger: bool,
+}
+
+impl ZhixuStage {
+    pub fn has_trigger(&self) -> bool {
+        self.send_signals.iter().any(|signal| signal.trigger)
+    }
+
+    pub fn trigger_signal_names(&self) -> Vec<String> {
+        self.send_signals
+            .iter()
+            .filter(|signal| signal.trigger)
+            .map(|signal| {
+                if signal.name.contains('.') {
+                    signal.name.clone()
+                } else {
+                    format!("{}.{}", self.name, signal.name)
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,12 +136,10 @@ pub struct ZhixuExecutor {
     )]
     pub supplier_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub zhixu_executor_config: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selectable_resource: Option<Value>,
 }
 
-pub const SUPPLIER_TYPES: [&str; 3] = ["individual", "organization", "zhixu"];
+pub const SUPPLIER_TYPES: [&str; 3] = ["individual", "organization", "dock"];
 
 pub fn is_known_supplier_type(value: &str) -> bool {
     SUPPLIER_TYPES.contains(&value)
@@ -137,22 +153,32 @@ pub fn is_known_file_type(value: &str) -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockInterfaceSpec {
-    pub order_modes: Vec<String>,
-    #[serde(default)]
-    pub inputs: BTreeMap<String, DockInputPortSource>,
-    #[serde(default)]
-    pub outputs: BTreeMap<String, DockOutputPortSource>,
+pub struct DockDefinition {
+    pub api_version: String,
+    pub kind: String,
+    pub metadata: ObjectMeta,
+    pub spec: DockSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockInputPortSource {
-    pub hook: String,
+pub struct DockSpec {
+    pub from: DockFrom,
+    pub to: DockTo,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub signal_map: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockOutputPortSource {
-    pub signal: String,
+pub struct DockFrom {
+    pub zhixu: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DockTo {
+    pub zhixu: String,
+    pub stage: String,
 }
