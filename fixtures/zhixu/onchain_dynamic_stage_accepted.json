@@ -1,0 +1,68 @@
+{
+  "name": "on-chain dynamic stage anchored by selectedStages compiles",
+  "semanticVersion": "uvp.semantic.v1",
+  "target": "hook_plan",
+  "portable": true,
+  "input": {
+    "apiVersion": "uvp/v0",
+    "kind": "Zhixu",
+    "metadata": {
+      "name": "dynamic_stage"
+    },
+    "spec": {
+      "platform": {
+        "type": "evm"
+      },
+      "nucleation": {
+        "id": "core"
+      },
+      "stages": [
+        {
+          "name": "assign",
+          "source": "buyer",
+          "selectedStages": [
+            "main"
+          ],
+          "receiveSignals": {
+            "BEGIN": "buyer::assign.self_ready"
+          },
+          "sendSignals": [
+            {
+              "name": "executor_selected"
+            },
+            {
+              "name": "self_ready"
+            }
+          ],
+          "executor": {
+            "supplierType": "organization",
+            "supplierID": "selector-org"
+          }
+        },
+        {
+          "name": "main",
+          "source": "buyer",
+          "receiveSignals": {
+            "GO": "buyer::assign.executor_selected"
+          },
+          "sendSignals": [
+            {
+              "name": "cmp"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "platform": "evm",
+    "hookIds": [
+      "assign#BEGIN",
+      "main#GO"
+    ],
+    "hookDependencyCounts": {
+      "assign#BEGIN": 1,
+      "main#GO": 1
+    }
+  }
+}

@@ -23,7 +23,7 @@
 - 覆盖对象：`kind: Zhixu` 与 `kind: Dock`（独立文档，§7）。云轨另有运行时注册对象 `kind: Supplier`（形态与机制见 `uvp-cloud.md`）；链上轨道没有 `Supplier` 顶层对象——供应商 profile、handler、能力标签、审核状态都是 Store 链下数据（见 `uvp-chain.md`）。
 - 编译器注册类型为：`apiVersion: uvp/v0` + `kind: Zhixu`（大小写敏感）。
 - Dock 是独立文档（`apiVersion: uvp/v0` + `kind: Dock`），与 `kind: Zhixu` 并列发布、由 `uvp-core analyzeDock` 单独编译；字段壳为 `apiVersion`/`kind`/`metadata`/`spec`，未知字段按响亮拒绝（uvp-core `deny_unknown_fields` 口径，各轨提交入口的枚举闭集见实现层文档）。
-- 产物版本：本册对应同一语义批的中性分析与产物面为 `uvp.zhixuAnalysis.v4`（定义级分析）、`uvp.cloudAst.v4`（云侧 hook AST）、`uvp.cloudArtifact.v8`（云侧编译产物）、`uvp.hookPlan.v7`（链侧 hook plan）与 `uvp.onchainHookPlan.v7`（链上注册产物），Dock 文档产物为 `uvp.dock.v1`、binding 读面为 `uvp.dockBinding.v1`；同一语义只存在当前版本。
+- 产物版本：本册对应同一语义批的中性分析与产物面为 `uvp.zhixuAnalysis.v4`（定义级分析）、`uvp.cloudAst.v4`（云侧 hook AST）、`uvp.cloudArtifact.v8`（云侧编译产物）、`uvp.hookPlan.v8`（链侧 hook plan）与 `uvp.onchainHookPlan.v8`（链上注册产物），Dock 文档产物为 `uvp.dock.v1`、binding 读面为 `uvp.dockBinding.v1`；同一语义只存在当前版本。
 - 编译器请求面：默认 target 为 `hook_plan`（`evm` 为其别名），另有 `cloud`/`cloud_db`（云轨产物）与 `analyze`（共享校验 + hook IR + 出生信号集 + hook 解析结果）；Dock 文档走 `analyzeDock` 请求（`{dock, published}`）。
 - 证据正文不进语言层裁决；各轨存储边界（链上只应保存状态、哈希、metadata URI、签名、权限和事件）见实现层文档。
 - 示例来源是冻结的中性示例域（白皮书四原型 + 水果加工演示域）；产品层词表不进入本册。
@@ -50,7 +50,7 @@
 - **秩序（Zhixu）**：一份可复用的定义文档，声明一组阶段与它们的协作规则；内容派生身份（§2）。
 - **阶段（stage）**：秩序内一台完备的状态机，`{stage}` 单段寻址、秩序内全局唯一。
 - **信号事实（signal fact）**：已经发生、不可改写的事件。事实在提交时确定其锚定订单：携带订单号的信号落在该订单；空订单号的出生信号在出生时确定派生订单，并成为该订单的首条事实（§6）。
-- **执行者（executor）**：承接某阶段投递的主体——在某次订单、某个 stage 上实际被绑定、被授权并提交 signal 的主体（各轨主体形态——注册 supplier / 授权钱包——见实现层文档）；或另一条秩序的 dock 执行者（§7）。
+- **执行者（executor）**：承接某阶段投递的主体——在某次订单、某个 stage 上实际被绑定、被授权并提交 signal 的主体；定义面写静态 `supplierID` 的阶段由该 supplier 承接，dynamic 阶段的 supplier 在订单运行期按单指派；各轨主体形态见实现层文档（链轨：`supplierId: bytes32` 为链上身份主键，effective executor 由 `UVPSupplierRegistry` 实时解析）。或另一条秩序的 dock 执行者（§7）。
 - **订单（order）**：定义的一次执行轨迹；订单号一律由出生事实纯函数派生，调用方不可自报（§6.3/§6.4）。
 
 跨 zhixu 协作由三个正交问题构成，每个问题有专属机制——**这张表是全册的地图**：
@@ -64,7 +64,7 @@
 两条边界一句话（全册唯一表述，各处只留指针）：
 
 - **"跨 source 类" ≠ "跨秩序"**：hook 的头 source 与条件里的 `stage.signal` 都只在本域解析；跨秩序事实级联只有静态 Dock 订阅一条通道。
-- **外部事实的唯一入口是执行者自发 signal**（链上 = 授权钱包按 EIP-712 提交的 signal；空订单号的出生提交同样是一条签名 signal）；任何声明本身都不会发送 signal，系统不主动向外部收集事实。
+- **外部事实的唯一入口是执行者自发 signal**（链上 = 阶段 effective executor 的 EIP-712 签名 signal，或由 relayer 经 `submitSignalFor` 代付；空订单号的出生提交同样是一条签名 signal，提交权由计划 `birthAuthorizer` 承诺）；任何声明本身都不会发送 signal，系统不主动向外部收集事实。
 
 四类跨行业形态（分馏/撮合/委托/收购）与机制的对应叙述见白皮书 §2.2；现行表达见 §8.3 与规格 §5 的形态对照。
 
@@ -168,10 +168,10 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 
 **执行者拓扑约束**（uvp-core 裁决）：
 
-- 阶段完全不给出 `executor` 块时，必须可被其他阶段通过 `selectedStages` 覆盖到，否则编译拒绝（"没有分配 executor，也没有被 selectedStages 引用"）。覆盖解决的是"无 executor 块"的可达性，不豁免 supplierID 存在性。
+- 阶段完全不给出 `executor` 块时是 **dynamic 阶段**：必须可被其他阶段通过 `selectedStages` 覆盖到，否则编译拒绝（"没有分配 executor，也没有被 selectedStages 引用"）。覆盖解决的是"无 executor 块"的可达性与选择权归属，不豁免静态执行者的 supplierID 存在性；链轨把它作为 dynamic 阶段接受，并在订单运行期由 selector 按单指派 supplierId（详见 `uvp-chain.md` §2）。
 - 出生集非空的阶段由静态 plain 执行者承接（`supplierType` 为 `individual`/`organization`、`supplierID` 非空）；出生权只落在这类执行者上。`supplierType: dock` 的阶段以 `receiveSignals` 声明绑定面，其执行者身份在运行期选定（§7.3）。
-- ⚠ **阶段物化门（onchain 产物面，core 裁决、带 target 条件）**：uvp-core 在 onchain（hookPlan）产物线执行该闸——链上阶段只能由本阶段 order-trigger（出生槽位）hook 或 EMIT_READY hook 物化，每个阶段都必须具备至少一个物化路径：既无出生信号又无 `receiveSignals` 的阶段编译为零 hook、永不可物化且无恢复路径，整体拒绝；有 `receiveSignals` 但没有执行者（`executor` 块）且出生集为空的阶段，其 hook 一律编译为 flags=0 纯 watcher，形态一旦上链即死锁且无恢复路径，整体拒绝；`supplierType: dock` 阶段以静态 dock 执行者通过（其 hooks 为 EMIT_READY 并带 dock executor 位），cloud 产物面免检。闸的完整叙述（EMIT_READY 编译形态、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
-- ⚠ 表达"谁有权指定别的阶段执行者"只看 `selectedStages`；阶段执行者类型只看 `executor.supplierType`。
+- ⚠ **阶段物化门（onchain 产物面，core 裁决、带 target 条件）**：uvp-core 在 onchain（hookPlan）产物线执行该闸——链上阶段只能由本阶段 order-trigger（出生槽位）hook 或 EMIT_READY hook 物化，每个阶段都必须具备至少一个物化路径：既无出生信号又无 `receiveSignals` 的阶段编译为零 hook、永不可物化且无恢复路径，整体拒绝；**不给出 `executor` 块的阶段是 dynamic 阶段，由自身 receive hook 的 EMIT_READY 物化**（编译产物带 dynamic executor 位 32，plan 不为它写 default supplier/route/binding），不再按“无 executor 即纯 watcher 死锁”拒绝，但执行者拓扑仍要求它被其他阶段的 `selectedStages` 从静态执行者可达，且运行期在首个信号前必须由 selector 指派 supplierId；`supplierType: dock` 阶段以静态 dock 执行者通过（其 hooks 为 EMIT_READY 并带 dock executor 位），cloud 产物面免检。闸的完整叙述（EMIT_READY 编译形态、dynamic 阶段的 supplier 指派与 `StageExecutorNotAssigned`、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
+- ⚠ 表达"谁有权指定别的阶段执行者"只看 `selectedStages`；阶段执行者类型只看 `executor.supplierType`。链轨的 selector 必须是 selector 阶段当单的 effective executor（无 orderCreator 旁路），被指派 supplier 必须已在 `UVPSupplierRegistry` 注册。
 - ⚠ 对会创建新订单的阶段，DSL 声明面只有出生信号一条建单通道：`sendSignals[].trigger: true`（空订单号提交时出生，§6）；dock 不创建订单（§7），`str`/`cmp` 等信号名没有内建建单语义，订单号不可自报（§1）。
 
 onchain 实现层的附加接受域见 `uvp-chain.md`（uvp-eth 根）：
@@ -290,9 +290,9 @@ buyer::b.cmp & ~((a.cmp +5s) +10s)      # 否决位操作数内禁止嵌套延�
 
 **列表形态**：`validWhen` 是 `{source}::{condition}` 的完整表达式列表。逐项独立过筛（适格位是最宽容档，规则项内全覆盖）；全体项 header source 必须一致（否则编译拒绝——适格产物只携带单一 source 标签）；编译期折叠为一棵 AND（N=1 形态不变），依赖取并集，`rawExpression` 逐项以数组保留进 admissions 供诊断。缺键=无条件发射；空数组/空项拒绝（提示删键）。
 
-**跨轨叙述的拆词纪律**：「请求级门 → 吸收 → 适格」三层各自独立，勿混称为一个「适格」。「请求级门」指鉴权/签名/deadline/提交者授权一类入口闸（链轨 `submitSignal` 的入口闸；云轨 HTTP 入口与 HMAC 单 sender 语义）——链轨的订单级 submitter 授权住在这一层，不在适格层；「吸收」指重复事实的 first-win 幂等（不再过任何筛）；「适格」仅指本节 `validWhen` 的发射过滤（pre-state 求值）。云轨的 validWhen 时间窗与链轨的提交者授权分属第 3/1 层、物理不同；两轨在第 2/3 层同位同序（见下段）。
+**跨轨叙述的拆词纪律**：「请求级门 → 吸收 → 适格」三层各自独立，勿混称为一个「适格」。「请求级门」指鉴权/签名/deadline/提交者授权一类入口闸（链轨 `submitSignal` 的入口闸；云轨 HTTP 入口与 HMAC 单 sender 语义）——链轨的发信权（effective executor 校验）住在这一层，不在适格层；「吸收」指重复事实的 first-win 幂等（不再过任何筛）；「适格」仅指本节 `validWhen` 的发射过滤（pre-state 求值）。云轨的 validWhen 时间窗与链轨的 effective executor 发信权分属第 3/1 层、物理不同；两轨在第 2/3 层同位同序（见下段）。
 
-**适格位的求值与次序**：幂等吸收先于适格求值（已落库的重复外部提交 first-win 吸收、不再过适格，at-least-once 重试不得被过期窗口 revert），但**后于**请求级门——链轨入口的 deadline/提交者授权与属主阶段就绪门都排在吸收之前：过期或未授权的重放先响亮 revert（`ExpiredSignalSignature` / `UnauthorizedSignalSubmitter`）而非被静默吸收。该次序是刻意选择：把吸收挪到请求级门之前会开「无有效签名探测事实存在性」面，现序方向更严。新事实在提交时对 pre-state 整棵求值（时钟取运行侧权威时钟，链上为 `block.timestamp`）；**整棵 admit-iff-Ready**（`value && !wait && !cancel`）：Ready 准入，Wait/Impossible/NeedsMore 整笔拒绝为类型化错误（云轨为类型化非重试拒绝，消息点名信号与失败表达式；链轨 revert `SignalAdmissionRejected`，携带 orderId/sourceId/signalId），不是逐项投票。**整批原子性**：链轨一笔交易多发射时一个不适格即整批 revert——EVM 原生原子性，接受为设计（见 `uvp-chain.md`）。
+**适格位的求值与次序**：幂等吸收先于适格求值（已落库的重复外部提交 first-win 吸收、不再过适格，at-least-once 重试不得被过期窗口 revert），但**后于**请求级门——链轨入口的 deadline/发信权与属主阶段就绪门都排在吸收之前：过期或非 effective executor 的重放先响亮 revert（`ExpiredSignalSignature` / `StageExecutorNotAssigned` / `SupplierNotRegistered` / `UnauthorizedStageExecutor`）而非被静默吸收。该次序是刻意选择：把吸收挪到请求级门之前会开「无有效签名探测事实存在性」面，现序方向更严。新事实在提交时对 pre-state 整棵求值（时钟取运行侧权威时钟，链上为 `block.timestamp`）；**整棵 admit-iff-Ready**（`value && !wait && !cancel`）：Ready 准入，Wait/Impossible/NeedsMore 整笔拒绝为类型化错误（云轨为类型化非重试拒绝，消息点名信号与失败表达式；链轨 revert `SignalAdmissionRejected`，携带 orderId/sourceId/signalId），不是逐项投票。**整批原子性**：链轨一笔交易多发射时一个不适格即整批 revert——EVM 原生原子性，接受为设计（见 `uvp-chain.md`）。
 
 **拒绝面**：对事实流静默（拒绝即零事实行、零投递行，绝不落 marker 事实）、对发送方响亮（类型化拒绝，可定位是哪发被哪个闸拒）。拒绝后补齐依赖事实再重新提交即可（该发未落库，重新提交不是重复；重新提交会再过一次筛）。
 
@@ -324,7 +324,7 @@ sendSignals:
 
 ### 6.1 提交管线与出生判定
 
-一次 signal 提交的输入是 `(stage, signal, orderId?, payload, resources, auth)`；语言层裁决以下步骤（权限/签名/时限等请求级闸由各轨实现层负责）：
+一次 signal 提交的输入是 `(stage, signal, orderId?, payload, resources, submitter/signature)`；语言层裁决以下步骤（权限/签名/时限等请求级闸由各轨实现层负责——链轨的发信权按阶段 effective executor 校验，见 `uvp-chain.md` §6）：
 
 1. **成员检查**：stage 必须存在；`signal ∈ stage.sendSignals`，否则拒绝（具名 `SIGNAL_NOT_IN_SEND_SIGNALS` 一类入口错误）。
 2. **确定上下文**：`orderId` 为空 → **空订单上下文**（无 facts/files）；`orderId` 非空 → 订单必须存在，不存在即拒绝；随后在订单上下文求值。
@@ -429,7 +429,7 @@ spec:
 | `receiveSignals` | map | 必须非空 | dock 阶段的接收 hook 是绑定声明面；其 hooks 编译时带 `HOOK_FLAG_DOCK_EXECUTOR` 标记。 |
 | `sendSignals[].trigger` | — | 不适用 | 出生权由 plain 执行者阶段承载；dock 阶段的输出信号可带 `validWhen`，作发射适格（§5.6）。 |
 
-dock 阶段不进 plan 级执行者路由与候选集；dock 执行者由订单在挂接 stage 一次性选定（两轨均经订单级 stage patch：选中后固定，换选在运行期响亮拒绝），选定后该 stage 的 signal 提交授权按该执行者写入。定义面只声明 dock 执行者类型，目标选择在运行期由 stage patch 完成。
+dock 阶段不进 plan 级执行者路由与候选集；dock 执行者由订单在挂接 stage 一次性选定（两轨均经订单级 stage patch：选中后固定，换选在运行期响亮拒绝）。链轨选择记录携 `supplierId`（选中 supplier 必须已注册），该 supplier 在 `UVPSupplierRegistry` 的当前 executor 即该 stage 的 effective executor——没有订单级授权行写入，registry 轮换立即生效。定义面只声明 dock 执行者类型，目标选择在运行期由 stage patch 完成。
 
 ### 7.4 绑定、时间窗与发射（运行期语义）
 
@@ -453,7 +453,7 @@ dock 阶段不进 plan 级执行者路由与候选集；dock 执行者由订单�
 
 ### 7.7 外部事实与秩序间上下文传播
 
-外部事实只有一条建模路径：**执行器自发 signal 即入口**（§1）。静态 Dock 在这条路径上的角色是发射条件声明：外部事实先进入 A 侧 backend/executor，执行者明确发送的 canonical UVP signal（链上=授权钱包按 EIP-712 提交）才进入 UVP 信号集合；Dock 只声明"A 订单事实 → B 输出信号"的发射条件；事实保持原位与归属。
+外部事实只有一条建模路径：**执行器自发 signal 即入口**（§1）。静态 Dock 在这条路径上的角色是发射条件声明：外部事实先进入 A 侧 backend/executor，执行者明确发送的 canonical UVP signal（链上=阶段 effective executor 按 EIP-712 提交，或经 `submitSignalFor` 由 relayer 代付而业务签名仍归该 executor）才进入 UVP 信号集合；Dock 只声明"A 订单事实 → B 输出信号"的发射条件；事实保持原位与归属。
 
 ---
 
@@ -681,7 +681,7 @@ spec:
 | `stage.sendSignals[].trigger` | bool | 否 | `true` = 出生信号；条目须 ∈ sendSignals、同阶段不重复、编译期固定 | §4/§6 |
 | `stage.receiveSignals` | map | 否 | key=通道名（1-36B，无 `.`/`#`/空白）；value=同单 hook | §4/§5/§6 |
 | `executor.supplierType` | string | 是 | individual/organization/dock | §4 |
-| `executor.supplierID` | string | 条件 | plain 执行者必填（≤36B）；dock 阶段由运行期绑定确定 | §4 |
+| `executor.supplierID` | string | 条件 | plain 执行者必填（≤36B），链轨编译期按固定域派生 `supplierId`；dock 阶段由运行期绑定确定；不写 `executor` 块 = dynamic 阶段，supplier 运行期按单指派 | §4 |
 | `executor.selectableResource` | map | 否 | 可选资源描述 | §4 |
 | `Dock.apiVersion` / `kind` | string | 是 | `uvp/v0` / `Dock`（大小写敏感） | §7.2 |
 | `Dock.metadata.name` | string | 是 | slug，纯展示（不参与 dkid 派生） | §7.2 |

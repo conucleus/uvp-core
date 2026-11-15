@@ -21,7 +21,7 @@
           "name": "loose",
           "source": "buyer",
           "receiveSignals": {
-            "MATCH": "buyer::market.pool.matched"
+            "MATCH": "buyer::loose.ack"
           },
           "sendSignals": [
             {

@@ -381,42 +381,195 @@ fn rejects_executor_without_supplier_id_even_when_selected_stages_anchored() {
 }
 
 #[test]
-fn rejects_receive_hooks_on_stage_without_static_executor() {
+fn accepts_dynamic_stage_with_selected_stages_anchor() {
     let definition = json!({
-            "apiVersion": "uvp/v0",
-            "kind": "Zhixu",
-            "metadata": { "name": "unmaterializable_watcher" },
-            "spec": {
-                "platform": { "type": "evm" },
-                "nucleation": { "id": "core" },
-                "stages": [{
-                            "name": "assign",
-                            "source": "buyer",
-                            "selectedStages": ["main"],
-                            "sendSignals": [{ "name": "executor_selected" }],
-                            "executor": { "supplierType": "organization", "supplierID": "selector-org" }
-                        },
-    {
-                            "name": "main",
-                            "source": "buyer",
-                            "receiveSignals": {
-                                "OBS": "buyer::assign.executor_selected"
-                            }
-                        }]
-            }
-        });
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "dynamic_executor_stage" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "core" },
+            "stages": [
+                {
+                    "name": "assign",
+                    "source": "buyer",
+                    "selectedStages": ["main"],
+                    "receiveSignals": { "BEGIN": "buyer::assign.self_ready" },
+                    "sendSignals": [{ "name": "executor_selected" }, { "name": "self_ready" }],
+                    "executor": { "supplierType": "organization", "supplierID": "selector-org" }
+                },
+                {
+                    "name": "main",
+                    "source": "buyer",
+                    "receiveSignals": { "GO": "buyer::assign.executor_selected" },
+                    "sendSignals": [{ "name": "cmp" }]
+                }
+            ]
+        }
+    });
 
-    let error = compile_zhixu_hook_plan(&definition)
-        .expect_err("flags=0 watcher on a selectedStages-only stage must fail");
+    let plan = compile_zhixu_hook_plan(&definition)
+        .expect("dynamic stage anchored through selectedStages must compile");
+    let hooks = plan["compiledHooks"].as_array().unwrap();
+    let dynamic_hook = hooks
+        .iter()
+        .find(|hook| hook["hookId"] == json!("main#GO"))
+        .expect("dynamic stage hook is compiled");
+    assert_eq!(
+        dynamic_hook["emitReady"],
+        json!(true),
+        "dynamic receive hooks must emit readiness: stage materialization only happens via this stage's own hooks"
+    );
     assert!(
-        error
-            .to_string()
-            .contains("can never materialize the stage"),
-        "unexpected error: {error}"
+        dynamic_hook.get("route").is_none(),
+        "dynamic stage has no executor route: {dynamic_hook}"
+    );
+    let static_hook = hooks
+        .iter()
+        .find(|hook| hook["hookId"] == json!("assign#BEGIN"))
+        .expect("static executor hook is compiled");
+    assert_eq!(static_hook["emitReady"], json!(true));
+    assert!(
+        static_hook["route"].is_object(),
+        "static executor keeps its route: {static_hook}"
+    );
+    let routes = plan["executorRoutes"]
+        .as_object()
+        .expect("executorRoutes is a map");
+    assert!(routes.contains_key("assign"));
+    assert!(!routes.contains_key("main"));
+
+    let analysis =
+        compile_zhixu_analysis(&definition).expect("analyze accepts the dynamic stage shape");
+    let dynamic_stage = analysis["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|stage| stage["stageIdentifier"] == json!("main"))
+        .expect("analysis carries the dynamic stage");
+    assert_eq!(
+        dynamic_stage["executor"],
+        Value::Null,
+        "dynamic stage has no executor at definition level"
     );
 
-    compile_cloud_artifact(&definition)
-        .expect("cloud target must not enforce on-chain materialization");
+    let cloud = compile_cloud_artifact(&definition)
+        .expect("cloud target accepts the same definition (no on-chain materialization gate)");
+    assert!(cloud["hooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|hook| hook["stageIdentifier"] == json!("main") && hook["hookName"] == json!("GO")));
+}
+
+#[test]
+fn rejects_dynamic_stage_without_selected_stages_anchor() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "unreachable_dynamic_stage" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "core" },
+            "stages": [{
+                "name": "loose",
+                "source": "buyer",
+                "receiveSignals": { "MATCH": "buyer::loose.ack" },
+                "sendSignals": [{ "name": "ack" }]
+            }]
+        }
+    });
+
+    for target in ["hook_plan", "analyze"] {
+        let error = (if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition)
+        } else {
+            compile_zhixu_analysis(&definition)
+        })
+        .expect_err("executor-less stage without a selectedStages anchor must stay rejected");
+        assert!(
+            error.to_string().contains(
+                "has no static executor and is not reachable from a static executor through selectedStages"
+            ),
+            "{target}: {error}"
+        );
+    }
+}
+
+#[test]
+fn rejects_zero_hook_stage_on_chain_targets_but_not_cloud() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "zero_hook_stage" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "core" },
+            "stages": [{
+                "name": "start",
+                "source": "buyer",
+                "sendSignals": [{ "name": "step_done" }],
+                "executor": { "supplierType": "organization", "supplierID": "org-a" }
+            }]
+        }
+    });
+
+    for target in ["hook_plan", "analyze"] {
+        let error = (if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition)
+        } else {
+            compile_zhixu_analysis(&definition)
+        })
+        .expect_err("zero-hook stage must stay rejected on the chain targets");
+        assert!(
+            error.to_string().contains("compiles to zero hooks"),
+            "{target}: {error}"
+        );
+    }
+    compile_cloud_artifact(&definition).expect("cloud target has no on-chain materialization gate");
+}
+
+#[test]
+fn rejects_order_trigger_on_executor_less_stage() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "dynamic_trigger_stage" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "core" },
+            "stages": [
+                {
+                    "name": "anchor",
+                    "source": "buyer",
+                    "selectedStages": ["entry"],
+                    "receiveSignals": { "BEGIN": "buyer::anchor.self_ready" },
+                    "sendSignals": [{ "name": "self_ready" }, { "name": "go" }],
+                    "executor": { "supplierType": "organization", "supplierID": "org-a" }
+                },
+                {
+                    "name": "entry",
+                    "source": "buyer",
+                    "sendSignals": [{ "name": "born", "trigger": true }]
+                }
+            ]
+        }
+    });
+
+    for target in ["hook_plan", "analyze"] {
+        let error = (if target == "hook_plan" {
+            compile_zhixu_hook_plan(&definition)
+        } else {
+            compile_zhixu_analysis(&definition)
+        })
+        .expect_err("order-trigger on an executor-less stage must stay rejected");
+        assert!(
+            error.to_string().contains(
+                "trigger requires its own static individual/organization executor with supplierID"
+            ),
+            "{target}: {error}"
+        );
+    }
 }
 
 #[test]

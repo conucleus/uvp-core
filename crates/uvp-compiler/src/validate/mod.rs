@@ -321,19 +321,8 @@ pub(crate) fn validate_onchain_stage_materialization(entries: &[StageEntry]) -> 
                 continue;
             }
             issues.push(format!(
-                "{} declares no receiveSignals and no trigger and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare a trigger set or a static executor with a receive hook",
+                "{} declares no receiveSignals and no trigger and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare a trigger set or receiveSignals",
                 entry.stage_identifier
-            ));
-            continue;
-        }
-        let has_materializing_hook = entry.stage.executor.is_some() || entry.stage.has_trigger();
-        if has_materializing_hook {
-            continue;
-        }
-        for hook_name in entry.stage.receive_signals.keys() {
-            issues.push(format!(
-                "{}.receiveSignals.{}: stage has no trigger set, order-trigger or EMIT_READY hook; its hooks compile to flags=0 watchers which can never materialize the stage on-chain (deadlock, no recovery path) — declare a trigger set, a static executor, or drop receiveSignals from this stage",
-                entry.stage_identifier, hook_name
             ));
         }
     }

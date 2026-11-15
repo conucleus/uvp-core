@@ -127,7 +127,6 @@ pub(crate) fn compile_stage_hooks(entry: &StageEntry) -> Result<Vec<Value>> {
     let mut hooks = Vec::new();
     let is_dock_stage = is_dock_executor_stage(entry);
     for (hook_name, raw_expression) in &entry.stage.receive_signals {
-        let emit_ready = entry.stage.executor.is_some();
         let route = if is_dock_stage {
             None
         } else {
@@ -137,12 +136,13 @@ pub(crate) fn compile_stage_hooks(entry: &StageEntry) -> Result<Vec<Value>> {
                 .as_ref()
                 .map(|_| route_for_stage(entry))
         };
+        // dynamic 阶段没有 executor，但仍必须由本阶段 EMIT_READY hook 物化：执行者由订单级 patch 在首信号前指派。
         hooks.push(compile_hook(
             "receive",
             &entry.stage_identifier,
             hook_name,
             "none",
-            emit_ready,
+            true,
             raw_expression,
             route,
         )?);

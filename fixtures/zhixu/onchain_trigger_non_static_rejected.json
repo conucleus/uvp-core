@@ -1,13 +1,13 @@
 {
-  "name": "on-chain watcher-only stage is rejected (all hooks compile to flags=0)",
+  "name": "order-trigger on an executor-less stage is rejected",
   "semanticVersion": "uvp.semantic.v1",
   "target": "hook_plan",
-  "portable": true,
+  "portable": false,
   "input": {
     "apiVersion": "uvp/v0",
     "kind": "Zhixu",
     "metadata": {
-      "name": "watcher_only_stage"
+      "name": "dynamic_trigger_stage"
     },
     "spec": {
       "platform": {
@@ -20,19 +20,19 @@
         {
           "name": "anchor",
           "source": "buyer",
+          "selectedStages": [
+            "entry"
+          ],
           "receiveSignals": {
-            "BEGIN": "buyer::anchor.seed"
+            "BEGIN": "buyer::anchor.self_ready"
           },
           "sendSignals": [
             {
-              "name": "go"
+              "name": "self_ready"
             },
             {
-              "name": "seed"
+              "name": "go"
             }
-          ],
-          "selectedStages": [
-            "watcher"
           ],
           "executor": {
             "supplierType": "organization",
@@ -40,14 +40,12 @@
           }
         },
         {
-          "name": "watcher",
+          "name": "entry",
           "source": "buyer",
-          "receiveSignals": {
-            "WATCH": "buyer::anchor.go"
-          },
           "sendSignals": [
             {
-              "name": "cmp"
+              "name": "born",
+              "trigger": true
             }
           ]
         }
@@ -55,6 +53,6 @@
     }
   },
   "expect": {
-    "errorContains": "flags=0 watchers"
+    "errorContains": "trigger requires its own static individual/organization executor with supplierID"
   }
 }
