@@ -23,7 +23,9 @@ pub use cloud::{
 
 use facts::{order_key, validate_plan_registration_gates, OracleOrderState, OracleState};
 use snapshot::compare_hook_observations;
-use transition::{absorb_chain_observation, evaluate_timer_hook, record_signal_and_evaluate};
+use transition::{
+    absorb_chain_observation, evaluate_timer_hook, materialize_stage, record_signal_and_evaluate,
+};
 
 #[cfg(test)]
 mod tests;
@@ -172,6 +174,9 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                 let plan_id = value_str(event, "planId")?;
                 let order_id = value_str(event, "orderId")?;
                 let stage_id = value_str(event, "stageId")?;
+                let plan = state.plans.get(plan_id).cloned().ok_or_else(|| {
+                    ReplayError::Message(format!("chain oracle missing plan {plan_id}"))
+                })?;
                 let order = state
                     .orders
                     .get_mut(&order_key(plan_id, order_id))
@@ -180,7 +185,7 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                             "chain oracle missing order {plan_id}:{order_id}"
                         ))
                     })?;
-                order.materialized_stages.insert(stage_id.to_string(), true);
+                observed.extend(materialize_stage(order, &plan, stage_id)?);
             }
             "OrderTriggered" => {
                 let order_key =

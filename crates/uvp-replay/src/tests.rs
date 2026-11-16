@@ -740,51 +740,6 @@ fn replays_ready_hook() {
 }
 
 #[test]
-fn emit_ready_is_independent_from_order_materialization() {
-    let mut order = OracleOrderState {
-        zhixu_id: "demo".to_string(),
-        order_id: "order-1".to_string(),
-        ..OracleOrderState::default()
-    };
-    order.signals.insert(
-        "0x50".to_string(),
-        json!({"submittedAt": "2026-04-27T00:00:00.000Z"}),
-    );
-
-    let silent_trigger = json!({
-        "hookId": "start#SILENT",
-        "stageId": "start",
-        "stageIdentifier": "start",
-        "hookName": "SILENT",
-        "orderTriggerKind": "trigger",
-        "emitReady": false,
-        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
-    });
-    let trigger_observations =
-        evaluate_hook(&mut order, &silent_trigger, "2026-04-27T00:00:00.000Z")
-            .expect("silent trigger should evaluate");
-    assert!(trigger_observations.is_empty());
-    assert!(order.materialized_stages["start"]);
-    assert_eq!(order.hook_statuses["start#SILENT"].status, "ready");
-    assert!(!order.hook_statuses["start#SILENT"].ready_emitted);
-
-    let ordinary_hook = json!({
-        "hookId": "start#OBSERVE",
-        "stageId": "start",
-        "stageIdentifier": "start",
-        "hookName": "OBSERVE",
-        "orderTriggerKind": "none",
-        "emitReady": true,
-        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
-    });
-    let observations = evaluate_hook(&mut order, &ordinary_hook, "2026-04-27T00:00:00.000Z")
-        .expect("materialized ordinary hook should evaluate");
-    assert_eq!(observations.len(), 1);
-    assert_eq!(observations[0]["eventName"], "HookReady");
-    assert_eq!(observations[0]["hookId"], "start#OBSERVE");
-}
-
-#[test]
 fn stage_materialized_event_backfills_materialization() {
     let events = vec![
         json!({
@@ -795,16 +750,30 @@ fn stage_materialized_event_backfills_materialization() {
             "plan": {
                 "planId": "0x01",
                 "zhixuId": "demo",
-                "compiledHooks": [{
-                    "hookId": "exec#WATCH",
-                    "stageId": "exec",
-                    "stageIdentifier": "exec",
-                    "hookName": "WATCH",
-                    "orderTriggerKind": "none",
-                    "emitReady": false,
-                    "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
-                }],
-                "dependencyIndex": { "0x50": ["exec#WATCH"] }
+                "compiledHooks": [
+                    {
+                        "hookId": "exec#WATCH",
+                        "stageId": "exec",
+                        "stageIdentifier": "exec",
+                        "hookName": "WATCH",
+                        "orderTriggerKind": "none",
+                        "emitReady": false,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    },
+                    {
+                        "hookId": "exec#OPEN",
+                        "stageId": "exec",
+                        "stageIdentifier": "exec",
+                        "hookName": "OPEN",
+                        "orderTriggerKind": "none",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x51"}]
+                    }
+                ],
+                "dependencyIndex": {
+                    "0x50": ["exec#WATCH"],
+                    "0x51": ["exec#OPEN"]
+                }
             }
         }),
         json!({
@@ -818,22 +787,10 @@ fn stage_materialized_event_backfills_materialization() {
             "registeredAt": "2026-04-27T00:00:00.000Z"
         }),
         json!({
-            "eventName": "StageMaterialized",
+            "eventName": "SignalSubmitted",
             "blockNumber": 3,
             "logIndex": 0,
             "transactionHash": "0x03",
-            "planId": "0x01",
-            "orderId": "order-1",
-            "stageId": "exec",
-            "triggerHookId": "exec#BIRTH",
-            "sourceId": "0x30",
-            "signalId": "0x40"
-        }),
-        json!({
-            "eventName": "SignalSubmitted",
-            "blockNumber": 4,
-            "logIndex": 0,
-            "transactionHash": "0x04",
             "planId": "0x01",
             "zhixuId": "demo",
             "orderId": "order-1",
@@ -843,19 +800,263 @@ fn stage_materialized_event_backfills_materialization() {
             "senderId": "sender",
             "submittedAt": "2026-04-27T00:00:00.000Z"
         }),
+        json!({
+            "eventName": "StageMaterialized",
+            "blockNumber": 4,
+            "logIndex": 0,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "orderId": "order-1",
+            "stageId": "exec",
+            "triggerHookId": "exec#OPEN",
+            "sourceId": "0x31",
+            "signalId": "0x41"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 4,
+            "logIndex": 1,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "exec#WATCH",
+            "stageIdentifier": "exec",
+            "hookName": "WATCH"
+        }),
     ];
     let result = replay_chain_events(
         events,
         &ReplayOptions {
             sort: None,
-            strict: Some(false),
+            strict: Some(true),
         },
     )
     .unwrap();
     assert_eq!(
-        result["state"]["orders"]["0x01::order-1"]["hookStatuses"]["exec#WATCH"]["status"], "ready",
-        "watcher must evaluate after the chain-emitted StageMaterialized"
+        result["mismatches"].as_array().map(Vec::len),
+        Some(0),
+        "consuming StageMaterialized must flush the ready-but-unannounced watcher rather than only flag the stage: {}",
+        result["mismatches"]
     );
+    let observed = result["observed"].as_array().unwrap();
+    assert_eq!(observed.len(), 1, "observed: {observed:?}");
+    assert_eq!(observed[0]["eventName"], "HookReady");
+    assert_eq!(observed[0]["hookId"], "exec#WATCH");
+    let order = &result["state"]["orders"]["0x01::order-1"];
+    assert_eq!(order["hookStatuses"]["exec#WATCH"]["status"], "ready");
+    assert_eq!(order["hookStatuses"]["exec#WATCH"]["readyEmitted"], true);
+}
+
+#[test]
+fn cross_stage_watchers_emit_after_unconditional_evaluation() {
+    let events = vec![
+        json!({
+            "eventName": "PlanRegistered",
+            "blockNumber": 1,
+            "logIndex": 0,
+            "transactionHash": "0x01",
+            "plan": {
+                "planId": "0x01",
+                "zhixuId": "demo",
+                "compiledHooks": [
+                    {
+                        "hookId": "birth#ENTRY",
+                        "stageId": "birth",
+                        "stageIdentifier": "birth",
+                        "hookName": "ENTRY",
+                        "orderTriggerKind": "trigger",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x40"}]
+                    },
+                    {
+                        "hookId": "one#WATCH",
+                        "stageId": "one",
+                        "stageIdentifier": "one",
+                        "hookName": "WATCH",
+                        "orderTriggerKind": "none",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    },
+                    {
+                        "hookId": "two#WATCH",
+                        "stageId": "two",
+                        "stageIdentifier": "two",
+                        "hookName": "WATCH",
+                        "orderTriggerKind": "none",
+                        "emitReady": true,
+                        "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
+                    }
+                ],
+                "dependencyIndex": {
+                    "0x40": ["birth#ENTRY"],
+                    "0x50": ["one#WATCH", "two#WATCH"]
+                }
+            }
+        }),
+        json!({
+            "eventName": "OrderRegistered",
+            "blockNumber": 2,
+            "logIndex": 0,
+            "transactionHash": "0x02",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "registeredAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 3,
+            "logIndex": 0,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x20",
+            "signalId": "0x30",
+            "signalKey": "0x40",
+            "senderId": "registrar",
+            "submittedAt": "2026-04-27T00:00:00.000Z"
+        }),
+        json!({
+            "eventName": "StageMaterialized",
+            "blockNumber": 3,
+            "logIndex": 1,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "orderId": "order-1",
+            "stageId": "birth",
+            "triggerHookId": "birth#ENTRY",
+            "sourceId": "0x20",
+            "signalId": "0x30"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 3,
+            "logIndex": 2,
+            "transactionHash": "0x03",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "birth#ENTRY",
+            "stageIdentifier": "birth",
+            "hookName": "ENTRY"
+        }),
+        json!({
+            "eventName": "SignalSubmitted",
+            "blockNumber": 4,
+            "logIndex": 0,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "sourceId": "0x21",
+            "signalId": "0x31",
+            "signalKey": "0x50",
+            "senderId": "executor",
+            "submittedAt": "2026-04-27T00:00:10.000Z"
+        }),
+        json!({
+            "eventName": "StageMaterialized",
+            "blockNumber": 4,
+            "logIndex": 1,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "orderId": "order-1",
+            "stageId": "one",
+            "triggerHookId": "one#WATCH",
+            "sourceId": "0x21",
+            "signalId": "0x31"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 4,
+            "logIndex": 2,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "one#WATCH",
+            "stageIdentifier": "one",
+            "hookName": "WATCH"
+        }),
+        json!({
+            "eventName": "StageMaterialized",
+            "blockNumber": 4,
+            "logIndex": 3,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "orderId": "order-1",
+            "stageId": "two",
+            "triggerHookId": "two#WATCH",
+            "sourceId": "0x21",
+            "signalId": "0x31"
+        }),
+        json!({
+            "eventName": "HookReady",
+            "blockNumber": 4,
+            "logIndex": 4,
+            "transactionHash": "0x04",
+            "planId": "0x01",
+            "zhixuId": "demo",
+            "orderId": "order-1",
+            "hookId": "two#WATCH",
+            "stageIdentifier": "two",
+            "hookName": "WATCH"
+        }),
+    ];
+    let result = replay_chain_events(
+        events,
+        &ReplayOptions {
+            sort: None,
+            strict: Some(true),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        result["mismatches"].as_array().map(Vec::len),
+        Some(0),
+        "a shared signalKey observed by two stages must announce both hooks: {}",
+        result["mismatches"]
+    );
+    let observed_ready: Vec<&str> = result["observed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|observation| observation["eventName"] == "HookReady")
+        .map(|observation| observation["hookId"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        observed_ready,
+        vec!["birth#ENTRY", "one#WATCH", "two#WATCH"],
+        "oracle must evaluate and materialize both watching stages: {observed_ready:?}"
+    );
+    let expected_ready: Vec<&str> = result["expected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|observation| observation["eventName"] == "HookReady")
+        .map(|observation| observation["hookId"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        expected_ready,
+        vec!["birth#ENTRY", "one#WATCH", "two#WATCH"]
+    );
+    let order = &result["state"]["orders"]["0x01::order-1"];
+    for (hook_id, stage_id) in [("one#WATCH", "one"), ("two#WATCH", "two")] {
+        assert_eq!(
+            order["hookStatuses"][hook_id]["status"], "ready",
+            "{hook_id} status: {order}"
+        );
+        assert_eq!(
+            order["hookStatuses"][hook_id]["readyEmitted"], true,
+            "{hook_id} readyEmitted: {order}"
+        );
+        assert_eq!(
+            order["materializedStages"][stage_id], true,
+            "{stage_id} materialized: {order}"
+        );
+    }
 }
 
 #[test]
@@ -878,8 +1079,14 @@ fn hooks_missing_required_v2_fields_are_rejected() {
         "isTrigger": true,
         "instructions": [{"op": "SIGNAL", "signalKey": "0x50"}]
     });
-    let error = evaluate_hook(&mut order, &hook_missing_kind, "2026-04-27T00:00:00.000Z")
-        .expect_err("hook missing orderTriggerKind must be rejected");
+    let plan = json!({"compiledHooks": []});
+    let error = evaluate_hook(
+        &mut order,
+        &plan,
+        &hook_missing_kind,
+        "2026-04-27T00:00:00.000Z",
+    )
+    .expect_err("hook missing orderTriggerKind must be rejected");
     assert!(
         error.to_string().contains("orderTriggerKind"),
         "unexpected error: {error}"
@@ -896,6 +1103,7 @@ fn hooks_missing_required_v2_fields_are_rejected() {
     });
     let error = evaluate_hook(
         &mut order,
+        &plan,
         &hook_missing_emit_ready,
         "2026-04-27T00:00:00.000Z",
     )

@@ -189,6 +189,7 @@ pub(crate) fn record_signal_and_evaluate(
     for hook in &trigger_hooks {
         observations.extend(evaluate_hook(
             order,
+            &plan,
             hook,
             value_str(event, "submittedAt")?,
         )?);
@@ -196,6 +197,7 @@ pub(crate) fn record_signal_and_evaluate(
     for hook in &watcher_hooks {
         observations.extend(evaluate_hook(
             order,
+            &plan,
             hook,
             value_str(event, "submittedAt")?,
         )?);
@@ -229,7 +231,7 @@ pub(crate) fn evaluate_timer_hook(state: &mut OracleState, event: &Value) -> Res
     if !eligible {
         return Ok(Vec::new());
     }
-    evaluate_hook(order, &hook, poked_at)
+    evaluate_hook(order, &plan, &hook, poked_at)
 }
 
 pub(crate) fn hook_is_order_trigger(hook: &Value) -> Result<bool> {
@@ -266,8 +268,64 @@ fn hook_emits_ready(hook: &Value) -> Result<bool> {
     }
 }
 
+fn hook_ready_observation(order: &OracleOrderState, hook: &Value) -> Result<Value> {
+    let mut ready = base_hook_observation("HookReady", order, value_str(hook, "hookId")?);
+    ready.insert(
+        "stageIdentifier".to_string(),
+        Value::String(value_str(hook, "stageIdentifier")?.to_string()),
+    );
+    ready.insert(
+        "hookName".to_string(),
+        Value::String(value_str(hook, "hookName")?.to_string()),
+    );
+    Ok(Value::Object(ready))
+}
+
+pub(crate) fn materialize_stage(
+    order: &mut OracleOrderState,
+    plan: &Value,
+    stage_id: &str,
+) -> Result<Vec<Value>> {
+    order.materialized_stages.insert(stage_id.to_string(), true);
+    let hooks = plan
+        .get("compiledHooks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ReplayError::Message("chain oracle plan missing compiledHooks".to_string())
+        })?;
+    for hook in hooks {
+        if value_str(hook, "stageId")? == stage_id {
+            order
+                .hook_statuses
+                .entry(value_str(hook, "hookId")?.to_string())
+                .or_insert_with(HookRuntime::init);
+        }
+    }
+    let mut observations = Vec::new();
+    for hook in hooks {
+        if value_str(hook, "stageId")? != stage_id {
+            continue;
+        }
+        let hook_id = value_str(hook, "hookId")?;
+        let should_flush = order
+            .hook_statuses
+            .get(hook_id)
+            .is_some_and(|runtime| runtime.status == "ready" && !runtime.ready_emitted);
+        if !should_flush {
+            continue;
+        }
+        let observation = hook_ready_observation(order, hook)?;
+        if let Some(runtime) = order.hook_statuses.get_mut(hook_id) {
+            runtime.ready_emitted = true;
+        }
+        observations.push(observation);
+    }
+    Ok(observations)
+}
+
 pub(crate) fn evaluate_hook(
     order: &mut OracleOrderState,
+    plan: &Value,
     hook: &Value,
     now: &str,
 ) -> Result<Vec<Value>> {
@@ -288,9 +346,6 @@ pub(crate) fn evaluate_hook(
         .get(stage_id)
         .copied()
         .unwrap_or(false);
-    if !is_trigger && !emits_ready && !stage_materialized {
-        return Ok(Vec::new());
-    }
 
     let result = evaluate_instructions(
         order,
@@ -332,25 +387,14 @@ pub(crate) fn evaluate_hook(
         changed.insert("status".to_string(), Value::String("cxl".to_string()));
         observations.push(Value::Object(changed));
     }
-    if next.status == "ready" && is_trigger && !stage_materialized {
-        order.materialized_stages.insert(stage_id.to_string(), true);
-    }
-    if next.status == "ready" && emits_ready && !previous.ready_emitted {
-        if !is_trigger && !stage_materialized {
-            order.materialized_stages.insert(stage_id.to_string(), true);
+    if next.status == "ready" && !next.ready_emitted {
+        if stage_materialized {
+            next.ready_emitted = true;
+            order.hook_statuses.insert(hook_id.to_string(), next);
+            observations.push(hook_ready_observation(order, hook)?);
+        } else if is_trigger || emits_ready {
+            observations.extend(materialize_stage(order, plan, stage_id)?);
         }
-        next.ready_emitted = true;
-        order.hook_statuses.insert(hook_id.to_string(), next);
-        let mut ready = base_hook_observation("HookReady", order, hook_id);
-        ready.insert(
-            "stageIdentifier".to_string(),
-            Value::String(value_str(hook, "stageIdentifier")?.to_string()),
-        );
-        ready.insert(
-            "hookName".to_string(),
-            Value::String(value_str(hook, "hookName")?.to_string()),
-        );
-        observations.push(Value::Object(ready));
     }
     Ok(observations)
 }

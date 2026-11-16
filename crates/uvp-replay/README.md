@@ -33,10 +33,17 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 | `ready` | `Ready` | 就绪（就绪观察以 `HookReady` 事件表达） |
 | `cxl` | `Cancelled` | 负向条件成立，终态 |
 
-## 事件裁剪与推导规则
+## 事件裁剪、推导与消费规则
 
-真实事件流与 oracle 模型存在两类系统性分叉，吸收口是
+真实事件流与 oracle 模型存在三类系统性分叉，吸收口是
 `absorb_chain_observation`（本文件与代码注释同步维护）：
+
+链上求值与宣告语义（与合约同口径）：事实/定时器到达时，`dependencyIndex`
+下所有非 trigger hook 无条件求值——阶段是否已物化不影响求值范围；
+`EMIT_READY` 只是可物化能力位，不是求值门。Ready 时：阶段已物化则立即宣告
+`HookReady`；阶段未物化且 hook 可物化（trigger / `EMIT_READY`）→ 物化该阶段
+并由物化 flush 宣告；不可物化（flags=0 watcher）→ 保留 Ready 状态、
+`ready_emitted=false`，等本阶段物化时按 hook 规范序补发。
 
 ### 裁剪（trim，不进入 expected）
 
@@ -77,8 +84,11 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 
 ### 消费（consume，回填状态不进 expected）
 
-- `StageMaterialized`：链上物化事实回填 `materializedStages`，后续依赖该
-  阶段的 watcher 求值据此放行。
+- `StageMaterialized`：链上物化事实回填 `materializedStages`，并按本阶段
+  hook 的规范序 flush 该阶段全部 `status == ready && !ready_emitted` 的 hook——
+  补发对应 `HookReady` 观察（物化前已 Ready、因阶段未物化而尚未宣告的
+  watcher 在此补宣告，不静默丢失）。补发进入 observed 参与配对，不改变
+  expected。
 - `OrderTriggered`：出生事务标记（order → 事务哈希）。它与
   `record_signal_and_evaluate` 的出生通道判别配合（见下），不是观察。
 - `OrderMaterialized` / `OrderLinked`：仅存在性事件，无观察语义。
@@ -102,7 +112,7 @@ dock input 模块写、dock output 回写、派生写回）不推进它们——
   出生断言由 mint-only 推导门（`HookReady` 反推）承载。
 - 第二条及以后的 `SignalSubmitted` 恒为普通信号。
 
-watcher hook 在两条路径都照常求值。
+watcher hook 在两条路径都照常求值（与阶段是否已物化无关）。
 
 ## 观察配对与比对契约
 

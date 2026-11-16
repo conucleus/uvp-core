@@ -176,9 +176,8 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 
 onchain 实现层的附加接受域见 `uvp-chain.md`（uvp-eth 根）：
 
-- 同一 signalKey 只允许单一阶段的非 trigger hook 观察——首个观察者钉死所属阶段，跨阶段双重观察整体拒绝（TS 预检 + 合约双闸）；
-- 全计划去重后的依赖键（signalKey）总数 ≤ 1024（`commitPlan` 同口径 revert `TooManyDependencies`）；
-- 上述闸的动机、规避形态与更多链上编译/注册期闸已随原文迁至该文档。
+- 全计划去重后的依赖键（signalKey）总数 ≤ 1024、单键 hook 扇出 ≤ 16（`commitPlan` 同口径 revert `TooManyDependencies` / `TooManyHooksPerDependencyKey`；依赖索引多对多、无阶段 owner，多观察语义见 `uvp-chain.md` §3）；
+- 上述上限的动机与更多链上编译/注册期闸已随原文迁至该文档。
 
 ## 5. 表达式
 
@@ -519,9 +518,8 @@ spec:
       selectedStages:
         - "main"
       # 链上物化门（§4）：带静态执行者的 receive hook 编译为 EMIT_READY，
-      # 是合法物化路径。观察目标避开 executor_selected——该 signalKey
-      # 已被 main 观察，跨阶段双重观察会被整体拒绝（§4 指针块，
-      # onchain 实现层接受域）。
+      # 是合法物化路径。观察目标用本阶段声明的信号；同一事实可被多个
+      # 阶段观察（依赖索引多对多、无 owner，§4 指针块与 uvp-chain.md §3）。
       receiveSignals:
         START: "settlement::on_deal.cmp"
       sendSignals:
@@ -567,7 +565,8 @@ spec:
     - name: deal
       source: trading
       # 每阶段一条带物化位的 hook：PLACE 编译为 EMIT_READY；观察目标
-      # on_deal.str 全计划仅本阶段观察，无跨阶段双重观察（§4）。
+      # on_deal.str 是 trading 域事实，本阶段独立观察（多阶段观察同一
+      # 事实合法，§4 指针块与 uvp-chain.md §3）。
       receiveSignals:
         PLACE: "settlement::on_deal.str"
       sendSignals:
@@ -597,7 +596,7 @@ spec:
         supplierID: 4a8c2e60-1f3b-4d57-9a2e-6c8f0b2d4e70
 ```
 
-示例与编译边界逐条自洽：每个阶段都有物化路径（`choose_executor`/`main`/`deal` 的 EMIT_READY——`main` 为 dock 阶段，其 hooks 带 `HOOK_FLAG_DOCK_EXECUTOR`；`on_deal` 的出生 hook）；同一 signalKey 只有单一非出生观察阶段——`executor_selected` 只被 `main` 观察，`on_deal.str` 只被 `deal` 观察，`on_deal.cmp` 只被 `choose_executor` 观察（「同一 signalKey 只允许单一阶段的非出生 hook 观察」是 onchain 实现层接受域，见 §4 指针块与 `uvp-chain.md`）；`on_deal.cmp` 演示订单内发射适格，`on_deal.closed` 演示出生信号。
+示例与编译边界逐条自洽：每个阶段都有物化路径（`choose_executor`/`main`/`deal` 的 EMIT_READY——`main` 为 dock 阶段，其 hooks 带 `HOOK_FLAG_DOCK_EXECUTOR`；`on_deal` 的出生 hook）；观察关系不要求唯一——同一事实可被任意数量/阶段的 hook 观察（依赖索引多对多、无阶段 owner，链上接受域不设单观察限制，见 §4 指针块与 `uvp-chain.md` §3）：本示例中 `executor_selected` 由 `main` 观察、`on_deal.str` 由 `deal` 观察、`on_deal.cmp` 由 `choose_executor` 观察，彼此独立；`on_deal.cmp` 演示订单内发射适格，`on_deal.closed` 演示出生信号。
 
 同一演示域的 Dock 文档（独立于 `Zhixu` 发布，§7.2；uid 为示例占位，实际取已发布定义的内容派生 uid）：
 
@@ -631,7 +630,7 @@ spec:
   executor: { supplierType: organization, supplierID: 7c1d3f52-9a4b-4e68-8f20-3b5d7a9c1e40 }
 ```
 
-哪些事实触发哪条出生线由 `sendSignals[].trigger: true` 声明；同一事实需要驱动多个阶段的判断时，改用订单内的同单 hook 依赖，而不是让多个阶段抢同一条出生事实。
+哪些事实触发哪条出生线由 `sendSignals[].trigger: true` 声明；同一事实需要驱动多个阶段的判断时，各阶段以普通同单 hook 直接观察该事实即可——依赖索引多对多、无阶段 owner，允许任意数量/阶段的 hook 观察同一 signalKey；出生判定只认本阶段的出生信号，跨阶段观察不改变出生语义。
 
 **同单汇聚判断（撮合类）**：一个订单内，多源事实由执行者以 signal 依次写入；stage 用普通同单 hook 对已到事实做条件判定。配对/计数是执行器的私有判断，引擎只看到订单内的事实：
 

@@ -2100,7 +2100,7 @@
       }
     },
     {
-      "name": "flags-zero watcher on unmaterialized stage is skipped",
+      "name": "flags-zero watcher on unmaterialized stage is evaluated but not announced",
       "events": [
         {
           "eventName": "PlanRegistered",
