@@ -1,7 +1,7 @@
-//! 状态迁移：链上事件吸收（观察裁剪/出生推导）、信号登记触发的求值与
+//! 状态迁移：链上事件吸收（观察裁剪）、信号登记触发的求值与
 //! 指令栈求值器。
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 use crate::facts::{find_hook, order_key, HookRuntime, OracleOrderState, OracleState};
@@ -9,16 +9,13 @@ use crate::snapshot::{base_hook_observation, chain_event_to_expected_observation
 use crate::{chain_event_id, seconds_from_iso, value_i64, value_str, ReplayError, Result};
 
 pub(crate) fn absorb_chain_observation(
-    state: &mut OracleState,
     expected: &mut Vec<Value>,
-    observed: &mut Vec<Value>,
     last_status: &mut BTreeMap<String, (String, Option<String>)>,
     event: &Value,
 ) -> Result<()> {
     match value_str(event, "eventName")? {
         "HookReady" => {
             expected.push(chain_event_to_expected_observation(event)?);
-            derive_order_link_birth(state, observed, event)?;
             Ok(())
         }
         "HookStatusChanged" => {
@@ -54,68 +51,6 @@ pub(crate) fn absorb_chain_observation(
     }
 }
 
-fn derive_order_link_birth(
-    state: &mut OracleState,
-    observed: &mut Vec<Value>,
-    event: &Value,
-) -> Result<()> {
-    let (Ok(plan_id), Ok(order_id), Ok(hook_id)) = (
-        value_str(event, "planId"),
-        value_str(event, "orderId"),
-        value_str(event, "hookId"),
-    ) else {
-        return Ok(());
-    };
-    if !state.orders.contains_key(&order_key(plan_id, order_id)) {
-        return Ok(());
-    }
-    let Some(plan) = state.plans.get(plan_id) else {
-        return Ok(());
-    };
-    let Ok(hook) = find_hook(plan, hook_id) else {
-        return Ok(());
-    };
-    if order_trigger_kind(&hook)? != "trigger" {
-        return Ok(());
-    }
-    let stage_id = value_str(&hook, "stageId")?.to_string();
-    let stage_identifier = value_str(&hook, "stageIdentifier")?.to_string();
-    let hook_name = value_str(&hook, "hookName")?.to_string();
-    let Some(order) = state.orders.get_mut(&order_key(plan_id, order_id)) else {
-        return Ok(());
-    };
-    let mut runtime = order
-        .hook_statuses
-        .remove(hook_id)
-        .unwrap_or_else(HookRuntime::init);
-    if runtime.ready_emitted {
-        order.hook_statuses.insert(hook_id.to_string(), runtime);
-        return Ok(());
-    }
-    runtime.status = "ready".to_string();
-    runtime.due_at = None;
-    runtime.ready_emitted = true;
-    let zhixu_id = order.zhixu_id.clone();
-    order.hook_statuses.insert(hook_id.to_string(), runtime);
-    order.materialized_stages.insert(stage_id, true);
-    let mut ready = Map::new();
-    ready.insert(
-        "eventName".to_string(),
-        Value::String("HookReady".to_string()),
-    );
-    ready.insert("planId".to_string(), Value::String(plan_id.to_string()));
-    ready.insert("zhixuId".to_string(), Value::String(zhixu_id));
-    ready.insert("orderId".to_string(), Value::String(order_id.to_string()));
-    ready.insert("hookId".to_string(), Value::String(hook_id.to_string()));
-    ready.insert(
-        "stageIdentifier".to_string(),
-        Value::String(stage_identifier),
-    );
-    ready.insert("hookName".to_string(), Value::String(hook_name));
-    observed.push(Value::Object(ready));
-    Ok(())
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EvalValue {
     pub(crate) value: bool,
@@ -142,13 +77,7 @@ pub(crate) fn record_signal_and_evaluate(
     if order.signals.contains_key(&signal_key) {
         return Ok(Vec::new());
     }
-    let signal_tx = value_str(event, "transactionHash")?;
-    let is_first_signal = order.signals.is_empty();
-    let order_link_born = state
-        .order_trigger_tx
-        .get(&order_key)
-        .is_some_and(|trigger_tx| trigger_tx != signal_tx);
-    let birth_channel = is_first_signal && !order_link_born;
+    let birth_channel = order.signals.is_empty();
     order.signals.insert(
         signal_key.clone(),
         json!({

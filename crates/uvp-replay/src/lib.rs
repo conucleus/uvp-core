@@ -162,13 +162,7 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                 observed.extend(evaluate_timer_hook(&mut state, event)?);
             }
             "HookReady" | "HookStatusChanged" => {
-                absorb_chain_observation(
-                    &mut state,
-                    &mut expected,
-                    &mut observed,
-                    &mut last_status_observations,
-                    event,
-                )?;
+                absorb_chain_observation(&mut expected, &mut last_status_observations, event)?;
             }
             "StageMaterialized" => {
                 let plan_id = value_str(event, "planId")?;
@@ -203,7 +197,7 @@ pub fn replay_chain_events(mut events: Vec<Value>, options: &ReplayOptions) -> R
                     }
                 }
             }
-            "OrderMaterialized" | "OrderLinked" => {}
+            "OrderMaterialized" => {}
             other => {
                 return Err(ReplayError::Message(format!(
                     "unsupported chain-mode value {other}"

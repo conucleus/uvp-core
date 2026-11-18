@@ -33,9 +33,9 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
 | `ready` | `Ready` | 就绪（就绪观察以 `HookReady` 事件表达） |
 | `cxl` | `Cancelled` | 负向条件成立，终态 |
 
-## 事件裁剪、推导与消费规则
+## 事件裁剪与消费规则
 
-真实事件流与 oracle 模型存在三类系统性分叉，吸收口是
+真实事件流与 oracle 模型存在两类系统性分叉，吸收口是
 `absorb_chain_observation`（本文件与代码注释同步维护）：
 
 链上求值与宣告语义（与合约同口径）：事实/定时器到达时，`dependencyIndex`
@@ -60,28 +60,6 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   `HookStatusChanged`，oracle 的 observed 面同口径重发，多条不同 dueAt
   的 wait 观察按到达序一一配对。
 
-### 推导（derive，从链上事件补齐 oracle 状态）
-
-合约出生路径共三种，全部以 `HookReady` 承载就绪断言，但只有一种需要推导：
-
-- outside mint 出生（`triggerOrderFromOutsideFor`）与 dock 出生
-  （`createDockedOrderFromModule`）：出生/entrance 事实 `_recordSignal`
-  落在本订单，出生 hook 被编译器约束为单一正向 atom（ANCHOR 订阅 / D013），
-  事实到达即由正常求值自然产生 `HookReady`，无需推导。
-- order-link mint 出生（`triggerOrderFromSignalFromModule`）：出生事实留在
-  origin 订单上，本订单不 `_recordSignal` 但 emit `HookReady`，求值路径无事实
-  可依。oracle 据链上 `HookReady` 反推（推导门刻意 **mint-only**）：mint 标记
-  的出生 hook 补 runtime ready/readyEmitted 并物化其阶段，同时把该观察记入
-  observed（接受链上断言）。dock 标记的出生 hook **不接受**断言推导：dock
-  出生事实恒先落本订单（`createDockedOrderFromModule` 内 `_recordSignal` →
-  `SignalSubmitted` 先行），求值路径已可推导其 Ready，链上出现 oracle 未推导
-  的 dock `HookReady` 只能是事实缺失的异常——接受断言会把异常吞成配对成功，
-  该形态保持 missing-observed mismatch 暴露。重复的出生
-  `HookReady` 在合约 `!readyEmitted` 门下不可达，第二次以 missing-observed
-  暴露流异常。非 trigger hook 的无信号 `HookReady` 同样不推导，保持 mismatch
-  暴露真实异常。plan 缺失 v2 结构字段（`orderTriggerKind`、`stageId` 等）在此
-  响亮失败，不回退成"非 trigger"。
-
 ### 消费（consume，回填状态不进 expected）
 
 - `StageMaterialized`：链上物化事实回填 `materializedStages`，并按本阶段
@@ -89,9 +67,9 @@ hook 运行态状态名与云侧 hook_state 语义层、合约 `HookStatus` 枚�
   补发对应 `HookReady` 观察（物化前已 Ready、因阶段未物化而尚未宣告的
   watcher 在此补宣告，不静默丢失）。补发进入 observed 参与配对，不改变
   expected。
-- `OrderTriggered`：出生事务标记（order → 事务哈希）。它与
-  `record_signal_and_evaluate` 的出生通道判别配合（见下），不是观察。
-- `OrderMaterialized` / `OrderLinked`：仅存在性事件，无观察语义。
+- `OrderTriggered`：记录订单的出生事务哈希（order → 事务哈希）；同一订单的
+  重复 `OrderTriggered` 携带不同事务哈希时作为矛盾事件流响亮失败，不是观察。
+- `OrderMaterialized`：仅存在性事件，无观察语义。
 
 ## 出生求值范围（mint-scope）
 
@@ -103,13 +81,9 @@ dock input 模块写、dock output 回写、派生写回）不推进它们——
 
 事件流上的出生通道判别（`record_signal_and_evaluate`）：
 
-- 首条 `SignalSubmitted`（该订单此前无任何事实）且非 order-link 出生 →
-  出生通道。outside 出生（`OrderTriggered` 与出生事实同事务）与 dock
-  出生（无 `OrderTriggered`，entrance 事实即首条信号）都落在这里。
-- `OrderTriggered` 已见且其事务内没有信号 → order-link 出生
-  （`_markTriggerHookReady` 直接置位、不 `_recordSignal`）：该订单后续
-  收到的任何信号（含首条）都是普通信号，不推进 order-trigger hook；
-  出生断言由 mint-only 推导门（`HookReady` 反推）承载。
+- 首条 `SignalSubmitted`（该订单此前无任何事实）→ 出生通道。outside
+  出生（`OrderTriggered` 与出生事实同事务）与 dock 出生（无
+  `OrderTriggered`，entrance 事实即首条信号）都落在这里。
 - 第二条及以后的 `SignalSubmitted` 恒为普通信号。
 
 watcher hook 在两条路径都照常求值（与阶段是否已物化无关）。
