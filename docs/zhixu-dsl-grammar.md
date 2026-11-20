@@ -156,7 +156,7 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 | `selectedStages` | `[]string` | 否 | 目标阶段引用列表，格式 `{stage}`，每项必须引用真实存在的阶段——当前阶段的执行者可代这些阶段做执行者选择/绑定（selector 语义）。 |
 | `sendSignals` | `[]object` | 否 | 本阶段发送信号声明，条目取 `{name, validWhen?, trigger?}` 三个键（loader 按闭集接收）。`name` 必填非空——裸局部名或 `stage.signal` 两段式自指全名，编译期归一为裸局部名，归一后不可重复。`trigger: true` 标记出生信号（§6）：出生信号的 `name` 须 ∈ 本阶段 `sendSignals`、同阶段内不重复；出生集编译期固定并进入 plan 承诺面。`validWhen` 可选：`[]string` 发射适格声明——每项是完整的 `{source}::{condition}`、全体项 header source 必须一致，缺省即无条件发射（空数组/空项拒绝）；列表语义见 §5.6。信号名取裸局部名或 `{stage}.{signal}` 两段式。 |
 | `receiveSignals` | `map[string]string` | 否 | key 是通道名称（不可含 `.` 或 `#`、不含任何空白字符，长度 1-36 字节）；value 是同单 Hook DSL（§5）：只在本订单上下文求值，可引用本秩序内任意阶段已声明的信号；跨秩序事实由静态 Dock 的发射条件映射进本订单（§7）。投递的运行期语义见实现层文档（云轨 `uvp-cloud.md` §7）。 |
-| `fileResources` | `map[string]FileResource` | 否 | 文件资源句柄映射（字段形态见附录 A）；句柄承载内容哈希、metadata URI 或短标识一类的引用，存储/投影的轨道边界见实现层文档。 |
+| `fileResources` | `map[string]FileResource` | 否 | 文件资源句柄映射（字段形态见附录 A）；`fileType` 必填非空字符串，值域由应用/轨道解释，编译期不限制取值。链轨除 `fileType` 外不解释条目、不校验 type-specific 字段；云轨 resolver 目前识别 local/http/txcloud/plain_text，但编译期同样只校验非空。 |
 
 **executor 字段**：
 
@@ -164,7 +164,7 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 |---|---|---|---|
 | `executor.supplierType` | `string` | 是 | 枚举：`individual` / `organization` / `dock`。 |
 | `executor.supplierID` | `string` | 是（individual/organization） | 只要给出 executor 块且 supplierType 为二者之一即无条件必填，缺省或空白编译期硬拒绝；`selectedStages` 锚定不豁免存在性（缺 supplierID 的执行器即使被锚定也是"看似绑定"，产物里没有投递目标）。语义是 supplier 身份引用：链轨写标准 36 字符小写 UUID（链上注册表签发的 SID），编译期只做 UUID→bytes32 低位解码、不做 hash；云轨仍是业务键字符串（上限 36 字节）。`supplierType: dock` 时 `supplierID` 由运行期绑定确定，定义面只声明执行者类型。 |
-| `executor.selectableResource` | `map[string]FileResource` | 否 | 阶段对供应商可选资源描述。 |
+| `executor.selectableResource` | `map[string]FileResource` | 否 | 阶段对供应商可选资源描述；与 `fileResources` 同一 FileResource 口径（只强制非空 `fileType`，值域开放）。 |
 
 **执行者拓扑约束**（uvp-core 裁决）：
 
@@ -688,11 +688,11 @@ spec:
 | `Dock.spec.to.zhixu` / `.stage` | string | 是 | 已发布定义 uid；阶段以 dock 执行者承接、输出信号由 `sendSignals` 声明 | §7.2 |
 | `Dock.spec.signalMap` | map | 是 | ≥1 条：B 输出信号（≤100B，∈ to.stage.sendSignals）→ A 侧 Filter 表达式 | §7.2 |
 | `Dock` 产物 `dkid` / `docHash` | string | — | `zd-<32hex>` / `0x<64hex>`，内容派生（`uvp.dock.v1`） | §7.2 |
-| `fileResources.<key>.fileType` | string | 是 | local/http/txcloud/plain_text | 附录 |
-| `fileResources.<key>.localFile.path` | string | 条件 | fileType=local 时 | 附录 |
-| `fileResources.<key>.httpFile.url` | string | 条件 | fileType=http 时 | 附录 |
-| `fileResources.<key>.txCloudFile.{bucket,region,objectKey}` | string | 条件 | fileType=txcloud 时 | 附录 |
-| `fileResources.<key>.plainText.content` | []byte | 条件 | fileType=plain_text 时（生产证据不用 plain_text） | 附录 |
+| `fileResources.<key>.fileType` | string | 是 | 非空字符串，值域开放（应用自定义）；云轨 resolver 目前识别 local/http/txcloud/plain_text，编译期不校验取值 | 附录 |
+| `fileResources.<key>.localFile.path` | string | 条件（云 resolver） | 云轨 fileType=local 时使用；链轨不校验 | 附录 |
+| `fileResources.<key>.httpFile.url` | string | 条件（云 resolver） | 云轨 fileType=http 时使用；链轨不校验 | 附录 |
+| `fileResources.<key>.txCloudFile.{bucket,region,objectKey}` | string | 条件（云 resolver） | 云轨 fileType=txcloud 时使用；链轨不校验 | 附录 |
+| `fileResources.<key>.plainText.content` | []byte | 条件（云 resolver） | 云轨 fileType=plain_text 时使用（生产证据不用 plain_text）；链轨不校验 | 附录 |
 
 ---
 

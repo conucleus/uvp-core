@@ -145,12 +145,6 @@ pub fn is_known_supplier_type(value: &str) -> bool {
     SUPPLIER_TYPES.contains(&value)
 }
 
-pub const FILE_TYPES: [&str; 4] = ["local", "http", "txcloud", "plain_text"];
-
-pub fn is_known_file_type(value: &str) -> bool {
-    FILE_TYPES.contains(&value)
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DockDefinition {

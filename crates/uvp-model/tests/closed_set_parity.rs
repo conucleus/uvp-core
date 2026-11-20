@@ -1,8 +1,7 @@
-//! 链上承诺闭集词表的跨语言钉死（Rust 线）：本测试与 uvp-protocol 仓
+//! 闭集词表钉死（Rust 线）：supplierTypes 与 uvp-protocol 仓
 //! `packages/compiler/test/closed-set-parity.test.ts` 对同一份
-//! `fixtures/closed-sets/closed-sets.v1.json` 做逐元素相等比对——闭集
-//! 内容与成员序都是承诺面，任一侧漂移（增删成员、改序、换比对口径）
-//! 会让两侧测试同声报警，不存在单侧静默改词表的路径。
+//! `fixtures/closed-sets/closed-sets.v1.json` 做逐元素相等比对。
+//! fileType 值域开放，不在闭集语料内。
 
 use serde::Deserialize;
 
@@ -13,7 +12,6 @@ const CORPUS: &str = include_str!("../../../fixtures/closed-sets/closed-sets.v1.
 struct ClosedSets {
     schema_version: String,
     supplier_types: Vec<String>,
-    file_types: Vec<String>,
 }
 
 #[test]
@@ -27,12 +25,5 @@ fn closed_set_constants_match_the_pinned_corpus() {
         pinned_supplier_types,
         uvp_model::SUPPLIER_TYPES,
         "supplierType 闭集与钉死语料分叉：改词表必须同改语料与 TS/Go 镜像"
-    );
-
-    let pinned_file_types: Vec<&str> = corpus.file_types.iter().map(String::as_str).collect();
-    assert_eq!(
-        pinned_file_types,
-        uvp_model::FILE_TYPES,
-        "fileType 闭集与钉死语料分叉：改词表必须同改语料与 TS/Go 镜像"
     );
 }

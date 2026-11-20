@@ -116,7 +116,7 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                 match selectable.as_object() {
                     Some(entries) => {
                         for (key, resource) in entries {
-                            if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+                            if let Some(issue) = file_resource_shape_issue(&path, key, resource) {
                                 issues.push(issue);
                             }
                         }
@@ -127,7 +127,7 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
         }
         for (key, resource) in &stage.file_resources {
             let path = format!("spec.stages[{stage_index}].fileResources");
-            if let Some(issue) = file_resource_type_issue(&path, key, resource) {
+            if let Some(issue) = file_resource_shape_issue(&path, key, resource) {
                 issues.push(issue);
             }
         }
@@ -215,18 +215,19 @@ fn validate_file_writers(stage: &ZhixuStage, stage_names: &BTreeSet<&str>) -> Ve
     issues
 }
 
-fn file_resource_type_issue(path: &str, key: &str, resource: &Value) -> Option<String> {
-    let file_type = resource.get("fileType").and_then(Value::as_str);
-    if file_type.is_some_and(uvp_model::is_known_file_type) {
-        return None;
+fn file_resource_shape_issue(path: &str, key: &str, resource: &Value) -> Option<String> {
+    let Some(entry) = resource.as_object() else {
+        return Some(format!(
+            "{path}[{key:?}] must be an object with a non-empty string fileType"
+        ));
+    };
+    match entry.get("fileType").and_then(Value::as_str) {
+        Some(file_type) if !file_type.is_empty() => None,
+        _ => Some(format!(
+            "{path}[{key:?}].fileType is required and must be a non-empty string, found {:?}",
+            entry.get("fileType")
+        )),
     }
-    Some(format!(
-        "{path}[{key:?}].fileType must be one of {} (exact match, whitespace variants rejected), found {:?}",
-        uvp_model::FILE_TYPES
-            .map(|value| format!("{value:?}"))
-            .join(", "),
-        resource.get("fileType")
-    ))
 }
 
 pub(crate) fn is_definition_uid(value: &str) -> bool {

@@ -116,33 +116,49 @@ fn rejects_unknown_spec_and_executor_fields() {
 }
 
 #[test]
-fn rejects_selectable_resource_outside_the_closed_file_type_set() {
-    for (label, value) in [
-        (
-            "misspelled",
-            json!({ "dataset": { "fileType": "tx_cloud" } }),
-        ),
-        ("padded", json!({ "dataset": { "fileType": " http" } })),
-        ("not-a-map", json!(["dataset"])),
-    ] {
-        let mut parent = target_payment_definition();
-        parent["spec"]["stages"][0]["executor"]["selectableResource"] = value;
-        let error = compile_zhixu_hook_plan(&parent)
-            .err()
-            .unwrap_or_else(|| panic!("{label} selectableResource must be rejected"));
-        assert!(
-            error.to_string().contains("selectableResource")
-                && (label == "not-a-map" || error.to_string().contains("fileType must be one of")),
-            "{label}: {error}"
-        );
-    }
+fn file_resource_file_type_is_required_and_non_empty_but_app_defined() {
+    for target in ["hook_plan", "cloud"] {
+        let compile = |definition: &Value| match target {
+            "hook_plan" => compile_zhixu_hook_plan(definition),
+            _ => compile_cloud_artifact(definition),
+        };
+        for (label, resource) in [
+            ("missing", json!({})),
+            ("empty", json!({ "fileType": "" })),
+            ("non-string", json!({ "fileType": 7 })),
+        ] {
+            for face in ["fileResources", "selectableResource"] {
+                let mut definition = target_payment_definition();
+                if face == "selectableResource" {
+                    definition["spec"]["stages"][0]["executor"]["selectableResource"] =
+                        json!({ "dataset": resource.clone() });
+                } else {
+                    definition["spec"]["stages"][0]["fileResources"] =
+                        json!({ "dataset": resource.clone() });
+                }
+                let error = compile(&definition)
+                    .err()
+                    .unwrap_or_else(|| panic!("{target} {label} {face} fileType must be rejected"));
+                assert!(
+                    error
+                        .to_string()
+                        .contains("fileType is required and must be a non-empty string"),
+                    "{target} {label} {face}: {error}"
+                );
+            }
+        }
 
-    let mut parent = target_payment_definition();
-    parent["spec"]["stages"][0]["executor"]["selectableResource"] = json!({
-        "dataset": { "fileType": "plain_text", "plainText": { "content": "x" } }
-    });
-    compile_zhixu_hook_plan(&parent)
-        .unwrap_or_else(|err| panic!("closed-set selectableResource must compile: {err}"));
+        let mut definition = target_payment_definition();
+        definition["spec"]["stages"][0]["fileResources"] = json!({
+            "dataset": { "fileType": "app1_blob", "custom": { "locator": "x" } }
+        });
+        definition["spec"]["stages"][0]["executor"]["selectableResource"] = json!({
+            "profile": { "fileType": "app2_ref" }
+        });
+        compile(&definition).unwrap_or_else(|error| {
+            panic!("{target} must accept app-defined fileType values: {error}")
+        });
+    }
 }
 
 #[test]

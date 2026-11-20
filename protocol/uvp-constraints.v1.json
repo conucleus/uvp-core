@@ -348,9 +348,9 @@
         "rust"
       ],
       "sources": {
-        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_zhixu_shape（闭集常量 uvp_model::SUPPLIER_TYPES；fileType 同族规则见 file-resource-type-closed-enum）"
+        "rust": "crates/uvp-compiler/src/validate/mod.rs validate_zhixu_shape（闭集常量 uvp_model::SUPPLIER_TYPES；supplierType 决定 dock/dynamic executor hook flags，属于引擎解释面）"
       },
-      "ruling": "supplierType 经 executorRoutes 进链上承诺，闭集外的字符串（含空白变体）在编译期精确匹配拒绝；闭集成员与 fileType 同由 closed-sets.v1.json 语料跨语言钉死（rust/TS 两侧测试逐元素相等比对，改语料必须同改两侧实现）。TS 线在编译入口与制品边界同集拒绝（精确匹配、不 trim）；Go/合约镜像状态见 rejectionSurfaces 矩阵。"
+      "ruling": "supplierType 决定 dock/dynamic executor hook flags，闭集外的字符串（含空白变体）在编译期精确匹配拒绝；闭集成员由 closed-sets.v1.json 的 supplierTypes 语料跨语言钉死（rust/TS 两侧测试逐元素相等比对，改语料必须同改两侧实现）。TS 线在编译入口与制品边界同集拒绝（精确匹配、不 trim）；Go/合约镜像状态见 rejectionSurfaces 矩阵。"
     },
     {
       "id": "send-signal-combined-max-length",
@@ -557,35 +557,31 @@
       "ruling": "出生阶段由 sendSignals[].trigger=true 派生；该阶段必须静态绑定 individual/organization 执行者且不得 dock/运行时 patch：出生权不能随 dock 或 patch 漂移。"
     },
     {
-      "id": "file-resource-type-closed-enum",
+      "id": "file-resource-type-required",
       "area": "zhixu",
       "target": "spec.stages[].fileResources.<key>.fileType 与 executor.selectableResource.<key>.fileType",
       "constraint": {
-        "type": "closed_enum",
+        "type": "required",
         "params": {
-          "values": [
-            "local",
-            "http",
-            "txcloud",
-            "plain_text"
-          ],
-          "trim": false,
-          "corpus": "uvp-core/fixtures/closed-sets/closed-sets.v1.json（schemaVersion uvp.closedSets.v1；rust uvp-model FILE_TYPES 与 TS compiler FILE_TYPES 两侧测试对同一语料逐元素相等比对）",
-          "note": "精确匹配、不 trim：条目内容随 route 进链上承诺（executorHash/resourcesHash），缺失/非串/闭集外（含带空白变体）都是确定性非法输入——归一化放行会让承诺侧按原文分叉"
+          "type": "string",
+          "nonEmpty": true,
+          "note": "fileType 是应用分派键：共享语法只要求存在且为非空字符串，值域开放；引擎不解释类型"
         }
       },
       "error": {
-        "rust": "fileType must be one of",
+        "rust": "fileType is required and must be a non-empty string",
         "go": null,
-        "ts": null
+        "ts": "fileType is required and must be a non-empty string"
       },
       "applies": [
-        "rust"
+        "rust",
+        "ts"
       ],
       "sources": {
-        "rust": "crates/uvp-compiler/src/validate/mod.rs file_resource_type_issue（uvp_model::FILE_TYPES；fileResources 与 executor.selectableResource 两个 FileResource 面共用）"
+        "rust": "crates/uvp-compiler/src/validate/mod.rs file_resource_shape_issue（fileResources 与 executor.selectableResource 两个 FileResource 面共用）",
+        "ts": "packages/compiler/src/onchain/instructions/hooks.ts assertFileResources（on-chain 编译入口）"
       },
-      "ruling": "fileType 闭集 {local, http, txcloud, plain_text}：fileResources 与 executor.selectableResource 同口径。TS 线在编译入口同集拒绝（闭集常量与语料对拍、精确匹配不 trim）；Go/合约侧镜像状态见 rejectionSurfaces 矩阵 supplier-type-closed-set 行（fileType 与 supplierType 同属链上承诺词表族）。"
+      "ruling": "fileType 必须存在且为非空字符串；值域完全开放，由应用/轨道自行解释。cloud 与 chain target 同口径，编译期不再有闭集。"
     },
     {
       "id": "stage-entries-max-count",
@@ -682,9 +678,9 @@
       "mirrors": {
         "rust": "mirrored:rule executor-supplier-type-closed-enum",
         "go": "none（不校验闭集）",
-        "ts": "mirrored（onchain-hook-plan compileExecutorRoute 编译入口与 validateOnchainExecutorRoutes 制品边界双面精确匹配（不 trim）；fileResources 与 executor.selectableResource 的 fileType 闭集 {local,http,txcloud,plain_text} 在编译入口同拒）"
+        "ts": "mirrored（onchain-hook-plan compileSupplierRoute 编译入口与 validateOnchainExecutorRoutes 制品边界双面精确匹配（不 trim））"
       },
-      "note": "合约侧守卫与 Go 线镜像待补。supplierType/fileType 闭集成员由 uvp-core/fixtures/closed-sets/closed-sets.v1.json 语料钉死（rust uvp-model 与 TS compiler 两侧测试逐元素相等比对，改语料必须同改两侧实现）；fileType 的 rust 线规则见 rule file-resource-type-closed-enum。"
+      "note": "合约侧守卫与 Go 线镜像待补。supplierType 闭集成员由 uvp-core/fixtures/closed-sets/closed-sets.v1.json 的 supplierTypes 语料钉死（rust uvp-model 与 TS compiler 两侧测试逐元素相等比对，改语料必须同改两侧实现）。fileType 不属于本行，值域开放。"
     }
   ]
 }

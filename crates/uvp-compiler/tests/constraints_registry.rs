@@ -95,6 +95,11 @@ fn probe_compile(definition: Value) -> (bool, String) {
     envelope_message(&uvp_compiler::compile_json(&request.to_string()))
 }
 
+fn probe_cloud_compile(definition: Value) -> (bool, String) {
+    let request = json!({ "target": "cloud", "definition": definition });
+    envelope_message(&uvp_compiler::compile_json(&request.to_string()))
+}
+
 fn probe_hook(profile: &str, hook_name: &str, hook: &str) -> (bool, String) {
     let request = json!({ "profile": profile, "hookName": hook_name, "hook": hook });
     envelope_message(&uvp_hook_dsl::parse_hook_json(&request.to_string()))
@@ -160,19 +165,33 @@ fn rust_probes() -> Vec<(String, Probe)> {
     let mut probes: Vec<(String, Probe)> = Vec::new();
 
     probes.push((
-        "file-resource-type-closed-enum".into(),
+        "file-resource-type-required".into(),
         (
-            || probe_compile(base_definition()),
             || {
-                probe_compile({
-                    let mut d = base_definition();
-                    d["spec"]["stages"][0]["fileResources"] = json!({
-                        "rule_file": { "fileType": "s3", "localFile": { "path": "/tmp/x" } }
-                    });
-                    d
-                })
+                let mut d = base_definition();
+                d["spec"]["stages"][0]["fileResources"] = json!({
+                    "rule_file": { "fileType": "app1_blob", "app": { "locator": "/x" } }
+                });
+                let chain = probe_compile(d.clone());
+                let cloud = probe_cloud_compile(d);
+                (
+                    chain.0 && cloud.0,
+                    format!("chain={} cloud={}", chain.1, cloud.1),
+                )
             },
-            "fileType must be one of",
+            || {
+                let mut d = base_definition();
+                d["spec"]["stages"][0]["fileResources"] = json!({
+                    "rule_file": { "fileType": "" }
+                });
+                let chain = probe_compile(d.clone());
+                let cloud = probe_cloud_compile(d);
+                (
+                    chain.0 || cloud.0,
+                    format!("chain={} cloud={}", chain.1, cloud.1),
+                )
+            },
+            "fileType is required and must be a non-empty string",
         ),
     ));
     probes.push((
