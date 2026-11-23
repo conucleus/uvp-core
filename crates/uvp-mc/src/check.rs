@@ -45,6 +45,7 @@ impl<'v> Checker<'v> {
         let mut outcome = match check.kind {
             CheckKind::BadState => bad_state(self.vocab, self.max_states, check)?,
             CheckKind::AdmissionClosed => admission_closed(self.vocab, self.max_states, check)?,
+            CheckKind::DeadlockFree => deadlock_free(self.vocab, self.max_states, check)?,
         };
         if outcome.status == Status::Fail {
             if let Some(violation) = outcome.violation.as_mut() {
@@ -244,6 +245,57 @@ fn admission_closed(vocab: &Vocabulary, max_states: u64, check: &Check) -> Resul
     Ok(outcome(check, states, violation))
 }
 
+fn deadlock_free(vocab: &Vocabulary, max_states: u64, check: &Check) -> Result<CheckOutcome> {
+    let predicate = check.predicate.as_deref().expect("validated");
+    let when = check.when.as_deref();
+    let mut seeds = predicate_atoms(vocab, predicate);
+    if let Some(when) = when {
+        seeds.extend(predicate_atoms(vocab, when));
+    }
+    let universe: Vec<usize> = vocab.dependency_closure(&seeds).into_iter().collect();
+
+    let graph = explore_universe(vocab, &universe, max_states, None, None)?;
+    let n = graph.states.len();
+    let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (u, outs) in graph.edges.iter().enumerate() {
+        for &v in outs {
+            rev[v].push(u);
+        }
+    }
+
+    let mut can_reach = vec![false; n];
+    let mut queue = std::collections::VecDeque::new();
+    for (i, state) in graph.states.iter().enumerate() {
+        if predicate_holds(vocab, Some(predicate), state)? {
+            can_reach[i] = true;
+            queue.push_back(i);
+        }
+    }
+    while let Some(v) = queue.pop_front() {
+        for &u in &rev[v] {
+            if !can_reach[u] {
+                can_reach[u] = true;
+                queue.push_back(u);
+            }
+        }
+    }
+
+    let mut violation = None;
+    for (i, state) in graph.states.iter().enumerate() {
+        if !can_reach[i] && predicate_holds(vocab, when, state)? {
+            violation = Some(violation_json(
+                vocab,
+                &graph,
+                i,
+                "reachable state satisfies `when` but has no path to target `predicate` (deadlock)"
+                    .to_string(),
+            ));
+            break;
+        }
+    }
+    Ok(outcome(check, n, violation))
+}
+
 fn outcome(check: &Check, states: usize, violation: Option<Value>) -> CheckOutcome {
     CheckOutcome {
         id: check.id.clone(),
@@ -303,6 +355,11 @@ fn validate_shape(check: &Check) -> Result<()> {
             }
             if check.intents.is_empty() {
                 return Err(missing("intents"));
+            }
+        }
+        CheckKind::DeadlockFree => {
+            if check.predicate.is_none() {
+                return Err(missing("predicate"));
             }
         }
     }

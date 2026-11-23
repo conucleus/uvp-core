@@ -22,6 +22,7 @@ pub enum StopKind {
 pub struct Graph {
     pub states: Vec<McState>,
     pub parents: Vec<Option<(usize, crate::model::Action)>>,
+    pub edges: Vec<Vec<usize>>,
     pub stopped: Option<(usize, StopKind)>,
 }
 
@@ -71,6 +72,7 @@ fn explore(
 
     let mut states = Vec::new();
     let mut parents = Vec::new();
+    let mut edges = Vec::new();
     let mut index: HashMap<McState, usize> = HashMap::new();
     let mut stopped = None;
 
@@ -78,6 +80,7 @@ fn explore(
     index.insert(initial.clone(), 0);
     states.push(initial.clone());
     parents.push(None);
+    edges.push(Vec::new());
     queue.push_back(0usize);
 
     'bfs: while let Some(current) = queue.pop_front() {
@@ -96,7 +99,8 @@ fn explore(
                     continue;
                 }
             }
-            if index.contains_key(&successor) {
+            if let Some(&succ_idx) = index.get(&successor) {
+                edges[current].push(succ_idx);
                 continue;
             }
             let next = states.len() as u64;
@@ -106,16 +110,20 @@ fn explore(
                     universe_key.len(),
                 )));
             }
-            index.insert(successor.clone(), states.len());
+            let succ_idx = states.len();
+            edges[current].push(succ_idx);
+            index.insert(successor.clone(), succ_idx);
             states.push(successor.clone());
             parents.push(Some((current, action)));
-            queue.push_back(states.len() - 1);
+            edges.push(Vec::new());
+            queue.push_back(succ_idx);
         }
     }
 
     Ok(Graph {
         states,
         parents,
+        edges,
         stopped,
     })
 }

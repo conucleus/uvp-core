@@ -331,6 +331,10 @@ sendSignals:
       - "buyer::~validate.rejected"
 ```
 
+**设计纪律：意图门 vs 状态宣誓（非编译器硬限制）**：DSL 语法层不对 `sendSignals` 强制区分“意图”与“状态”（两者均可省略 `validWhen`），但协作设计应守住一条工程纪律——
+- **意图信号（Intent）**：代表外部参与方请求执行某动作（如 `pay`、`confirm`、`open`、`settle`），通过 `validWhen` 构筑准入意图门，不满足条件时整笔请求被拒/回滚；阶段激活后无条件允许发起的动作（如 `initiate`、`accept`）亦可省略 `validWhen`。
+- **状态宣誓（State Declaration）**：代表执行器响应 `receiveSignals`（如 `TOREFUND`、`TOTRANSFER`）或完成既成操作后上报的客观结果（如 `refunded`、`transferred`、`dispute.settled`），**不得配置 `validWhen`**（即使 `1==1` 语义也不应加门）——客观事实只能如实落账，不能被准入门拒绝。
+
 ### 5.7 字符与命名建议
 
 `Hook.Validate()` 只检查外层 `source::condition` 壳格式；字符集、语法和语义由 Rust `uvp-core` 统一判断。为避免跨运行环境歧义：标识符只用字母/数字/下划线（避免中划线）；阶段信号引用严格两段式；延时单位小写。

@@ -319,6 +319,27 @@ impl Vocabulary {
         out
     }
 
+    pub fn dependency_closure(&self, seeds: &[usize]) -> BTreeSet<usize> {
+        let mut out: BTreeSet<usize> = seeds.iter().copied().collect();
+        let mut queue: Vec<usize> = seeds.to_vec();
+        while let Some(fact) = queue.pop() {
+            let Some(&intent) = self.intent_fact.get(&fact) else {
+                continue;
+            };
+            for atom in signal_atoms(
+                &self.intents[intent].decoded.expr,
+                &self.intents[intent].decoded.source,
+            ) {
+                if let Some(index) = self.fact_index.get(&atom) {
+                    if out.insert(*index) {
+                        queue.push(*index);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn intent_facts(&self) -> Vec<usize> {
         let mut out: Vec<usize> = self.intent_fact.keys().copied().collect();
         out.sort_unstable();

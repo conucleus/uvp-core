@@ -25,6 +25,8 @@ enum Command {
         definition: Option<String>,
         #[arg(long)]
         request: Option<String>,
+        #[arg(long, value_name = "PATH", requires = "definition")]
+        checks: Option<String>,
         #[arg(long = "bad-state", value_name = "EXPR")]
         bad_states: Vec<String>,
         #[arg(long = "closed-when", value_name = "WHEN", requires = "close_intents")]
@@ -54,6 +56,7 @@ fn main() -> ExitCode {
         Command::Check {
             definition,
             request,
+            checks,
             bad_states,
             closed_when,
             close_intents,
@@ -62,6 +65,7 @@ fn main() -> ExitCode {
         } => run_check(
             definition,
             request,
+            checks,
             bad_states,
             closed_when,
             close_intents,
@@ -76,6 +80,7 @@ fn main() -> ExitCode {
 fn run_check(
     definition_path: Option<String>,
     request_path: Option<String>,
+    checks_path: Option<String>,
     bad_states: Vec<String>,
     closed_when: Option<String>,
     close_intents: Option<String>,
@@ -92,6 +97,22 @@ fn run_check(
         }
         let definition_path = definition_path.expect("clap enforces definition or request");
         let mut checks = Vec::new();
+        if let Some(checks_path) = checks_path {
+            let raw = fs::read_to_string(&checks_path)
+                .map_err(|err| format!("read checks {checks_path}: {err}"))?;
+            let parsed: Vec<Check> = if let Ok(list) = serde_json::from_str::<Vec<Check>>(&raw) {
+                list
+            } else {
+                #[derive(serde::Deserialize)]
+                struct ChecksWrapper {
+                    checks: Vec<Check>,
+                }
+                serde_json::from_str::<ChecksWrapper>(&raw)
+                    .map_err(|err| format!("parse checks {checks_path} as JSON: {err}"))?
+                    .checks
+            };
+            checks.extend(parsed);
+        }
         for (index, predicate) in bad_states.iter().enumerate() {
             checks.push(Check {
                 id: format!("bad-state:{}", index + 1),

@@ -647,6 +647,41 @@ fn exhaustive_status(vocab: &Vocabulary, source: &Check) -> Status {
             }
             Status::Pass
         }
+        CheckKind::DeadlockFree => {
+            let predicate = source.predicate.as_deref().expect("validated");
+            let when = source.when.as_deref();
+            let graph = explore_universe(vocab, &universe, crate::DEFAULT_MAX_STATES, None, None)
+                .expect("oracle stays inside the state cap");
+            let n = graph.states.len();
+            let mut rev = vec![Vec::new(); n];
+            for (u, outs) in graph.edges.iter().enumerate() {
+                for &v in outs {
+                    rev[v].push(u);
+                }
+            }
+            let mut can_reach = vec![false; n];
+            let mut queue = std::collections::VecDeque::new();
+            for (i, state) in graph.states.iter().enumerate() {
+                if predicate_ready(vocab, Some(predicate), state) {
+                    can_reach[i] = true;
+                    queue.push_back(i);
+                }
+            }
+            while let Some(v) = queue.pop_front() {
+                for &u in &rev[v] {
+                    if !can_reach[u] {
+                        can_reach[u] = true;
+                        queue.push_back(u);
+                    }
+                }
+            }
+            for (i, state) in graph.states.iter().enumerate() {
+                if !can_reach[i] && predicate_ready(vocab, when, state) {
+                    return Status::Fail;
+                }
+            }
+            Status::Pass
+        }
     }
 }
 
@@ -829,4 +864,89 @@ fn multi_source_admission_header_is_a_typed_error_not_a_panic() {
         message.contains("multi-source") && message.contains("lane.out"),
         "error must name the unsupported shape: {message}"
     );
+}
+
+#[test]
+fn deadlock_free_passes_when_every_reachable_when_state_can_reach_target() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_deadlock_pass"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [
+                {
+                    "name": "order",
+                    "source": "buyer",
+                    "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                    "sendSignals": [
+                        {"name": "pay"},
+                        {"name": "refund", "validWhen": ["buyer::order.pay & ~order.release"]},
+                        {"name": "release", "validWhen": ["buyer::order.pay & ~order.refund"]}
+                    ],
+                    "receiveSignals": {
+                        "DONE": "buyer::order.refund | order.release"
+                    }
+                }
+            ]
+        }
+    });
+    let report = mc_check(McCheckRequest {
+        definition,
+        checks: vec![Check {
+            id: "escrow-exit".to_string(),
+            kind: CheckKind::DeadlockFree,
+            description: None,
+            when: Some("buyer::order.pay".to_string()),
+            predicate: Some("buyer::order.refund | order.release".to_string()),
+            intents: Vec::new(),
+        }],
+        max_states: None,
+    })
+    .expect("deadlock_free check must run cleanly");
+    assert!(report.passed, "report={:?}", report);
+}
+
+#[test]
+fn deadlock_free_catches_trapped_state_with_no_path_to_target() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": {"name": "mc_deadlock_fail"},
+        "spec": {
+            "platform": {"type": "cloud"},
+            "nucleation": {"id": "core_org"},
+            "stages": [
+                {
+                    "name": "order",
+                    "source": "buyer",
+                    "executor": {"supplierType": "organization", "supplierID": "supplier_demo"},
+                    "sendSignals": [
+                        {"name": "pay"},
+                        {"name": "freeze"},
+                        {"name": "release", "validWhen": ["buyer::order.pay & ~order.freeze"]}
+                    ],
+                    "receiveSignals": {
+                        "DONE": "buyer::order.release"
+                    }
+                }
+            ]
+        }
+    });
+    let report = mc_check(McCheckRequest {
+        definition,
+        checks: vec![Check {
+            id: "escrow-exit".to_string(),
+            kind: CheckKind::DeadlockFree,
+            description: None,
+            when: Some("buyer::order.pay".to_string()),
+            predicate: Some("buyer::order.release".to_string()),
+            intents: Vec::new(),
+        }],
+        max_states: None,
+    })
+    .expect("deadlock_free check must run cleanly");
+    assert!(!report.passed, "trapped freeze state must fail deadlock_free");
+    assert_eq!(report.checks[0].status, Status::Fail);
 }

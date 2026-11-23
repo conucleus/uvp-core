@@ -28,6 +28,8 @@ pub enum CheckKind {
     BadState,
     #[serde(rename = "admission_closed")]
     AdmissionClosed,
+    #[serde(rename = "deadlock_free")]
+    DeadlockFree,
 }
 
 impl CheckKind {
@@ -35,6 +37,7 @@ impl CheckKind {
         match self {
             CheckKind::BadState => "bad_state",
             CheckKind::AdmissionClosed => "admission_closed",
+            CheckKind::DeadlockFree => "deadlock_free",
         }
     }
 }
