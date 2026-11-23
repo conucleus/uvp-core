@@ -36,6 +36,7 @@
 | 触发建单 / 订单号派生 | §4 `sendSignals[].trigger` 行 → §6.1–§6.4 → §8.2 |
 | 跨秩序协作 | §1 三轴表 → §7 → §8 |
 | 定义被编译器拒绝 | 出错字段所在章（§4/§5/§7）的约束行 |
+| 文件资源 / 写入模式 | §4 `fileResources`/`fileWriters` 行 → §4.1 四模式 |
 | 计划要上链 / 两轨行为对照 | 链轨实现层 `uvp-chain.md`（阶段物化门详述、出生提交通道、链上编译规则、附录 B 对照矩阵） |
 | 投递没发生 / 运行期解析 | `uvp-cloud.md`（云轨时序红线与运行期执行者解析） |
 
@@ -139,7 +140,7 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 |---|---|---|---|
 | `spec.stages` | `array` | 是 | 至少 1 个。 |
 | `spec.stages[].name` | `string` | 是 | 秩序内全局不可重复。 |
-| `spec.stages[].fileWriters` | `[]string` | 否 | 跨阶段文件写 **stage 级 allowlist**：每项引用本定义内另一个阶段名，表示该阶段获准写本阶段的文件映射；本阶段自身隐式可写，不得自引用。项须真实存在、不得重复；运行期以 writer 阶段在本订单的**当前执行者**作为写权主体（换执行者即换写权），字段本身不写 executor；字段也不定义统一数量上限（链轨 artifact 按自身 capacity 约束）。字段参与定义身份派生（§2.1），文件 patch 的声明与运行语义见实现层执行文档。 |
+| `spec.stages[].fileWriters` | `[]string` | 否 | 跨阶段文件写 **stage 级 allowlist**：每项引用本定义内另一个阶段名，表示该阶段获准写本阶段的文件映射；本阶段自身隐式可写，不得自引用。项须真实存在、不得重复；运行期以 writer 阶段在本订单的**当前 assigned supplier** 作为写权主体（换执行者即换写权），直接复用阶段 supplier 授权——不生成独立 capability 或专用 writer 证明。字段参与定义身份派生（§2.1）；文件写入的四种运行期模式见 §4.1。 |
 
 **Dock 文档**（独立于 Zhixu）：`kind: Dock` 的 `spec.from`/`spec.to`/`spec.signalMap` 声明静态 A→B 发射条件，完整语义见 §7.2。
 
@@ -157,7 +158,7 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 | `selectedStages` | `[]string` | 否 | 目标阶段引用列表，格式 `{stage}`，每项必须引用真实存在的阶段——当前阶段的执行者可代这些阶段做执行者选择/绑定（selector 语义）。 |
 | `sendSignals` | `[]object` | 否 | 本阶段发送信号声明，条目取 `{name, validWhen?, trigger?}` 三个键（loader 按闭集接收）。`name` 必填非空——裸局部名或 `stage.signal` 两段式自指全名，编译期归一为裸局部名，归一后不可重复。`trigger: true` 标记出生信号（§6）：出生信号的 `name` 须 ∈ 本阶段 `sendSignals`、同阶段内不重复；出生集编译期固定并进入 plan 承诺面。`validWhen` 可选：`[]string` 发射适格声明——每项是完整的 `{source}::{condition}`、全体项 header source 必须一致，缺省即无条件发射（空数组/空项拒绝）；列表语义见 §5.6。信号名取裸局部名或 `{stage}.{signal}` 两段式。 |
 | `receiveSignals` | `map[string]string` | 否 | key 是通道名称（不可含 `.` 或 `#`、不含任何空白字符，长度 1-36 字节）；value 是同单 Hook DSL（§5）：只在本订单上下文求值，可引用本秩序内任意阶段已声明的信号；跨秩序事实由静态 Dock 的发射条件映射进本订单（§7）。投递的运行期语义见实现层文档（云轨 `uvp-cloud.md` §7）。 |
-| `fileResources` | `map[string]FileResource` | 否 | 文件资源句柄映射（字段形态见附录 A）；`fileType` 必填非空字符串，值域由应用/轨道解释，编译期不限制取值。链轨除 `fileType` 外不解释条目、不校验 type-specific 字段；云轨 resolver 目前识别 local/http/txcloud/plain_text，但编译期同样只校验非空。 |
+| `fileResources` | `map[string]FileResource` | 否 | 文件资源句柄映射（字段形态见附录 A）。每个条目必须是对象且 `fileType` 为必填非空字符串；`fileType` 对 uvp-core **完全 opaque**——值域开放、不解释、不做类型分派。条目其余键是应用自定义 opaque payload，原样保留，core 不读取、不校验、不哈希。运行期四模式见 §4.1。 |
 
 **executor 字段**：
 
@@ -165,7 +166,7 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 |---|---|---|---|
 | `executor.supplierType` | `string` | 是 | 枚举：`individual` / `organization` / `dock`。 |
 | `executor.supplierID` | `string` | 是（individual/organization） | 只要给出 executor 块且 supplierType 为二者之一即无条件必填，缺省或空白编译期硬拒绝；`selectedStages` 锚定不豁免存在性（缺 supplierID 的执行器即使被锚定也是"看似绑定"，产物里没有投递目标）。语义是 supplier 身份引用：链轨写标准 36 字符小写 UUID（链上注册表签发的 SID），编译期只做 UUID→bytes32 低位解码、不做 hash；云轨仍是业务键字符串（上限 36 字节）。`supplierType: dock` 时 `supplierID` 由运行期绑定确定，定义面只声明执行者类型。 |
-| `executor.selectableResource` | `map[string]FileResource` | 否 | 阶段对供应商可选资源描述；与 `fileResources` 同一 FileResource 口径（只强制非空 `fileType`，值域开放）。 |
+| `executor.selectableResource` | `map[string]FileResource` | 否 | 阶段对供应商可选资源描述；与 `fileResources` 同一 FileResource 口径（对象 + 非空 opaque `fileType`；其余 payload 原样保留，core 不解释）。 |
 
 **执行者拓扑约束**（uvp-core 裁决）：
 
@@ -179,6 +180,26 @@ onchain 实现层的附加接受域见 `uvp-chain.md`（uvp-eth 根）：
 
 - 全计划去重后的依赖键（signalKey）总数 ≤ 1024、单键 hook 扇出 ≤ 16（`commitPlan` 同口径 revert `TooManyDependencies` / `TooManyHooksPerDependencyKey`；依赖索引多对多、无阶段 owner，多观察语义见 `uvp-chain.md` §3）；
 - 上述上限的动机与更多链上编译/注册期闸已随原文迁至该文档。
+
+### 4.1 文件资源与写入模式（四模式）
+
+`fileResources` 是资源声明，不是文件内容协议；`fileWriters` 是阶段级写授权引用。二者在共享层的职责严格限于：
+
+- `fileResources.<key>`：必须是对象，且 `fileType` 为非空字符串。`fileType` 对 uvp-core 完全 opaque（开放值域、不做枚举或 type-specific 校验）；条目其余键是应用自定义 opaque payload，core 原样透传，不读取、不校验、不哈希。
+- `fileWriters`：每项引用本定义内的另一个阶段名，必须存在、不可重复、不可自指；本阶段自身隐式可写。它只声明"哪个阶段的当前 assigned supplier 可以写本阶段的文件映射"。
+
+写权在运行期直接复用阶段 supplier 授权：writer 阶段在本订单的当前 assigned supplier/role 即写权主体，换执行者即换写权。共享层不生成独立 capability、专用 writer 证明或文件哈希。
+
+运行期只有以下四种文件相关模式（字段闭集不因模式增加；API、事件与存储形态归实现层）：
+
+| 模式 | 提交内容 | 语义 |
+|---|---|---|
+| bare signal | 仅 signal | 普通信号提交，不触碰文件映射。 |
+| bare file | 仅 `{key, payload}` | 只落文件写入；不是业务 signal，不计信号数、不跑 admission/hook。 |
+| atomic signal+file | signal 与 `{key, payload}` 同笔 | 信号与文件写入原子生效（全成或全不成）；signal 仍按 §6 管线判定与推进。 |
+| `fileWriters` 跨阶段写 | writer 阶段提交 `{key, payload}` | 目标阶段 `fileWriters` 含该 writer 阶段时获准写目标文件映射；授权复用 writer 阶段的 assigned supplier。 |
+
+三层职责落点：uvp-core 只做上述声明/引用校验（Layer 1）；轨道运行期提供四模式与 supplier 授权（Layer 2）；应用仓解释 opaque payload 的业务含义（Layer 3，例如内部餐券/凭据）。文件正文的版本、完整性与冲突策略归应用层/轨道存储；共享层不定义文件操作状态机、rolling/双重哈希或专用文件证明。Dock binding 的载荷摘要见 §7.4，与本节的文件写入无关。
 
 ## 5. 表达式
 
@@ -324,7 +345,7 @@ sendSignals:
 
 ### 6.1 提交管线与出生判定
 
-一次 signal 提交的输入是 `(stage, signal, orderId?, payload, resources, submitter/signature)`；语言层裁决以下步骤（权限/签名/时限等请求级闸由各轨实现层负责——链轨的发信权按 source 阶段 assigned supplier account 校验（SID 必须 active），见 `uvp-chain.md` §6）：
+一次 signal 提交的输入是 `(stage, signal, orderId?, payload, resources, submitter/signature)`；文件写入按 §4.1 的四模式提交——bare file 不进入本管线，atomic signal+file 的 signal 部分走本管线、文件部分与 signal 同笔原子生效。语言层裁决以下步骤（权限/签名/时限等请求级闸由各轨实现层负责——链轨的发信权按 source 阶段 assigned supplier account 校验（SID 必须 active），见 `uvp-chain.md` §6）：
 
 1. **成员检查**：stage 必须存在；`signal ∈ stage.sendSignals`，否则拒绝（具名 `SIGNAL_NOT_IN_SEND_SIGNALS` 一类入口错误）。
 2. **确定上下文**：`orderId` 为空 → **空订单上下文**（无 facts/files）；`orderId` 非空 → 订单必须存在，不存在即拒绝；随后在订单上下文求值。
@@ -433,7 +454,7 @@ dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单
 
 ### 7.4 绑定、时间窗与发射（运行期语义）
 
-- **绑定身份**：B 订单的挂接 stage 至多一个 dock 执行者选择、至多一个当前 binding；binding 由 `dock_link` 文件项确定——其值是 A 订单号（canonical `0x`+64 hex），写入/改写即建立/切换 binding，同一 A 单回到同一 binding。链轨 `bindingId` 为 **7 个 32-byte word**：`keccak256(abi.encode("uvp.dock.binding_id.v1", dkid, toPlanId, toOrderId, toStageId, fromPlanId, fromOrderId))`，**不含 payload hash/generation**；`dock_link` 的 `contentHash` 只在 poke 时认证载荷正文，不匹配即 `DockBindingContentHashMismatch`，不进入 bindingId、事件、view 或事实 provenance。
+- **绑定身份**：B 订单的挂接 stage 至多一个 dock 执行者选择、至多一个当前 binding；binding 由 `dock_link` 文件项确定——其值是 A 订单号（canonical `0x`+64 hex），写入/改写即建立/切换 binding，同一 A 单回到同一 binding。链轨 `bindingId` 为 **7 个 32-byte word**：`keccak256(abi.encode("uvp.dock.binding_id.v1", dkid, toPlanId, toOrderId, toStageId, fromPlanId, fromOrderId))`，**不含 payload hash/generation**；`dock_link` 的 `contentHash` 只在 poke 时认证该 Dock payload 正文，不匹配即 `DockBindingContentHashMismatch`，不进入 bindingId、事件、view 或事实 provenance；它是 Dock 载荷摘要，与 §4.1 的文件资源写入无关。
 - **A 窗口**：每个 output 的 A 侧表达式在 A 订单事实上求值，锚点/延时语义同 §5.4（`~` 在事实到达时关闭、`+T` 从锚点起算）。窗口当前值由读面（`getStageDockBinding`/`dockOutputWindow` 或 `GET /v0/dock-bindings`）按当前时刻 live 求值，不持久化窗口历史。
 - **B 窗口**：B 侧输出信号的 `validWhen`（§5.6）在发射前按 pre-state 复核；只有 Ready 时发射，窗口未满足时该 output 保持待发射、发射事务照常完成。
 - **发射**：A/B 窗口交集时发射 B 输出信号；逐 output first-win（已存在的 B 事实不覆盖），发射事实的 provenance 携带 binding id。链轨 `pokeDockBinding` permissionless；发射事件（`DockBindingPoked`/`DockOutputSubmitted`）长期在链上。
@@ -530,13 +551,13 @@ spec:
         supplierID: 2d7c9f10-3a4b-4c6d-8e1f-0a2b4c6d8e10
         selectableResource:
           capability_profile:
-            fileType: http
+            fileType: http          # opaque 分派键；payload 由应用解释
             httpFile:
               url: "https://example.com/capability.json"
       fileResources:
         rule_file:
-          fileType: local
-          localFile:
+          fileType: local         # opaque 分派键；core 不解释
+          localFile:              # 应用自定义 payload，原样透传
             path: "/data/rules/settlement.json"
 
     - name: main
@@ -557,7 +578,7 @@ spec:
         supplierType: dock
       fileResources:
         cos_receipt:
-          fileType: txcloud
+          fileType: txcloud       # opaque 分派键；payload 由应用/存储解释
           txCloudFile:
             bucket: "evidence-bucket"
             region: "ap-guangzhou"
@@ -675,7 +696,7 @@ spec:
 | `stage.name` | string | 是 | 秩序内唯一 | §4 |
 | `stage.source` | string | 是 | ≤36B plain identifier | §4 |
 | `stage.selectedStages` | []string | 否 | `{stage}` 真实存在 | §4 |
-| `stage.fileWriters` | []string | 否 | 引用本定义其他阶段名（唯一、不自指）；stage 级文件写 allowlist，提交者认证由各轨自持 | §4 |
+| `stage.fileWriters` | []string | 否 | 引用本定义其他阶段名（唯一、不自指）；stage 级文件写 allowlist，写权复用 writer 阶段当前 assigned supplier 的阶段授权 | §4/§4.1 |
 | `stage.sendSignals[].name` | string | 是 | 裸名或两段式自指全名，归一唯一 | §4 |
 | `stage.sendSignals[].validWhen` | []string | 否 | 发射适格（过滤档）；每项完整 `{source}::{condition}`，header source 全等 | §5.6 |
 | `stage.sendSignals[].trigger` | bool | 否 | `true` = 出生信号；条目须 ∈ sendSignals、同阶段不重复、编译期固定 | §4/§6 |
@@ -689,11 +710,8 @@ spec:
 | `Dock.spec.to.zhixu` / `.stage` | string | 是 | 已发布定义 uid；阶段以 dock 执行者承接、输出信号由 `sendSignals` 声明 | §7.2 |
 | `Dock.spec.signalMap` | map | 是 | ≥1 条：B 输出信号（≤100B，∈ to.stage.sendSignals）→ A 侧 Filter 表达式 | §7.2 |
 | `Dock` 产物 `dkid` / `docHash` | string | — | `zd-<32hex>` / `0x<64hex>`，内容派生（`uvp.dock.v1`） | §7.2 |
-| `fileResources.<key>.fileType` | string | 是 | 非空字符串，值域开放（应用自定义）；云轨 resolver 目前识别 local/http/txcloud/plain_text，编译期不校验取值 | 附录 |
-| `fileResources.<key>.localFile.path` | string | 条件（云 resolver） | 云轨 fileType=local 时使用；链轨不校验 | 附录 |
-| `fileResources.<key>.httpFile.url` | string | 条件（云 resolver） | 云轨 fileType=http 时使用；链轨不校验 | 附录 |
-| `fileResources.<key>.txCloudFile.{bucket,region,objectKey}` | string | 条件（云 resolver） | 云轨 fileType=txcloud 时使用；链轨不校验 | 附录 |
-| `fileResources.<key>.plainText.content` | []byte | 条件（云 resolver） | 云轨 fileType=plain_text 时使用（生产证据不用 plain_text）；链轨不校验 | 附录 |
+| `fileResources.<key>.fileType` | string | 是 | 非空字符串，值域开放（应用自定义）；uvp-core 不解释、不做类型分派，也不校验 type-specific 字段 | §4.1 |
+| `fileResources.<key>.<payload>` | any | 否 | 除 `fileType` 外的所有键都是应用自定义 opaque payload，原样保留；core 不读取、不校验、不哈希 | §4.1 |
 
 ---
 

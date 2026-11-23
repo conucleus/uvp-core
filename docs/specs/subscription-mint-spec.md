@@ -112,7 +112,7 @@ Dock 是 **B 侧声明的静态 A→B 时间窗订阅**：B 侧发布独立 `kin
 | Dock 注册校验失败（from/to 未发布、output/atom 不属于声明集合、窗口指令非法、dkid 冲突） | `POST /v0/dock` 类型化拒绝：`DOCK_VALIDATION_FAILED` / `DOCK_FROM_ZHIXU_NOT_PUBLISHED` / `DOCK_TO_ZHIXU_NOT_PUBLISHED` / `DOCK_DKID_CONFLICT`，仅静态 Dock 表落库 | revert `DockFromPlanUnknown` / `DockToPlanUnknown` / `DockOutputCapabilityNotFound` / `DockAtomCapabilityNotFound` / `DockWindowInvalid` / `DockAlreadyRegistered` 等，整笔回滚 |
 | dock 执行者选择冲突（同（订单,stage）换 dkid 再选） | `stage-patch` 返回 `DOCK_STAGE_EXECUTOR_ALREADY_SELECTED` | revert `StageDockExecutorAlreadySelected` |
 | binding 载荷缺失（未写 `dock_link` 即 poke） | 读面保持无 binding（`dock_link` 未落 = 尚无关系） | revert `DockBindingPayloadMissing` |
-| binding 载荷正文与 `contentHash` 不一致 | 文件 patch 的 `baseHash`/ops 校验拒绝（通用 stage-patch 错误面），binding 保持未建立 | revert `DockBindingContentHashMismatch` |
+| binding 载荷正文与 `contentHash` 不一致 | 文件提交的 payload 校验拒绝（通用 stage 文件写入错误面），binding 保持未建立 | revert `DockBindingContentHashMismatch` |
 | binding 的 A 单号不属于 from plan / 与已选记录不一致 | 读面 `DOCK_BINDINGS_QUERY_FAILED` 诊断；读面返回空 binding | revert `DockBindingFromOrderUnknown` / `DockBindingFromOrderMismatch` |
 | 窗口未满足（A 或 B 一侧为假） | 读面 `a_window`/`b_window` 的 `satisfied=false`；发射发生在窗口满足时 | poke 跳过该 output（无 revert；已满足的 output 同笔发射） |
 | 重复 poke / 输出已发射 | 幂等：读面 `emitted=true`，发射保留首次事实 | 幂等：已存在 B 事实保留（first-win），poke 事件照常记录 |

@@ -66,8 +66,16 @@ pub struct ZhixuStage {
     pub send_signals: Vec<ZhixuSendSignal>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub receive_signals: BTreeMap<String, String>,
+    /// Opaque application-owned file resource declarations. The shared layer
+    /// validates only that each entry is an object with a non-empty string
+    /// `fileType`; every other key is payload and is passed through untouched
+    /// (never interpreted, hashed, or reduced to file-op state).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_resources: BTreeMap<String, Value>,
+    /// Stage-level file-write allowlist: references to other stages in this
+    /// definition (self is implicit). Run-time authorization reuses the writer
+    /// stage's assigned supplier/role; the shared layer emits no capability or
+    /// Merkle material for it.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",

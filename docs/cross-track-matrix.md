@@ -35,10 +35,10 @@
 | `〔范围裁决〕` dynamic 阶段（无 `executor` 块、仅被 `selectedStages` 覆盖且声明 `receiveSignals`） | 接受（云 runtime 按云侧执行者解析承接） | 接受（须被静态执行者 `selectedStages` 可达；hook 带 `HOOK_FLAG_DYNAMIC_EXECUTOR` 位 32；运行期由 selector 在首信号前指派 `supplierId`，未指派 revert `StageSupplierNotAssigned`） | 两轨都接受该定义形态；运行期指派机制不同（云侧动态配置 vs 链上强注册 + 首信号前指派门） |
 | 同一 signalKey 被多个阶段/hook 观察 | 接受（依赖索引多对多，无阶段 owner） | 接受（依赖索引多对多，各阶段按自身物化位独立物化并宣告 `HookReady`） | 两轨同口径：多观察完全合法 |
 | `〔gas/DoS 边界〕` 依赖键总数 / 单键 hook 扇出 | 无此校验（云产物不设上限） | TS 预检 + 合约双闸（依赖键总数 ≤ 1024、单键 hook 扇出 ≤ 16） | 规模上限是链上防 DoS 成本边界，不改变语言语义 |
-| `〔范围裁决〕` `spec.stages[].fileWriters`（跨阶段文件写授权） | 接受：stage 级 allowlist（target 声明谁可写；self 隐式），由请求 bearer 身份 + allowlist 校验 | 接受：折叠为 `UVP_FILE_WRITER_V1` capability 叶进 `capabilitiesRoot`，由 writer 阶段 `assigned supplier account` 提交；链轨 artifact 另约束每阶段 ≤ 8 | 允许名单语义同义；链轨受 artifact 容量 ≤ 8 限制（非共享 DSL 语义） |
-| `〔实现不对称〕` 文件 patch 语义与存储（`add`/`replace`/`remove` + `baseHash`） | 原子应用到 `order_stage_record.file_resources`（JSONB），可带内容；`baseHash` 为规范化 JSON 的 **sha256** | `UVPFileResourceModule` 只存 `contentHash + handle`（正文不上链）；`baseHash` 为阶段 `filesHash`（rolling **keccak256**） | 跨轨不得互认 `baseHash`，也不得假设链上可读取文件正文 |
-| `〔范围裁决〕` 文件 patch 的提交面（direct + 纯 patch） | 无链上签名域；信号信封直接携带 `fileResources` | `submitSignal` / `submitSignalFor` 均接受尾部 `(filesDigest, filePatch)`；纯文件 patch 用 `signalId=0, sourceId=0, payloadHash=0`，不计业务信号、不跑 admission/hook | 链轨支持纯文件 patch 入口与代付；两轨均不让纯 patch 触碰业务信号计数 |
-| `〔实现不对称〕` `uvp.cloudArtifact.v1` 的 `fileWriters` | v1 内可选 additive 字段（仅非空 stage 输出） | 链轨不消费该 artifact（使用 `uvp.onchainHookPlan.v1`） | 消费方须容忍缺省，缺省即「无跨阶段写授权」 |
+| `spec.stages[].fileWriters`（跨阶段文件写授权） | 接受：stage 级 allowlist（target 声明谁可写；self 隐式）；writer 阶段当前 assigned supplier 即写权主体，复用阶段 supplier 授权 | 接受：同一 allowlist 语义；写权由 writer 阶段 `assigned supplier account` 承接，不生成独立 capability 叶 | 两轨同义；`fileWriters` 只做定义级引用校验，运行期授权复用阶段 supplier 授权 |
+| `fileResources` 的声明边界 | 只要求条目为对象 + 非空 `fileType`；其余键为应用 opaque payload，原样保存 | 同左；`fileType` 与 payload 均不进入共享校验的语义解释 | 两轨同口径：`fileType` 值域开放，payload 语义归应用仓 |
+| 文件写入模式（运行期） | bare signal、bare file、atomic signal+file、`fileWriters` 跨阶段写四模式；file-only 不计业务信号、不跑 admission/hook | 同左四模式；signal 与 file 同笔原子生效，跨阶段写受 `fileWriters` allowlist 约束 | 模式与授权语义同构；存储/事件/API 形态属实现层 |
+| 文件资源存储与完整性 | 运行期按 opaque `{key, payload}` 保存；不在共享层定义文件操作状态机、rolling/双哈希 | 同左；只保存 runtime 自有的 `{key, payload}` 或 handle 形态 | 跨轨不互认文件哈希；正文版本与完整性归应用/轨道，不得假设可读正文 |
 | `〔实现不对称〕` 批量信号提交 | HTTP `/v0/signals` **不提供批量提交**，仅支持单条提交 | 单笔合约交易可原子发射多条信号；任一条 `validWhen` 不通过则**整批 revert**，单条事实仍按 first-win 吸收 | 两轨提交粒度不同：云轨单条独立提交，链轨可借助 EVM 交易原子性打包多条发射 |
 | `〔实现不对称〕` 嵌套延时形态的裁决 | 编译期拒绝（`uvp-core` 解析层 `reject_nested_delay`） | 编译期拒绝（同左）+ `commitPlan` 链上注册门再拒（手工 plan 防线） | 正规编译器路径两轨同拒；链轨额外对绕过编译器的手工 plan 兜底 |
 | `〔实现不对称〕` YAML 裸标量装载 | Go 装载：`Y`/`yes`/`on`→布尔、`010`→8、`1_000`→1000 | TS 装载：`010`→10、其余按字符串 | 同一未加引号的 YAML 跨轨可能派生出不同 UID（Rust 正本按 `"010"` 字符串）；所有标量值位一律加引号是作者纪律 |
@@ -47,19 +47,20 @@
 
 ---
 
-## 2. 链轨运行机制摘要（Dock 与文件 Patch）
+## 2. 链轨运行机制摘要（Dock 与文件资源）
 
 ### 2.1 Dock 注册与 Binding（`UVPDockRegistry` / `UVPStagePatchModule`）
 
 - **注册（permissionless）**：`registerDock(fromPlanId, fromSourceId, toPlanId, toStageId, toSourceId, docHash, outputs[])` 逐 atom/output 验证 A/B plan capability Merkle proof（不通过 revert `DockOutputCapabilityNotFound` / `DockAtomCapabilityNotFound`）。`dkid = bytes32(bytes16(docHash))`（即 `zd-<32hex>`），重复注册 revert `DockAlreadyRegistered`。读面 `getDock` / `dockOutputCount` / `getDockOutput` 入参为 **dkid word**。
 - **选定 dock supplier（一次性）**：由 selector 阶段调用 `selectStageDockSupplier`（或携 EIP-712 签名的 `selectStageDockSupplierFor`），携带 `{selectorStageId, targetStageId, dockId, supplierId, patchNonce}`。合约校验 `HOOK_FLAG_DOCK_EXECUTOR`、selector 绑定、SID `active` 及关系一致性；同 `dkid+supplierId` 重放幂等吸收，换选 revert `StageDockSupplierAlreadySelected`。选中 SID 的 supplier account 即后续 output 写入的 submitter。
-- **binding 身份与窗口发射**：`bindingId = keccak256(abi.encode(DOCK_BINDING_ID_DOMAIN, dkid, toPlanId, toOrderId, toStageId, fromPlanId, fromOrderId))`（7 word，不含 payload hash）。`dock_link` 文件项的 `contentHash` 仅在 `pokeDockBinding` 时核验载荷正文（不匹配 revert `DockBindingContentHashMismatch`）。`pokeDockBinding` 按 `block.timestamp` 求 A 窗口并复核 B 侧 `validWhen`，逐 output first-win 发射（永久事件 `DockBindingPoked` / `DockOutputSubmitted`），任何人均可 poke。
+- **binding 身份与窗口发射**：`bindingId = keccak256(abi.encode(DOCK_BINDING_ID_DOMAIN, dkid, toPlanId, toOrderId, toStageId, fromPlanId, fromOrderId))`（7 word，不含 payload hash）。`dock_link` 文件项的 `contentHash` 仅在 `pokeDockBinding` 时核验该 Dock payload 正文（不匹配 revert `DockBindingContentHashMismatch`），它是 Dock 载荷摘要，与 §2.2 的文件资源写入无关。`pokeDockBinding` 按 `block.timestamp` 求 A 窗口并复核 B 侧 `validWhen`，逐 output first-win 发射（永久事件 `DockBindingPoked` / `DockOutputSubmitted`），任何人均可 poke。
 
-### 2.2 阶段文件映射与文件 Patch（`UVPFileResourceModule`）
+### 2.2 文件资源与四模式（运行期）
 
-- **职责与键值**：文件映射归 `UVPFileResourceModule` 管理，核心 `UVPStateMachine` 仅作为唯一信任入口转发调用。键值结构为 `key -> (contentHash, handle)`（`handle` ≤ 512 字节，正文不上链）。**链上不定义 `fileType` 闭集**，业务类型由应用层自定义。
-- **原子操作与无 nonce**：支持 `add`（键不存在）、`replace`（键存在）、`remove`（键存在），任一失败整笔回滚；`baseHash` 必填且须等于当前阶段 `filesHash`。文件映射无 patch nonce，重复 `patchHash` 按 first-win 吸收；**纯文件 patch 不计入业务信号计数、不跑 admission、不触发 hook**，且不受 `stage supplier patch` 首信号时序门（`StageAlreadyHasSignal`）约束。
-- **写权与事件**：写权主体为 writer 阶段的 `assigned supplier account`；跨阶段写入需额外提供 target 阶段 `fileWriters` 的 `UVP_FILE_WRITER_V1` capability proof（失败 revert `FileWriterUnauthorized`）。每笔落账发 `StageFilePatchApplied` 与逐 op `StageFileOpApplied` 事件供索引器重放。
+- **共享层边界**：`uvp-core` 只校验 `fileType` 非空字符串与 `fileWriters` 阶段引用（存在、不自指、唯一）；条目其余键是应用 opaque payload，原样透传，不读取、不校验、不哈希。`fileType` 值域开放，core 不做类型分派。
+- **四模式**：① bare signal——仅信号；② bare file——仅文件写入，不产生业务 signal、不计信号数、不跑 admission/hook；③ atomic signal+file——同一笔提交内信号与文件写入原子生效；④ `fileWriters` 跨阶段写——目标阶段的 allowlist 指定 writer 阶段，writer 阶段当前 assigned supplier 获得写权，复用阶段 supplier 授权。
+- **授权**：本阶段自身隐式可写；跨阶段写只按 target `fileWriters` 判定，写权随该 writer 阶段在本订单的当前 assigned supplier 变化。不生成独立 capability 证明。
+- **存储**：运行期自行保存 opaque `{key, payload}`（或 handle）；文件正文版本、完整性、冲突策略由应用层/轨道存储决定，不在共享 DSL 或 core 中定义文件操作状态机、rolling/双哈希。
 
 > **手工 plan 作者自负（两轨通用纪律）**：编译器是唯一正规入口。绕过编译器手工构造的 plan 不受编译期语义门保护，缺陷会在运行期才暴露（例如链轨手工构造「复合出生钩子」在出生时先被判 Cancelled，导致 `InvalidTriggerHook` 整笔回滚）。手工构造 plan 或 artifact 的一切后果由作者自负。
 
@@ -70,5 +71,5 @@
 以下跨仓与对齐事项已登记为后续任务，不在本轮修改：
 
 1. **云轨版本镜像同步**：`uvp-utils` 中的 `SemanticVersion` 与 `CloudArtifactSchema` 镜像须与本矩阵保持同步（`pnpm verify:stack-compatibility` 会校验 sibling checkout 的 `pkg/version/version.go`，缺失即 fail-closed）。
-2. **`fileWriters` 共享 DSL 约束**：引用闭集、不可自指、去重等校验须收敛进 `uvp-core/protocol/uvp-constraints.v1.json` 共享校验，链轨 artifact 的每阶段 ≤ 8 capacity 约束归链轨保留。
+2. **`fileWriters` 约束登记**：定义级引用校验（闭集、不自指、去重）已由 uvp-core 实现；是否登记进 `protocol/uvp-constraints.v1.json` 由后续协议批次处理，运行期授权不得再引入独立 capability。
 3. **内部 Dock output 过滤分歧收敛**：当前两轨在 Dock 内部 output 发射时仍会过目标 `validWhen` 筛（链轨静默 `return false` 跳过，云轨报错重试），与「内部产事实不过适格筛」的理想设计存在偏差，待后续排期统一收口。
