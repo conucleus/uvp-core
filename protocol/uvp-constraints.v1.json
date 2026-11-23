@@ -320,7 +320,7 @@
       "sources": {
         "rust": "crates/uvp-compiler/src/validate/mod.rs validate_stage_executors（MAX_SUPPLIER_ID_BYTES）"
       },
-      "ruling": "≤36 字节（UUID 长度）：云侧 definitions 引用的 supplier 注册 objectId 为 uuid v4（36），链侧 store 默认生成式 supplier-<shorthex>≤28，两轨定义 fixture 全为短 slug。定义内执行者引用统一为 UUID 长度身份，超长引用在共享编译校验拒绝（hook_plan/cloud 两目标同闸）；store 治理面的 supplierId（1-128 URL-safe）不进定义，不在本约束射程。"
+      "ruling": "≤36 字节（UUID 长度）：云侧 definitions 引用的 supplier 注册 objectId 为 uuid v4（36），链侧 store 默认生成式 supplier-<shorthex>≤28，两轨定义 fixture 全为短 slug。定义内执行者引用统一为 UUID 长度身份，超长引用在共享编译校验拒绝（analyze/cloud 两目标同闸）；store 治理面的 supplierId（1-128 URL-safe）不进定义，不在本约束射程。"
     },
     {
       "id": "executor-supplier-type-closed-enum",

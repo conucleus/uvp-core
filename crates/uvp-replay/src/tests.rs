@@ -1617,7 +1617,7 @@ fn per_key_hook_ids_evaluate_triggers_before_watchers_in_stable_order() {
 
 #[test]
 fn order_trigger_hook_with_delay_is_a_structural_error() {
-    for kind in ["trigger"] {
+    for kind in std::iter::once("trigger") {
         let events = vec![json!({
             "eventName": "PlanRegistered",
             "blockNumber": 1,

@@ -102,101 +102,6 @@ pub(crate) fn build_selected_stage_bindings(
     Ok(bindings)
 }
 
-pub(crate) fn build_executor_routes(entries: &[StageEntry]) -> Value {
-    let mut routes = Map::new();
-    for entry in entries {
-        if is_dock_executor_stage(entry) {
-            continue;
-        }
-        if entry.stage.executor.is_some() {
-            routes.insert(entry.stage_identifier.clone(), route_for_stage(entry));
-        }
-    }
-    Value::Object(routes)
-}
-
-pub(crate) fn is_dock_executor_stage(entry: &StageEntry) -> bool {
-    entry
-        .stage
-        .executor
-        .as_ref()
-        .is_some_and(|executor| executor.supplier_type == "dock")
-}
-
-pub(crate) fn compile_stage_hooks(entry: &StageEntry) -> Result<Vec<Value>> {
-    let mut hooks = Vec::new();
-    let is_dock_stage = is_dock_executor_stage(entry);
-    for (hook_name, raw_expression) in &entry.stage.receive_signals {
-        let route = if is_dock_stage {
-            None
-        } else {
-            entry
-                .stage
-                .executor
-                .as_ref()
-                .map(|_| route_for_stage(entry))
-        };
-        // dynamic 阶段没有 executor，但仍必须由本阶段 EMIT_READY hook 物化：执行者由订单级 patch 在首信号前指派。
-        hooks.push(compile_hook(
-            "receive",
-            &entry.stage_identifier,
-            hook_name,
-            "none",
-            true,
-            raw_expression,
-            route,
-        )?);
-    }
-    hooks.sort_by_key(|hook| value_str(hook, "hookId").to_lowercase());
-    Ok(hooks)
-}
-
-fn compile_hook(
-    kind: &str,
-    stage_identifier: &str,
-    hook_name: &str,
-    order_trigger_kind: &str,
-    emit_ready: bool,
-    raw_expression: &str,
-    route: Option<Value>,
-) -> Result<Value> {
-    let parsed = parse_hook_for_compiler(hook_name, raw_expression)?;
-    let mut hook = Map::new();
-    hook.insert(
-        "hookId".to_string(),
-        Value::String(format!("{stage_identifier}#{hook_name}")),
-    );
-    hook.insert("kind".to_string(), Value::String(kind.to_string()));
-    hook.insert(
-        "stageIdentifier".to_string(),
-        Value::String(stage_identifier.to_string()),
-    );
-    hook.insert("hookName".to_string(), Value::String(hook_name.to_string()));
-    hook.insert(
-        "orderTriggerKind".to_string(),
-        Value::String(order_trigger_kind.to_string()),
-    );
-    hook.insert("emitReady".to_string(), Value::Bool(emit_ready));
-    hook.insert(
-        "rawExpression".to_string(),
-        Value::String(raw_expression.to_string()),
-    );
-    hook.insert(
-        "normalizedExpression".to_string(),
-        Value::String(parsed.normalized_expression.clone()),
-    );
-    hook.insert("ast".to_string(), parsed.ast.clone());
-    hook.insert(
-        "dependencies".to_string(),
-        serde_json::to_value(&parsed.dependencies)
-            .map_err(|err| CompilerError::Message(err.to_string()))?,
-    );
-    if let Some(route) = route {
-        hook.insert("route".to_string(), route);
-    }
-    Ok(Value::Object(hook))
-}
-
 pub(crate) fn parse_hook_for_compiler(
     hook_name: &str,
     raw_expression: &str,
@@ -227,28 +132,6 @@ pub(crate) fn parse_hook_for_cloud(
         hook: raw_expression.to_string(),
     })
     .map_err(|err| CompilerError::Message(err.to_string()))
-}
-
-fn route_for_stage(entry: &StageEntry) -> Value {
-    let mut route = Map::new();
-    route.insert(
-        "stageIdentifier".to_string(),
-        Value::String(entry.stage_identifier.clone()),
-    );
-    if let Some(executor) = &entry.stage.executor {
-        route.insert(
-            "executor".to_string(),
-            serde_json::to_value(executor).unwrap_or(Value::Null),
-        );
-    }
-    if !entry.stage.file_resources.is_empty() {
-        route.insert(
-            "fileResources".to_string(),
-            serde_json::to_value(&entry.stage.file_resources)
-                .expect("fileResources should serialize"),
-        );
-    }
-    Value::Object(route)
 }
 
 pub(crate) fn value_str<'a>(value: &'a Value, key: &str) -> &'a str {

@@ -1,7 +1,7 @@
 {
   "name": "on-chain zero-hook stage is rejected even with a static executor",
   "semanticVersion": "uvp.semantic.v1",
-  "target": "hook_plan",
+  "target": "analyze",
   "portable": true,
   "input": {
     "apiVersion": "uvp/v0",

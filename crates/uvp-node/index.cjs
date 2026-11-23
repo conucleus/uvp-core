@@ -77,10 +77,6 @@ exports.semanticVersion = function semanticVersion() {
   return native.semanticVersion();
 };
 
-exports.hookPlanSchemaVersion = function hookPlanSchemaVersion() {
-  return native.hookPlanSchemaVersion();
-};
-
 exports.buildFingerprint = function buildFingerprint() {
   return native.buildFingerprint();
 };

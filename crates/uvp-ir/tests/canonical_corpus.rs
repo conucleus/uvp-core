@@ -25,6 +25,27 @@ struct Case {
     expect_reject: Option<String>,
     #[serde(default)]
     expect_canonical: Option<String>,
+    /// Cross-track exception: TS must reject this Rust acceptance vector
+    /// (JS numbers are limited to ±(2^53-1)).
+    #[serde(default)]
+    expect_ts_reject: Option<String>,
+}
+
+fn has_integer_beyond_safe_range(value: &Value) -> bool {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    match value {
+        Value::Number(number) => {
+            number
+                .as_u64()
+                .is_some_and(|integer| integer > MAX_SAFE_INTEGER)
+                || number
+                    .as_i64()
+                    .is_some_and(|integer| integer < -(MAX_SAFE_INTEGER as i64))
+        }
+        Value::Array(items) => items.iter().any(has_integer_beyond_safe_range),
+        Value::Object(record) => record.values().any(has_integer_beyond_safe_range),
+        _ => false,
+    }
 }
 
 #[test]
@@ -36,12 +57,14 @@ fn canonical_stringify_matches_the_pinned_vectors() {
     );
     let mut pass_count = 0usize;
     let mut reject_count = 0usize;
+    let mut ts_reject_count = 0usize;
     for case in corpus.cases {
         match (
             case.expect_reject.as_deref(),
             case.expect_canonical.as_deref(),
+            case.expect_ts_reject.as_deref(),
         ) {
-            (Some(anchor), None) => {
+            (Some(anchor), None, None) => {
                 let err = uvp_ir::canonical_stringify(&case.input)
                     .err()
                     .unwrap_or_else(|| panic!("{} must be rejected", case.name));
@@ -52,7 +75,7 @@ fn canonical_stringify_matches_the_pinned_vectors() {
                 );
                 reject_count += 1;
             }
-            (None, Some(expected)) => {
+            (None, Some(expected), ts_reject) => {
                 let actual = uvp_ir::canonical_stringify(&case.input)
                     .unwrap_or_else(|err| panic!("{} failed to canonicalize: {err}", case.name));
                 assert_eq!(
@@ -60,10 +83,23 @@ fn canonical_stringify_matches_the_pinned_vectors() {
                     "{}: canonical bytes diverged from the pinned vector",
                     case.name
                 );
+                if let Some(ts_anchor) = ts_reject {
+                    assert_eq!(
+                        ts_anchor, "safe integer",
+                        "{}: expectTsReject must name the TS safe-integer rejection face",
+                        case.name
+                    );
+                    assert!(
+                        has_integer_beyond_safe_range(&case.input),
+                        "{}: expectTsReject only applies to integers beyond ±(2^53-1)",
+                        case.name
+                    );
+                    ts_reject_count += 1;
+                }
                 pass_count += 1;
             }
             _ => panic!(
-                "{}: case must carry exactly one of expectReject/expectCanonical",
+                "{}: case must carry expectReject, or expectCanonical with an optional expectTsReject",
                 case.name
             ),
         }
@@ -72,5 +108,9 @@ fn canonical_stringify_matches_the_pinned_vectors() {
         pass_count >= 3 && reject_count >= 5,
         "corpus must keep pinning both the integer pass face ({pass_count}) and the float \
          rejection face ({reject_count})"
+    );
+    assert!(
+        ts_reject_count >= 1,
+        "corpus must keep the > 2^53 cross-track contract explicit (Rust accepts u64, TS rejects)"
     );
 }

@@ -23,8 +23,8 @@
 - 覆盖对象：`kind: Zhixu` 与 `kind: Dock`（独立文档，§7）。云轨另有运行时注册对象 `kind: Supplier`（形态与机制见 `uvp-cloud.md`）；链上轨道没有 `Supplier` 顶层对象——供应商档案、KYC/KYB、handler、能力标签与审核材料都是 Store 链下数据，链上只有 `UVPSupplierRegistry` 记录的 SID（UUID 编码的 `bytes32`）、其唯一 supplier account 与 `pending/active/suspended/revoked` 状态（见 `uvp-chain.md` 与 `docs/engineering/supplier-identity-model.md`）。
 - 编译器注册类型为：`apiVersion: uvp/v0` + `kind: Zhixu`（大小写敏感）。
 - Dock 是独立文档（`apiVersion: uvp/v0` + `kind: Dock`），与 `kind: Zhixu` 并列发布、由 `uvp-core analyzeDock` 单独编译；字段壳为 `apiVersion`/`kind`/`metadata`/`spec`，未知字段按响亮拒绝（uvp-core `deny_unknown_fields` 口径，各轨提交入口的枚举闭集见实现层文档）。
-- 产物版本：本册对应同一语义批的中性分析与产物面为 `uvp.zhixuAnalysis.v4`（定义级分析）、`uvp.cloudAst.v4`（云侧 hook AST）、`uvp.cloudArtifact.v8`（云侧编译产物）、`uvp.hookPlan.v8`（链侧 hook plan）与 `uvp.onchainHookPlan.v8`（链上注册产物），Dock 文档产物为 `uvp.dock.v1`、binding 读面为 `uvp.dockBinding.v1`；同一语义只存在当前版本。
-- 编译器请求面：默认 target 为 `hook_plan`（`evm` 为其别名），另有 `cloud`/`cloud_db`（云轨产物）与 `analyze`（共享校验 + hook IR + 出生信号集 + hook 解析结果）；Dock 文档走 `analyzeDock` 请求（`{dock, published}`）。
+- 产物版本：本册对应同一语义批的中性分析与产物面为 `uvp.zhixuAnalysis.v1`（定义级分析）、`uvp.cloudAst.v1`（云侧 hook AST）、`uvp.cloudArtifact.v1`（云侧编译产物）、`uvp.hookPlan.v1`（链侧 hook plan）与 `uvp.onchainHookPlan.v1`（链上注册产物），Dock 文档产物为 `uvp.dock.v1`、binding 读面为 `uvp.dockBinding.v1`；同一语义只存在当前版本。
+- 编译器请求面：默认 target 为 `analyze`（共享校验 + 完整 hook IR：stages/hooks 的 `rawExpression`、`normalizedExpression`、AST 与 `dependencies`，出生信号集，隐式 entry 的 `implicitEntry`/`entryHook`，EvmStrict `signalCapabilities` 与 admissions 表达式/AST）；另有 `cloud`/`cloud_db`（云轨产物）。链侧 `hook_plan` lowering 归链轨 TS 编译器，本仓不再产出 legacy 产物；Dock 文档走 `analyzeDock` 请求（`{dock, published}`）。
 - 证据正文不进语言层裁决；各轨存储边界（链上只应保存状态、哈希、metadata URI、签名、权限和事件）见实现层文档。
 - 示例来源是冻结的中性示例域（白皮书四原型 + 水果加工演示域）；产品层词表不进入本册。
 
@@ -49,16 +49,17 @@
 
 - **秩序（Zhixu）**：一份可复用的定义文档，声明一组阶段与它们的协作规则；内容派生身份（§2）。
 - **阶段（stage）**：秩序内一台完备的状态机，`{stage}` 单段寻址、秩序内全局唯一。
-- **信号事实（signal fact）**：已经发生、不可改写的事件。事实在提交时确定其锚定订单：携带订单号的信号落在该订单；空订单号的出生信号在出生时确定派生订单，并成为该订单的首条事实（§6）。
+- **因果链归属（`source`）**：同一份秩序内可以并存多条相互独立的**因果链**（Causal Chain），`stage.source` 用来标明该阶段属于哪一条因果链。例如在交易市场中，买方「借钱筹资 → 清点需求」是一条锚定买方的独立因果链（`buyer`），卖方「清洗商品 → 装箱」是另一条独立因果链（`seller`），它们天生各自独立演化，并不天然绑定同一笔交易；直到价格簿撮合成功后，才通过 Dock 或新秩序把两条因果链关联起来，生发出包含支付、运输等阶段的 `deal` 因果链。因此 `source` 不是物理发信地址，而是**因果来源归属**——在表达式中写 `buyer::...`，表示明确等待 `buyer` 这条因果链上的事实。
+- **信号事实（signal fact）**：已经发生、不可改写的事件。事实在提交时确定其锚定订单：携带订单号的信号落在该订单；空订单号的出生信号在出生时由运行期生成订单号（按显式幂等键去重），并成为该订单的首条事实（§6）。
 - **执行者（executor）**：**角色，不是实体**——它只是“某个订单的某个 stage 当前由哪个 supplier 负责”的关系：`executor(orderId, stageId) = assignedSupplier(orderId, stageId)`。executor 没有自己的 ID、地址、表或余额；定义面写静态 `supplierID` 的阶段由该 supplier 承接，dynamic 阶段的 supplier 在订单运行期按单指派（stage→SID）。需要地址时按 assigned SID 的 supplier account 解析；各轨主体形态见实现层文档（链轨：SID 是 UUID 编码的 `bytes32`，supplierId→account 永久绑定，formal 使用要求 SID active——见 `uvp-chain.md`）。或另一条秩序的 dock 执行者（§7）。
-- **订单（order）**：定义的一次执行轨迹；订单号一律由出生事实纯函数派生，调用方不可自报（§6.3/§6.4）。
+- **订单（order）**：定义的一次执行轨迹；订单号由运行期生成（随机/nonce），调用方不可自报，出生去重依赖显式幂等键（§6.3/§6.4）。
 
 跨 zhixu 协作由三个正交问题构成，每个问题有专属机制——**这张表是全册的地图**：
 
 | 问题 | 机制 | 权威章 |
 |---|---|---|
 | 事实怎么流到我的订单上 | **同单 hook**：`receiveSignals` 表达式只在本订单上下文内求值，可引用本秩序内任意阶段已声明的信号（头 source 只是本域因果身份类）；跨秩序没有直连，B 侧以静态 Dock 声明 A 事实到 B 信号的发射条件（§7） | §5、§6、§7 |
-| 新订单从哪里来 | 订单创建在 DSL 声明面只有出生信号一条通道：`sendSignals[].trigger: true` 的信号以空订单号提交时出生新单（§6.1–§6.4）；Dock 协作在既有订单上以 binding 承载发射（§7）。链轨运行期另有 order-link/fork 出生通道，见实现层文档。订单号一律从出生事实纯函数派生、调用方不可自报 | §6、§7 |
+| 新订单从哪里来 | 订单创建在 DSL 声明面只有出生信号一条通道：`sendSignals[].trigger: true` 的信号以空订单号提交时出生新单（§6.1–§6.4）；Dock 协作在既有订单上以 binding 承载发射（§7）。链轨运行期另有 order-link/fork 出生通道，见实现层文档。订单号由运行期生成（随机/nonce），调用方不可自报；出生去重依赖必填的显式幂等键（`fact_key` / `idempotencyKey`） | §6、§7 |
 | 阶段的执行者是谁 | 定义静态 `supplierID`（plain），或声明 `supplierType: dock` 由运行期在挂接 stage 一次性选定 dock supplier 并终身钉住；订单级 stage→SID 指派/交接不承载 dock 绑定；出生阶段只允许静态 plain 执行者（§4/§7.3，各轨 patch 面见实现层文档） | §4、§7.3 |
 
 两条边界一句话（全册唯一表述，各处只留指针）：
@@ -72,7 +73,7 @@
 
 ### 2.1 内容派生身份（uid）
 
-定义身份是内容派生 uid `zx-<32hex>`——preimage 为定义文档 canonical JSON 剔除展示字段（`metadata.name`、`metadata.annotations`）后的形态，`keccak256("uvp:definition-uid:v2:" + canonical)` 取摘要前 32 hex；`metadata.labels` 是内容，参与派生。同一内容跨环境、跨轨得到同一 uid：重复发布是幂等 no-op，内容一变即新身份——不存在「重发布一个定义」的概念。唯一限定（YAML 裸标量）：「同一内容」以装载器解析后的结果为准——裸标量（`010`、`Y`/`yes`/`on`、`0b101`、`1_000` 一类）在 Rust / TS / Go 三轨装载器下解析结果真分歧（`uvp-core` `fixtures/yaml/yaml-scalar-parity.v1.json` 语料逐格钉住），同一 YAML 文件跨轨可派生出不同 uid；值位书写一律用带引号字符串是作者纪律（对照行见 `uvp-chain.md` 附录 B）。DSL 壳不携带任何身份——`metadata.uid` 一旦出现即按未知字段响亮拒绝（uvp-core `deny_unknown_fields` 口径），uid 恒由发布方按内容派生后写入，作者不手写。权威实现是 Rust `uvp_ir::derive_definition_uid`（domain 常量 `uvp:definition-uid:v2`）；链轨 TS 编译器同公式、共享金向量互钉（见 `uvp-chain.md`）。日志与错误消息按 `name(uid前8hex)` 渲染。云轨运行时零哈希，机器面寻址键即该 uid；跨秩序引用一律按 uid 精确指向（§7.2）。
+定义身份是内容派生 uid `zx-<32hex>`——preimage 为定义文档 canonical JSON 剔除**展示字段与非逻辑选择器**（`metadata.name`、`metadata.annotations`、`metadata.labels`、`spec.platform`、`spec.nucleation`）后的形态，`keccak256("uvp:definition-uid:v2:" + canonical)` 取摘要前 32 hex。`spec.stages`、`spec.stages[].sendSignals`/`receiveSignals`/`executor`/`fileWriters` 等定义逻辑的内容照常参与派生；`spec.platform` 的 `type`/`provider`/`network`/`version`/`params`、`spec.nucleation` 的 `id`/`params` 与 `metadata.labels` 一律不进入 preimage。因此同一份 Zhixu 逻辑在云轨与链轨之间移植（例如 `platform.type: cloud` ↔ `blockchain`、换 `network`、换 `nucleation.id`、换 labels）得到**完全相同**的 `definitionUid`，Dock 里的 `from.zhixu`/`to.zhixu` 引用无需随之更新；链轨 `planHash` 仍把 `platform` 纳入产物承诺（§3.2），跨轨/跨网移植会生成新的链轨 plan 身份，但定义 uid 不变。同一内容跨环境、跨轨得到同一 uid：重复发布是幂等 no-op，内容一变即新身份——不存在「重发布一个定义」的概念。唯一限定（YAML 裸标量）：「同一内容」以装载器解析后的结果为准——裸标量（`010`、`Y`/`yes`/`on`、`0b101`、`1_000` 一类）在 Rust / TS / Go 三轨装载器下解析结果真分歧（`uvp-core` `fixtures/yaml/yaml-scalar-parity.v1.json` 语料逐格钉住），同一 YAML 文件跨轨可派生出不同 uid；值位书写一律用带引号字符串是作者纪律（对照行见 `uvp-chain.md` 附录 B）。DSL 壳不携带任何身份——`metadata.uid` 一旦出现即按未知字段响亮拒绝（uvp-core `deny_unknown_fields` 口径），uid 恒由发布方按内容派生后写入，作者不手写。权威实现是 Rust `uvp_ir::derive_definition_uid`（domain 常量 `uvp:definition-uid:v2`）；链轨 TS 编译器同公式、共享金向量互钉（见 `uvp-chain.md`）。日志与错误消息按 `name(uid前8hex)` 渲染。云轨运行时零哈希，机器面寻址键即该 uid；跨秩序引用一律按 uid 精确指向（§7.2）。
 
 ### 2.2 事实不可改写与 first-win
 
@@ -114,23 +115,23 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 | 路径 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `metadata.name` | `string` | 是 | 定义的技术名，slug 形态 `^[a-z][a-z0-9_-]{0,99}$`（字节 ≤100）。纯展示属性：不是身份、不是寻址键——`Dock.spec.from.zhixu`/`spec.to.zhixu` 等跨秩序引用都按内容派生 uid 寻址。 |
-| `metadata.labels` | `map[string]string` | 否 | 标签，是定义内容的一部分，参与身份派生（两轨同公式，§2.1）。 |
+| `metadata.labels` | `map[string]string` | 否 | 标签，仅作展示/检索；**不参与**定义身份派生（§2.1），跨轨换 labels 不改变 `definitionUid`。 |
 | `metadata.annotations` | `map[string]string` | 否 | 自由注解，永不参与任何身份/哈希推导（`version` 键无特殊待遇）。 |
 
 身份派生规则见 §2.1。
 
 ### 3.2 spec 基础字段
 
-**`spec.platform`**——声明该定义面向的部署轨道（`cloud` / `blockchain` / `cbdc`）：它是轨道声明，不是分层主张。`cbdc` 为预留枚举值：零消费、无行为，取值不参与任何裁决。校验口径双层：语义权威（Rust uvp-core）只要求非空字符串；各轨提交入口另有枚举闭集（见实现层文档）。
+**`spec.platform`**——声明该定义面向的部署轨道（`cloud` / `blockchain` / `cbdc`）：它是轨道声明，不是分层主张，也**不是定义身份的一部分**——整个 `spec.platform` 对象不进入 `definitionUid`（§2.1），只进入链轨 `planHash` 的产物承诺。`cbdc` 为预留枚举值：零消费、无行为，取值不参与任何裁决。校验口径双层：语义权威（Rust uvp-core）只要求非空字符串；各轨提交入口另有枚举闭集（见实现层文档）。
 
 | 路径 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `spec.platform.type` | `string` | 是 | 轨道声明（`cloud` / `blockchain` / `cbdc`；轨道皮肤值见实现层文档）。 |
-| `spec.platform.provider` | `string` | 否 | 提供者标签，无行为语义（轨道皮肤值见实现层文档）。 |
-| `spec.platform.network` | `string` | 否 | 网络/运行域标签；预留、无行为语义——取值进入定义 uid 派生（§2.1）与各轨产物承诺，改名即身份分叉、无语义变化。 |
-| `spec.platform.version` / `.params` | `string` / `map` | 否 | 平台版本/扩展参数。 |
+| `spec.platform.type` | `string` | 是 | 轨道声明（`cloud` / `blockchain` / `cbdc`）；**不进入** `definitionUid`（§2.1），但进入链轨 `planHash`——跨轨移植（如 `cloud` 改为 `blockchain`）定义 UID 不变、链轨 plan 身份改变，Dock 的 `zhixu` 引用无需更新。 |
+| `spec.platform.provider` | `string` | 否 | 提供者标签，无行为语义；不进入 `definitionUid`，随 platform 进入链轨 `planHash`（取值见实现层文档）。 |
+| `spec.platform.network` | `string` | 否 | 网络/运行域标签；无行为语义——不进入 `definitionUid`，随 platform 进入链轨 `planHash`，换网生成新的链轨 plan 身份但不改变定义 uid。 |
+| `spec.platform.version` / `.params` | `string` / `map` | 否 | 平台版本/扩展参数；同样不进入 `definitionUid`。 |
 
-**`spec.nucleation`**：`id`（必填，凝结核主体标识）+ `params`（可选）。凝结核字段是必填的形式面：除参与定义身份派生（§2.1）外无任何协议语义——预留、无行为。
+**`spec.nucleation`**：`id`（必填，凝结核主体标识）+ `params`（可选）。凝结核字段是必填的形式面：**不参与定义身份派生**（§2.1），也无任何协议语义——预留、无行为。
 
 **`spec.stages`**：
 
@@ -170,9 +171,9 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 
 - 阶段完全不给出 `executor` 块时是 **dynamic 阶段**：必须可被其他阶段通过 `selectedStages` 覆盖到，否则编译拒绝（"没有分配 executor，也没有被 selectedStages 引用"）。覆盖解决的是"无 executor 块"的可达性与选择权归属，不豁免静态执行者的 supplierID 存在性；链轨把它作为 dynamic 阶段接受，并在订单运行期由 selector 按单指派 supplierId（详见 `uvp-chain.md` §2）。
 - 出生集非空的阶段由静态 plain 执行者承接（`supplierType` 为 `individual`/`organization`、`supplierID` 非空）；出生权只落在这类执行者上。`supplierType: dock` 的阶段以 `receiveSignals` 声明绑定面，其执行者身份在运行期选定（§7.3）。
-- ⚠ **阶段物化门（onchain 产物面，core 裁决、带 target 条件）**：uvp-core 在 onchain（hookPlan）产物线执行该闸——链上阶段只能由本阶段 order-trigger（出生槽位）hook 或 EMIT_READY hook 物化，每个阶段都必须具备至少一个物化路径：既无出生信号又无 `receiveSignals` 的阶段编译为零 hook、永不可物化且无恢复路径，整体拒绝；**不给出 `executor` 块的阶段是 dynamic 阶段，由自身 receive hook 的 EMIT_READY 物化**（编译产物带 dynamic executor 位 32，plan 不为它写 default supplier/route/binding），不再按“无 executor 即纯 watcher 死锁”拒绝，但执行者拓扑仍要求它被其他阶段的 `selectedStages` 从静态执行者可达，且运行期在首个信号前必须由 selector 指派 supplierId；`supplierType: dock` 阶段以静态 dock 执行者通过（其 hooks 为 EMIT_READY 并带 dock executor 位），cloud 产物面免检。闸的完整叙述（EMIT_READY 编译形态、dynamic 阶段的 supplier 指派与 `StageSupplierNotAssigned`、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
+- ⚠ **阶段物化门（onchain 接受域，core 裁决、`analyze` 内执行）**：uvp-core 在 `analyze` 的链轨接受域执行该闸——链上阶段只能由本阶段 order-trigger（出生槽位）hook 或 EMIT_READY hook 物化，每个阶段都必须具备至少一个物化路径：既无出生信号又无 `receiveSignals` 的阶段编译为零 hook、永不可物化且无恢复路径，整体拒绝；**不给出 `executor` 块的阶段是 dynamic 阶段，由自身 receive hook 的 EMIT_READY 物化**（TS lowering 产物带 dynamic executor 位 32，plan 不为它写 default supplier/route/binding），不再按“无 executor 即纯 watcher 死锁”拒绝，但执行者拓扑仍要求它被其他阶段的 `selectedStages` 从静态执行者可达，且运行期在首个信号前必须由 selector 指派 supplierId；`supplierType: dock` 阶段以静态 dock 执行者通过（其 hooks 为 EMIT_READY 并带 dock executor 位），cloud 产物面免检。**隐式 entry 例外**：全定义恰有一个「无 `receiveSignals`、无 `trigger`、声明 `str`、静态 plain 执行者、无 `selectedStages`」的首阶段时，`analyze` 返回 `implicitEntry` 与其合成 `str` 表达式的 `entryHook`（AST/`dependencies` 齐备），链轨 TS 以该 hook 物化该阶段；非法形状（多个隐式 entry、非首阶段、缺 `str`、dock/无执行者、`str` 带 `validWhen`、其他 hook 观察该出生键）由 `analyze` 具名拒绝。闸的完整叙述（EMIT_READY 编译形态、dynamic 阶段的 supplier 指派与 `StageSupplierNotAssigned`、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
 - ⚠ 表达"谁有权指定别的阶段执行者"只看 `selectedStages`；阶段执行者类型只看 `executor.supplierType`。链轨的 selector 必须是 selector 阶段当单的 assigned supplier account（无 orderCreator 旁路），被指派 SID 必须 active（`isActiveSupplier`）。
-- ⚠ 对会创建新订单的阶段，DSL 声明面只有出生信号一条建单通道：`sendSignals[].trigger: true`（空订单号提交时出生，§6）；dock 不创建订单（§7），`str`/`cmp` 等信号名没有内建建单语义，订单号不可自报（§1）。
+- ⚠ 对会创建新订单的阶段，显式出生声明面只有出生信号一条建单通道：`sendSignals[].trigger: true`（空订单号提交时出生，§6）；§4 的隐式 entry 形状是兼容的既有形状，不新增 DSL 字段、由首阶段 `str` 形状识别；dock 不创建订单（§7），`str`/`cmp` 等信号名在显式出生面没有内建建单语义，订单号不可自报（§1）。
 
 onchain 实现层的附加接受域见 `uvp-chain.md`（uvp-eth 根）：
 
@@ -264,9 +265,9 @@ buyer::b.cmp & ~((a.cmp +5s) +10s)      # 否决位操作数内禁止嵌套延�
 
 ### 5.5 否定位延时负门 `B & ~(A+duration)`
 
-`~` 的操作数为延时表达式（衰减否决位）当且仅当该 `~(…)` 是 `&` 的直接子项时合法；根位、`|` 分支位、`~` 操作数（双重否定）、延时操作数内一律编译期拒绝，报错写明位置要求。禁用不是词表洁癖：否决位的就绪会衰减（内层成熟即翻假），而延时的成熟是永久的——外层延时若锚在已过期的否决上，到期重评会把早已翻假的否决当真放行。
+在 hook 位置（`receiveSignals`）下，`~` 的操作数为延时表达式（衰减否决位）当且仅当该 `~(…)` 是 `&` 的直接子项时合法；根位、`|` 分支位、`~` 操作数（双重否定）、延时操作数内一律编译期拒绝，报错写明位置要求。禁用不是词表洁癖：否决位的就绪会衰减（内层成熟即翻假），而延时的成熟是永久的——外层延时若锚在已过期的否决上，到期重评会把早已翻假的否决当真放行。
 
-链上注册门同款双闸（`UVPPlanRegistration._validateHook` 的 vetoTerm/vetoInside 位——手工 plan 防线，见 `uvp-chain.md`）：指令计划里 `NOT` 仅在操作数为裸 `SIGNAL` 或延时产出时合法，否决位出现在根位、`OR` 分支位或任何 `DELAY` 操作数内一律 revert。
+链上注册门同款双闸（`UVPPlanRegistration._validateHook` 的 vetoTerm/vetoInside 位——针对 hook 位置的手工 plan 防线，见 `uvp-chain.md`）：指令计划里 `NOT` 仅在操作数为裸 `SIGNAL` 或延时产出时合法，否决位出现在根位、`OR` 分支位或任何 `DELAY` 操作数内一律 revert。
 
 三态语义（同一形态随求值时刻的窗口判定；链上在交易内即时判定——`_notValue` 按当时的 `block.timestamp` 对内层到期时刻做窗口比较，不持久化中间态；语义语料与 Go 对拍测试同形态钉死）：
 
@@ -291,11 +292,11 @@ buyer::b.cmp & ~((a.cmp +5s) +10s)      # 否决位操作数内禁止嵌套延�
 
 **跨轨叙述的拆词纪律**：「请求级门 → 吸收 → 适格」三层各自独立，勿混称为一个「适格」。「请求级门」指鉴权/签名/deadline/提交者授权一类入口闸（链轨 `submitSignal` 的入口闸；云轨 HTTP 入口与 HMAC 单 sender 语义）——链轨的发信权（assigned supplier account 校验）住在这一层，不在适格层；「吸收」指重复事实的 first-win 幂等（不再过任何筛）；「适格」仅指本节 `validWhen` 的发射过滤（pre-state 求值）。云轨的 validWhen 时间窗与链轨的 supplier account 发信权分属第 3/1 层、物理不同；两轨在第 2/3 层同位同序（见下段）。
 
-**适格位的求值与次序**：幂等吸收先于适格求值（已落库的重复外部提交 first-win 吸收、不再过适格，at-least-once 重试不得被过期窗口 revert），但**后于**请求级门——链轨入口的 deadline/发信权与属主阶段就绪门都排在吸收之前：过期或非 assigned supplier account 的重放先响亮 revert（`ExpiredSignalSignature` / `StageSupplierNotAssigned` / `SupplierNotActive` / `UnauthorizedStageSupplierAccount`）而非被静默吸收。该次序是刻意选择：把吸收挪到请求级门之前会开「无有效签名探测事实存在性」面，现序方向更严。新事实在提交时对 pre-state 整棵求值（时钟取运行侧权威时钟，链上为 `block.timestamp`）；**整棵 admit-iff-Ready**（`value && !wait && !cancel`）：Ready 准入，Wait/Impossible/NeedsMore 整笔拒绝为类型化错误（云轨为类型化非重试拒绝，消息点名信号与失败表达式；链轨 revert `SignalAdmissionRejected`，携带 orderId/sourceId/signalId），不是逐项投票。**整批原子性**：链轨一笔交易多发射时一个不适格即整批 revert——EVM 原生原子性，接受为设计（见 `uvp-chain.md`）。
+**适格位的求值与次序**：幂等吸收先于适格求值（已落库的重复外部提交 first-win 吸收、不再过适格，at-least-once 重试不得被过期窗口 revert），但**后于**请求级门——链轨入口的 deadline/发信权与属主阶段就绪门都排在吸收之前：过期或非 assigned supplier account 的重放先响亮 revert（`ExpiredSignalSignature` / `StageSupplierNotAssigned` / `SupplierNotActive` / `UnauthorizedStageSupplierAccount`）而非被静默吸收。该次序是刻意选择：把吸收挪到请求级门之前会开「无有效签名探测事实存在性」面，现序方向更严。新事实在提交时对 pre-state 整棵求值（时钟取运行侧权威时钟，链上为 `block.timestamp`）；**整棵 admit-iff-Ready**（`value && !wait && !cancel`）：Ready 准入，Wait/Impossible/NeedsMore 整笔拒绝为类型化错误（云轨为类型化非重试拒绝，消息点名信号与失败表达式；链轨 revert `SignalAdmissionRejected`，携带 orderId/sourceId/signalId），不是逐项投票。**无多信号批量提交**：两轨协议与引擎均不提供、也不支持多信号批量提交（Batch）；每条外部信号都是独立的原子事件，按到达序逐条裁决（若外部调用方在 EVM 交易中自行串联多次单信号调用，其顺序与事务回滚属调用方自身责任，非协议语义）。
 
 **拒绝面**：对事实流静默（拒绝即零事实行、零投递行，绝不落 marker 事实）、对发送方响亮（类型化拒绝，可定位是哪发被哪个闸拒）。拒绝后补齐依赖事实再重新提交即可（该发未落库，重新提交不是重复；重新提交会再过一次筛）。
 
-**作用域**：外部提交在写入前按 pre-state 求值；引擎内部产事实路径不经此面（dock 输出发射、派生信号与模块内产事实——链轨 `*FromModule` 族调用卡点以下层级）。出生信号也可以声明 `validWhen`：空订单号提交时按**空订单上下文**求值——该上下文没有既成 facts/files，否定条件为真、存在与延时成熟条件为假；仅含存在依赖的适格形态因此不会在出生时 Ready，能由否定条件判真的形态可以。空订单上下文的出生适格由各轨消费者在出生写入前执行（链轨 revert `SignalAdmissionRejected`，云轨为类型化非重试拒绝），本册只钉语言层求值语义。编译期拒绝：表达式引用本信号自身即自证无效；引用的每个 `stage.signal` 受引用存在性约束——目标信号须在目标 stage 的 `sendSignals` 中声明。适格族拒绝文案逐项带下标 `validWhen[i]` 定位（同族格式）。
+**作用域**：外部提交在写入前按 pre-state 求值；内部 Dock 输出将目标信号的 `validWhen` 视为 B 侧发射窗口的组成部分（`Wait` 时正常等待不报错、`Impossible` 时干净终止、`Ready` 时发射）。出生信号也可以声明 `validWhen`：空订单号提交时按**空订单上下文**求值——该上下文没有既成 facts/files，否定条件为真、存在与延时成熟条件为假；仅含存在依赖的适格形态因此不会在出生时 Ready，能由否定条件判真的形态可以。空订单上下文的出生适格由各轨消费者在出生写入前执行（链轨 revert `SignalAdmissionRejected`，云轨为类型化非重试拒绝），本册只钉语言层求值语义。编译期拒绝：表达式引用本信号自身即自证无效；引用的每个 `stage.signal` 受引用存在性约束——目标信号须在目标 stage 的 `sendSignals` 中声明。适格族拒绝文案逐项带下标 `validWhen[i]` 定位（同族格式）。
 
 **链上双闸（见 `uvp-chain.md`）**：适格声明编为与钩子同款的 CompactHook 指令计划，以旗标位 8（`HOOK_FLAG_ADMISSION`）随 hooksHash 进 plan 承诺——适格声明不留未签名面。注册门 `_validateAdmission`（`_validateHook` 的过滤档兄弟）在 `commitPlan` 时校验指令计划：与钩子档同源的保留闸是 NOT 操作数词表（裸 SIGNAL 或延时产出）、**延时操作数正向锚点**与嵌套延时禁令——过滤档书写层按共享词表接受 `(~A)+5s` 一类纯否定延时操作数（一拍求值下瞬时值良定义，云轨同词表），链轨对它的裁决是**注册期拒绝**（无锚延时在求值侧是恒未决死代码，commitPlan 挡下而非留死代码上链）。提交卡点 `_requireSignalAdmission`（`_submitSignal` 内、幂等吸收之后）按 `block.timestamp` 求值——无锚延时恒非 Ready（§5.4 anchored 语义，求值侧防御纵深）。无适格声明的 plan 由订单级 `admissionsDeclared` 位短路——零额外冷读。
 
@@ -329,7 +330,7 @@ sendSignals:
 2. **确定上下文**：`orderId` 为空 → **空订单上下文**（无 facts/files）；`orderId` 非空 → 订单必须存在，不存在即拒绝；随后在订单上下文求值。
 3. **适格求值**：signal 声明了 `validWhen` 时按 §5.6 求值；不通过即拒绝（链轨 `SignalAdmissionRejected`，云轨类型化非重试拒绝）。出生信号在空订单上下文求值（§5.6）。
 4. **带单提交**：`orderId` 非空时是普通信号；信号是否属于出生集不影响其普通身份。
-5. **出生提交**：`orderId` 为空且 `signal` 不是本阶段出生信号（对应 `sendSignals` 条目未标记 `trigger: true`）→ 拒绝（具名 `NotTriggerSignal` 一类入口错误）；`signal` 是出生信号 → 从出生事实派生订单号、登记/创建订单，并把该信号写为该订单首条事实，返回订单号。
+5. **出生提交**：`orderId` 为空且 `signal` 不是本阶段出生信号（对应 `sendSignals` 条目未标记 `trigger: true`）→ 拒绝（具名 `NotTriggerSignal` 一类入口错误）；`signal` 是出生信号 → 由运行期生成订单号（按必填显式幂等键去重）、登记/创建订单，并把该信号写为该订单首条事实，返回订单号。
 6. **并发**：跨出生信号的并发协调归调用方/执行者；引擎只保证"同一出生事实同一订单号"。
 
 各轨入口错误名/字段级校验按实现层文档；语言层只要求拒绝具名、可定位到 stage/signal。
@@ -346,21 +347,21 @@ sendSignals:
 
 信号名 `str` / `cmp` / `err` / `cxl` 是**调用方约定**，引擎对它们没有内建语义；`str` 不是特殊出生信号，建单判定只认出生信号标记与订单号形态：
 
-- 语言层承诺的订单创建声明通道只有一条：出生信号（`sendSignals[].trigger: true`）以空订单号提交（§6.1 第 5 步）；dock 不创建订单（§7.4）。订单号一律由出生事实纯函数派生、调用方不可自报（§6.4）。
+- 语言层承诺的订单创建声明通道只有一条：出生信号（`sendSignals[].trigger: true`）以空订单号提交（§6.1 第 5 步）；dock 不创建订单（§7.4）。订单号由运行期生成、调用方不可自报，并由必填的显式幂等键去重（§6.4）。
 - 各轨建单判定的接受口径与出生提交通道是实现层语义：云轨引擎只认空 `orderId` + 出生信号（非出生信号的空订单号确定性拒绝）；链轨合约只认三条出生通道（order-trigger 开放提交、order-link 模块派生建单、治理分叉 `forkOrder`——见 `uvp-chain.md`），dock 不建单。两轨口径对照见 `uvp-chain.md` 附录 B。
 - 约定俗成的生命周期词汇：`str` 是执行器生命周期中的第一条有效 signal（"我接了这个阶段实例"）；不要把订单创建语义放在普通业务 signal 上；`cmp`/`err`/`cxl` 都应建立在已存在的订单上；当前协议不要求单独的 `ack` 创建语义。同名异物提示一处：本节的 `cxl` 是调用方约定的信号名；§5.4 求值输出词表中没有 `cxl`——「裁决不可能成立」对应的求值状态是 `impossible`，与这里的信号名仅字面相近、无语义关联。
 
 ### 6.4 出生事实与幂等键
 
-**语言层不变量**：出生提交（空订单号 + 出生信号）的订单号从出生事实纯函数派生；同一出生事实重试幂等——同一定义、stage、signal 与载荷/幂等键得到同一订单号，重复提交吸收为 no-op，不重复建档、不重复推进。出生事实自身即该订单的首条事实，first-win 落定。
+**语言层不变量**：出生提交（空订单号 + 出生信号）的订单号由运行期生成（调用方不可自报），并由**必填的显式幂等键**去重；同一出生事实携同一幂等键重试时映射到同一订单号，不重复建档、不重复推进。出生事实自身即该订单的首条事实，first-win 落定。
 
-幂等键是**调用方可控的事实身份**：出生事实的派生元组显式包含可选的 `factKey`（保留后端既有 FactKey 重试语义）；同一业务事实被报以两个不同键会得到两个结果，事实身份纪律归调用方——引擎不解析事实正文，无从代为判重。
+幂等键是**调用方可控的事实身份**（两轨在出生时均要求显式填写：`fact_key` / `idempotencyKey`）：同一业务事实被报以两个不同幂等键会生成两张不同订单，事实身份纪律归调用方——引擎不解析事实正文，无从代为判重。
 
-各轨去重键与订单号派生元组是实现层语义，两轨对照见 `uvp-chain.md` 附录 B：云轨按定义/stage/signal/可选 factKey 的段族纯函数派生订单号；链轨出生单号从 `(planId, sourceId, signalId, payloadHash)` 纯函数派生（载荷哈希镜像进身份，同一事实恒定同单号），`idempotencyKey` 是签名请求的防重放辅助字段、不参与订单号派生（详见 `uvp-chain.md`）。
+各轨订单号生成与去重键作用域属实现层语义，两轨对照见 `cross-track-matrix.md`：云轨由 `gen_random_uuid()` 生成 `order_id`，按 `(zhixu_id, sender_id, fact_key)` 去重归并；链轨由合约 `_newOrderId`（nonce 递增）生成 `orderId`，按 `(submitter, idempotencyKey)` 去重（外部签名入口重复 revert `DuplicateTriggerKey` 并带回既有 `existingOrderId`，详见 `uvp-chain.md`）。
 
 ### 6.5 保证清单
 
-因果单一（一条出生事实至多派生一个订单号）、无需知情者的存在性（出生提交：任意授权提交者以同一出生事实均可幂等建单）、可重放（事实记录可重放，各轨事实载体见 §6.1/实现层文档）、判定权归属（业务配对/计数归执行器私有判断，引擎只代行恒等出生）、跨域显式（静态 Dock 声明 + binding 唯一通道）——五条全部存活。
+因果单一（同一出生事实与幂等键至多对应一个订单号）、无需知情者的存在性（出生提交：任意授权提交者以同一出生事实均可幂等建单）、可重放（事实记录可重放，各轨事实载体见 §6.1/实现层文档）、判定权归属（业务配对/计数归执行器私有判断，引擎只代行恒等出生）、跨域显式（静态 Dock 声明 + binding 唯一通道）——五条全部存活。
 
 ### 6.6 出生提交通道（链上）
 
@@ -448,7 +449,7 @@ dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单
 
 ### 7.6 字段闭集
 
-阶段与 Dock 按 §4/§7.2 的字段闭集书写：出生由 `sendSignals[].trigger: true` 表达；跨秩序发射条件由独立 Dock 文档的 `spec.signalMap` 表达；dock 执行者由阶段 `executor.supplierType: dock` 表达；`triggerHookId` 等接受态字段由入口按闭集裁决。loader / analyze 按闭集接收，字段级细节以 §4/§7.2 为准。
+阶段与 Dock 按 §4/§7.2 的字段闭集书写：显式出生由 `sendSignals[].trigger: true` 表达，兼容的隐式 entry 形状（§4 物化门例外）由 `analyze` 识别并返回 `implicitEntry`/`entryHook`；跨秩序发射条件由独立 Dock 文档的 `spec.signalMap` 表达；dock 执行者由阶段 `executor.supplierType: dock` 表达；`triggerHookId` 等接受态字段由入口按闭集裁决。loader / analyze 按闭集接收，字段级细节以 §4/§7.2 为准。
 
 ### 7.7 外部事实与秩序间上下文传播
 
@@ -460,7 +461,7 @@ dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单
 
 ## 8. 示例与建模范式
 
-> 示例中的 `platform.type: blockchain`、`provider: eth`、`network: base` 等取值属**轨道皮肤**：示例任选一条轨道的皮肤值演示，不必两份——换成另一轨的皮肤值，同形定义同样可编译（除非另注）。轨道差异与各轨附加接受域见实现层文档（`uvp-cloud.md` / `uvp-chain.md`）。
+> 示例中的 `platform.type: blockchain`、`provider: eth`、`network: base` 为某条具体轨道的声明值。`spec.platform` 与 `metadata.labels` **不参与** `definitionUid`（§2.1）：跨轨移植时修改 `platform.type` 或 `network` 不会改变定义 UID，因此无需更新 Dock 的 `zhixu` 引用；链轨 `planHash` 仍会随 `platform` 改变（§3.2）。轨道差异与各轨附加接受域见实现层文档（`uvp-cloud.md` / `uvp-chain.md`）。
 
 ### 8.1 最小可编译示例（起步模板）
 
@@ -666,9 +667,9 @@ spec:
 |---|---|---|---|---|
 | `apiVersion` / `kind` | string | 是 | `uvp/v0` / `Zhixu`（大小写敏感） | §3 |
 | `metadata.name` | string | 是 | slug `^[a-z][a-z0-9_-]{0,99}$`，纯展示 | §3.1 |
-| `metadata.labels` | map | 否 | 参与身份派生（两轨同公式） | §3.1 |
+| `metadata.labels` | map | 否 | 不参与定义身份派生（仅展示/检索） | §3.1 |
 | `metadata.annotations` | map | 否 | 不参与任何身份/哈希 | §3.1 |
-| `spec.platform.type` | string | 是 | 轨道声明（cloud/blockchain/cbdc；皮肤值见实现层） | §3.2 |
+| `spec.platform.type` | string | 是 | 轨道声明（cloud/blockchain/cbdc；不参与 `definitionUid`，仅进入链轨 `planHash`——跨轨移植不产生新 UID） | §3.2 |
 | `spec.nucleation.id` | string | 是 | 凝结核标识 | §3.2 |
 | `spec.stages` | array | 是 | 至少 1 个 | §3.2 |
 | `stage.name` | string | 是 | 秩序内唯一 | §4 |

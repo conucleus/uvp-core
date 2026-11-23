@@ -1,4 +1,5 @@
-//! uvp-compiler：定义到目标产物（hook_plan / cloud artifact）的编译器。
+//! uvp-compiler：定义到中性分析（`analyze`）与云侧产物（`cloud artifact`）的
+//! 编译器。链轨 hook_plan lowering 归链轨 TS 编译器，本 crate 不产出该产物。
 //! crate 根只保留编译入口（compile_json/compile_request/analyze_dock_json）、
 //! supplier 尺寸校验入口、请求信封与公共导出；生产逻辑见 `validate/`、
 //! `lower/`、`artifact/`、`dock.rs`（Dock 文档校验与 `uvp.dock.v1` 产物）
@@ -9,7 +10,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use analysis::compile_zhixu_analysis;
-pub use artifact::{compile_cloud_artifact, compile_zhixu_hook_plan};
+pub use artifact::compile_cloud_artifact;
 pub use dock::{compile_dock_artifact, DOCK_ARTIFACT_SCHEMA_VERSION};
 
 pub mod dock;
@@ -20,7 +21,7 @@ mod artifact;
 mod lower;
 mod validate;
 
-pub use artifact::{CLOUD_ARTIFACT_SCHEMA_VERSION, HOOK_PLAN_SCHEMA_VERSION};
+pub use artifact::CLOUD_ARTIFACT_SCHEMA_VERSION;
 
 #[cfg(test)]
 mod tests;
@@ -75,7 +76,7 @@ pub struct AnalyzeDockRequest {
 }
 
 fn default_target() -> String {
-    "hook_plan".to_string()
+    "analyze".to_string()
 }
 
 pub fn compile_json(input: &str) -> String {
@@ -97,11 +98,11 @@ pub fn analyze_dock_json(input: &str) -> String {
 
 pub fn compile_request(req: &CompileRequest) -> Result<Value> {
     match req.target.as_str() {
-        "hook_plan" | "evm" => compile_zhixu_hook_plan(&req.definition),
         "cloud" | "cloud_db" => compile_cloud_artifact(&req.definition),
         "analyze" => compile_zhixu_analysis(&req.definition),
         other => Err(CompilerError::Message(format!(
-            "unsupported compile target {other:?}"
+            "unsupported compile target {other:?} (expected \"analyze\", \"cloud\" or \"cloud_db\"; \
+             the chain-track hook_plan lowering lives in the TS compiler)"
         ))),
     }
 }

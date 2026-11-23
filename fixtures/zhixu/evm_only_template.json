@@ -1,7 +1,7 @@
 {
   "name": "evm-only template pins chain platform and portable hooks",
   "semanticVersion": "uvp.semantic.v1",
-  "target": "hook_plan",
+  "target": "analyze",
   "portable": true,
   "input": {
     "apiVersion": "uvp/v0",

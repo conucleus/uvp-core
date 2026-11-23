@@ -1,5 +1,6 @@
-//! 编译产物：hook_plan 与 cloud artifact 两条产物线的组装（含依赖索引与
-//! signal capabilities）。
+//! 编译产物：cloud artifact 的组装（含 signal capabilities 与适格声明）。
+//! 链轨 hook_plan lowering 归链轨 TS 编译器（`uvp-protocol/packages/compiler`），
+//! 本 crate 只产出 track-neutral 的 `analyze` 与云侧 `cloud` 产物。
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -7,73 +8,17 @@ use uvp_hook_dsl::{parse_hook, DependencyKind, Gate, ParseHookRequest, Profile};
 use uvp_model::{ZhixuDefinition, ZhixuSendSignal};
 
 use crate::lower::{
-    build_executor_routes, build_selected_stage_bindings, compile_stage_hooks, flatten_stages,
-    normalize_platform_value, parse_hook_for_cloud, value_str, StageEntry,
+    build_selected_stage_bindings, flatten_stages, normalize_platform_value, parse_hook_for_cloud,
+    value_str, StageEntry,
 };
 use crate::validate::{
-    valid_identifier_part, valid_signal_declaration, validate_onchain_stage_materialization,
-    validate_receive_signal_keys, validate_receive_signal_references, validate_stage_executors,
-    validate_stage_triggers, validate_zhixu_shape,
+    valid_identifier_part, valid_signal_declaration, validate_receive_signal_keys,
+    validate_receive_signal_references, validate_stage_executors, validate_stage_triggers,
+    validate_zhixu_shape,
 };
 use crate::{join_issues_bounded, CompilerError, Result};
 
-pub const HOOK_PLAN_SCHEMA_VERSION: &str = "uvp.hookPlan.v7";
-pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v8";
-
-pub fn compile_zhixu_hook_plan(definition_value: &Value) -> Result<Value> {
-    let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
-        .map_err(|err| CompilerError::Message(format!("invalid Zhixu definition: {err}")))?;
-    let issues = validate_zhixu_shape(&definition);
-    if !issues.is_empty() {
-        return Err(CompilerError::Issues(join_issues_bounded(&issues)));
-    }
-
-    let stage_entries = flatten_stages(&definition)?;
-    let stage_ids = stage_entries
-        .iter()
-        .map(|entry| entry.stage_identifier.clone())
-        .collect::<BTreeSet<_>>();
-    let selected_stage_bindings = build_selected_stage_bindings(&stage_entries, &stage_ids)?;
-
-    let mut validation_issues = Vec::new();
-    validation_issues.extend(validate_stage_executors(
-        &stage_entries,
-        &selected_stage_bindings,
-    ));
-    validation_issues.extend(validate_onchain_stage_materialization(&stage_entries));
-    validation_issues.extend(validate_stage_triggers(&stage_entries));
-    validation_issues.extend(validate_receive_signal_keys(&stage_entries));
-    validation_issues.extend(validate_receive_signal_references(&stage_entries));
-    if !validation_issues.is_empty() {
-        return Err(CompilerError::Issues(join_issues_bounded(
-            &validation_issues,
-        )));
-    }
-
-    let platform = normalize_platform_value(&definition.spec.platform)?;
-
-    let mut compiled_hooks = Vec::new();
-    for entry in &stage_entries {
-        compiled_hooks.extend(compile_stage_hooks(entry)?);
-    }
-    let dependency_index = build_dependency_index(&compiled_hooks);
-    let signal_capabilities = build_signal_capabilities(&stage_entries)?;
-    let admissions = build_signal_admissions(&stage_entries, Profile::EvmStrict)?;
-    let executor_routes = build_executor_routes(&stage_entries);
-
-    let artifact = json!({
-        "schemaVersion": HOOK_PLAN_SCHEMA_VERSION,
-        "zhixuName": definition.metadata.name,
-        "platform": platform,
-        "compiledHooks": compiled_hooks,
-        "dependencyIndex": dependency_index,
-        "executorRoutes": executor_routes,
-        "selectedStageBindings": selected_stage_bindings,
-        "signalCapabilities": signal_capabilities,
-        "admissions": admissions,
-    });
-    Ok(artifact)
-}
+pub const CLOUD_ARTIFACT_SCHEMA_VERSION: &str = "uvp.cloudArtifact.v1";
 
 pub fn compile_cloud_artifact(definition_value: &Value) -> Result<Value> {
     let definition: ZhixuDefinition = serde_json::from_value(definition_value.clone())
@@ -219,29 +164,6 @@ fn cloud_hook_artifact(
         ),
     );
     Ok(Value::Object(hook))
-}
-
-fn build_dependency_index(compiled_hooks: &[Value]) -> Value {
-    let mut index: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for hook in compiled_hooks {
-        let hook_id = value_str(hook, "hookId").to_string();
-        for dependency in hook["dependencies"].as_array().into_iter().flatten() {
-            let key = format!(
-                "{}::{}",
-                value_str(dependency, "source"),
-                value_str(dependency, "signalName")
-            );
-            index.entry(key).or_default().insert(hook_id.clone());
-        }
-    }
-    let mut out = Map::new();
-    for (key, hook_ids) in index {
-        out.insert(
-            key,
-            Value::Array(hook_ids.into_iter().map(Value::String).collect()),
-        );
-    }
-    Value::Object(out)
 }
 
 pub(crate) fn build_signal_capabilities(entries: &[StageEntry]) -> Result<Vec<Value>> {

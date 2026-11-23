@@ -37,6 +37,35 @@ fn target_payment_definition() -> Value {
 }
 
 #[test]
+fn legacy_hook_plan_targets_are_retired_and_the_default_is_analyze() {
+    let definition = target_payment_definition();
+    for target in ["hook_plan", "evm"] {
+        let error = compile_request(&CompileRequest {
+            target: target.to_string(),
+            definition: definition.clone(),
+        })
+        .expect_err("the retired hook_plan lowering must not be reachable");
+        assert!(
+            error.to_string().contains("unsupported compile target"),
+            "{target}: {error}"
+        );
+        assert!(
+            error.to_string().contains("hook_plan lowering"),
+            "{target}: {error}"
+        );
+    }
+
+    let default_request: CompileRequest =
+        serde_json::from_value(json!({ "definition": definition })).expect("request decodes");
+    let value = compile_request(&default_request).expect("default target compiles");
+    assert_eq!(
+        value["schemaVersion"],
+        json!("uvp.zhixuAnalysis.v1"),
+        "the compiler request surface defaults to analyze"
+    );
+}
+
+#[test]
 fn send_signals_total_is_uncapped() {
     let definition_with = |count: usize| {
         let signals: Vec<Value> = (0..count)
@@ -59,8 +88,7 @@ fn send_signals_total_is_uncapped() {
             }
         })
     };
-    let plan =
-        compile_zhixu_hook_plan(&definition_with(257)).expect("capability count is uncapped");
+    let plan = compile_zhixu_analysis(&definition_with(257)).expect("capability count is uncapped");
     assert_eq!(
         plan["signalCapabilities"].as_array().map(Vec::len),
         Some(257)
@@ -74,7 +102,7 @@ fn rejects_unknown_spec_and_executor_fields() {
     let mut parent = target_payment_definition();
     parent["spec"]["trigger"] = json!([]);
     let error =
-        compile_zhixu_hook_plan(&parent).expect_err("unsupported spec-level trigger key must fail");
+        compile_zhixu_analysis(&parent).expect_err("unsupported spec-level trigger key must fail");
     assert!(
         error.to_string().contains("unknown field `trigger`"),
         "{error}"
@@ -82,7 +110,7 @@ fn rejects_unknown_spec_and_executor_fields() {
 
     let mut parent = target_payment_definition();
     parent["spec"]["externalSignals"] = json!({});
-    let error = compile_zhixu_hook_plan(&parent)
+    let error = compile_zhixu_analysis(&parent)
         .expect_err("unsupported spec-level externalSignals key must fail");
     assert!(
         error
@@ -93,7 +121,7 @@ fn rejects_unknown_spec_and_executor_fields() {
 
     let mut parent = target_payment_definition();
     parent["spec"]["stages"][2]["executor"]["handlerType"] = json!("http");
-    let error = compile_zhixu_hook_plan(&parent).expect_err("unknown executor field must fail");
+    let error = compile_zhixu_analysis(&parent).expect_err("unknown executor field must fail");
     assert!(
         error.to_string().contains("unknown field `handlerType`"),
         "{error}"
@@ -102,7 +130,7 @@ fn rejects_unknown_spec_and_executor_fields() {
     let mut parent = target_payment_definition();
     parent["metadata"]["description"] = json!("demo");
     let error =
-        compile_zhixu_hook_plan(&parent).expect_err("metadata-level unknown field must fail");
+        compile_zhixu_analysis(&parent).expect_err("metadata-level unknown field must fail");
     assert!(
         error.to_string().contains("unknown field `description`"),
         "{error}"
@@ -110,16 +138,16 @@ fn rejects_unknown_spec_and_executor_fields() {
 
     let mut parent = target_payment_definition();
     parent["metadata"]["uid"] = json!("zx-hand-written");
-    let error = compile_zhixu_hook_plan(&parent)
+    let error = compile_zhixu_analysis(&parent)
         .expect_err("metadata.uid must be rejected as an unknown field");
     assert!(error.to_string().contains("unknown field `uid`"), "{error}");
 }
 
 #[test]
 fn file_resource_file_type_is_required_and_non_empty_but_app_defined() {
-    for target in ["hook_plan", "cloud"] {
+    for target in ["analyze", "cloud"] {
         let compile = |definition: &Value| match target {
-            "hook_plan" => compile_zhixu_hook_plan(definition),
+            "analyze" => compile_zhixu_analysis(definition),
             _ => compile_cloud_artifact(definition),
         };
         for (label, resource) in [
@@ -171,7 +199,7 @@ fn rejects_spec_with_empty_or_missing_stages() {
                 definition["spec"].as_object_mut().unwrap().remove("stages");
             }
         }
-        let error = compile_zhixu_hook_plan(&definition).expect_err("stages-less spec must fail");
+        let error = compile_zhixu_analysis(&definition).expect_err("stages-less spec must fail");
         assert!(
             error
                 .to_string()
@@ -190,15 +218,15 @@ fn rejects_spec_with_empty_or_missing_stages() {
 }
 
 #[test]
-fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
+fn cloud_target_rejects_send_signal_violations_like_analyze() {
     let mut empty = target_payment_definition();
     empty["spec"]["stages"][0]["sendSignals"]
         .as_array_mut()
         .unwrap()
         .push(json!({ "name": "" }));
-    for target in ["hook_plan", "cloud"] {
-        let error = (if target == "hook_plan" {
-            compile_zhixu_hook_plan(&empty)
+    for target in ["analyze", "cloud"] {
+        let error = (if target == "analyze" {
+            compile_zhixu_analysis(&empty)
         } else {
             compile_cloud_artifact(&empty)
         })
@@ -211,9 +239,9 @@ fn cloud_target_rejects_send_signal_violations_like_hook_plan() {
         .as_array_mut()
         .unwrap()
         .push(json!({ "name": "str" }));
-    for target in ["hook_plan", "cloud"] {
-        let error = (if target == "hook_plan" {
-            compile_zhixu_hook_plan(&duplicate)
+    for target in ["analyze", "cloud"] {
+        let error = (if target == "analyze" {
+            compile_zhixu_analysis(&duplicate)
         } else {
             compile_cloud_artifact(&duplicate)
         })
@@ -245,7 +273,7 @@ fn send_signal_declarations_use_a_single_exact_surface() {
             .as_array_mut()
             .unwrap()
             .push(json!({ "name": signal }));
-        let error = compile_zhixu_hook_plan(&definition)
+        let error = compile_zhixu_analysis(&definition)
             .expect_err(&format!("{label} ({signal:?}) must be rejected"));
         assert!(
             error.to_string().contains(".sendSignals"),
@@ -258,7 +286,7 @@ fn send_signal_declarations_use_a_single_exact_surface() {
         .as_array_mut()
         .unwrap()
         .push(json!({ "name": " str" }));
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("whitespace-padded signal must be rejected by the shape gate");
     assert!(
         !error.to_string().contains("duplicate capability"),
@@ -270,8 +298,8 @@ fn send_signal_declarations_use_a_single_exact_surface() {
 fn canonical_send_signals_are_explicit_self_references() {
     let mut definition = target_payment_definition();
     definition["spec"]["stages"][0]["sendSignals"] = json!([{ "name": "init.str" }]);
-    let plan = compile_zhixu_hook_plan(&definition)
-        .expect("canonical self-reference declaration compiles");
+    let plan =
+        compile_zhixu_analysis(&definition).expect("canonical self-reference declaration compiles");
     let capability = plan["signalCapabilities"]
         .as_array()
         .unwrap()
@@ -290,7 +318,7 @@ fn canonical_send_signals_are_explicit_self_references() {
         "sendSignals": [{ "name": "init.str" }],
         "executor": { "supplierType": "organization", "supplierID": "payment-gateway" }
     }));
-    let error = compile_zhixu_hook_plan(&dual)
+    let error = compile_zhixu_analysis(&dual)
         .expect_err("canonical declaration addressing another stage must fail");
     assert!(
         error
@@ -309,7 +337,7 @@ fn canonical_send_signals_are_explicit_self_references() {
     let mut both = target_payment_definition();
     both["spec"]["stages"][0]["sendSignals"] = json!([{ "name": "str" }, { "name": "init.str" }]);
     let error =
-        compile_zhixu_hook_plan(&both).expect_err("bare + canonical self-reference must collide");
+        compile_zhixu_analysis(&both).expect_err("bare + canonical self-reference must collide");
     assert!(
         error.to_string().contains("duplicate capability"),
         "unexpected error: {error}"
@@ -317,7 +345,7 @@ fn canonical_send_signals_are_explicit_self_references() {
 
     let mut target = target_payment_definition();
     target["spec"]["stages"][0]["sendSignals"] = json!([{ "name": "init.str" }]);
-    compile_zhixu_hook_plan(&target)
+    compile_zhixu_analysis(&target)
         .expect("D014 resolves canonical declarations by expanded full name");
 }
 
@@ -326,8 +354,7 @@ fn nucleation_id_must_be_non_blank() {
     for blank in ["", "   ", "\t"] {
         let mut definition = target_payment_definition();
         definition["spec"]["nucleation"]["id"] = json!(blank);
-        let error =
-            compile_zhixu_hook_plan(&definition).expect_err("blank nucleation.id must fail");
+        let error = compile_zhixu_analysis(&definition).expect_err("blank nucleation.id must fail");
         assert!(
             error
                 .to_string()
@@ -348,7 +375,7 @@ fn nucleation_id_must_be_non_blank() {
         .as_object_mut()
         .unwrap()
         .remove("nucleation");
-    let error = compile_zhixu_hook_plan(&missing)
+    let error = compile_zhixu_analysis(&missing)
         .expect_err("missing nucleation must fail at the serde required-field gate");
     assert!(
         error.to_string().contains("nucleation"),
@@ -383,7 +410,7 @@ fn rejects_executor_without_supplier_id_even_when_selected_stages_anchored() {
             }
         });
     let error =
-        compile_zhixu_hook_plan(&definition).expect_err("executor without supplierID must fail");
+        compile_zhixu_analysis(&definition).expect_err("executor without supplierID must fail");
     assert!(
         error.to_string().contains("supplierID is required"),
         "unexpected error: {error}"
@@ -424,39 +451,8 @@ fn accepts_dynamic_stage_with_selected_stages_anchor() {
         }
     });
 
-    let plan = compile_zhixu_hook_plan(&definition)
+    let analysis = compile_zhixu_analysis(&definition)
         .expect("dynamic stage anchored through selectedStages must compile");
-    let hooks = plan["compiledHooks"].as_array().unwrap();
-    let dynamic_hook = hooks
-        .iter()
-        .find(|hook| hook["hookId"] == json!("main#GO"))
-        .expect("dynamic stage hook is compiled");
-    assert_eq!(
-        dynamic_hook["emitReady"],
-        json!(true),
-        "dynamic receive hooks must emit readiness: stage materialization only happens via this stage's own hooks"
-    );
-    assert!(
-        dynamic_hook.get("route").is_none(),
-        "dynamic stage has no executor route: {dynamic_hook}"
-    );
-    let static_hook = hooks
-        .iter()
-        .find(|hook| hook["hookId"] == json!("assign#BEGIN"))
-        .expect("static executor hook is compiled");
-    assert_eq!(static_hook["emitReady"], json!(true));
-    assert!(
-        static_hook["route"].is_object(),
-        "static executor keeps its route: {static_hook}"
-    );
-    let routes = plan["executorRoutes"]
-        .as_object()
-        .expect("executorRoutes is a map");
-    assert!(routes.contains_key("assign"));
-    assert!(!routes.contains_key("main"));
-
-    let analysis =
-        compile_zhixu_analysis(&definition).expect("analyze accepts the dynamic stage shape");
     let dynamic_stage = analysis["stages"]
         .as_array()
         .unwrap()
@@ -467,6 +463,14 @@ fn accepts_dynamic_stage_with_selected_stages_anchor() {
         dynamic_stage["executor"],
         Value::Null,
         "dynamic stage has no executor at definition level"
+    );
+    assert!(
+        dynamic_stage["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hook| hook["hookName"] == json!("GO")),
+        "dynamic stage keeps its receive hook for chain-track lowering: {dynamic_stage}"
     );
 
     let cloud = compile_cloud_artifact(&definition)
@@ -496,20 +500,14 @@ fn rejects_dynamic_stage_without_selected_stages_anchor() {
         }
     });
 
-    for target in ["hook_plan", "analyze"] {
-        let error = (if target == "hook_plan" {
-            compile_zhixu_hook_plan(&definition)
-        } else {
-            compile_zhixu_analysis(&definition)
-        })
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("executor-less stage without a selectedStages anchor must stay rejected");
-        assert!(
-            error.to_string().contains(
-                "has no static executor and is not reachable from a static executor through selectedStages"
-            ),
-            "{target}: {error}"
-        );
-    }
+    assert!(
+        error.to_string().contains(
+            "has no static executor and is not reachable from a static executor through selectedStages"
+        ),
+        "{error}"
+    );
 }
 
 #[test]
@@ -530,18 +528,12 @@ fn rejects_zero_hook_stage_on_chain_targets_but_not_cloud() {
         }
     });
 
-    for target in ["hook_plan", "analyze"] {
-        let error = (if target == "hook_plan" {
-            compile_zhixu_hook_plan(&definition)
-        } else {
-            compile_zhixu_analysis(&definition)
-        })
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("zero-hook stage must stay rejected on the chain targets");
-        assert!(
-            error.to_string().contains("compiles to zero hooks"),
-            "{target}: {error}"
-        );
-    }
+    assert!(
+        error.to_string().contains("compiles to zero hooks"),
+        "{error}"
+    );
     compile_cloud_artifact(&definition).expect("cloud target has no on-chain materialization gate");
 }
 
@@ -572,27 +564,21 @@ fn rejects_order_trigger_on_executor_less_stage() {
         }
     });
 
-    for target in ["hook_plan", "analyze"] {
-        let error = (if target == "hook_plan" {
-            compile_zhixu_hook_plan(&definition)
-        } else {
-            compile_zhixu_analysis(&definition)
-        })
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("order-trigger on an executor-less stage must stay rejected");
-        assert!(
-            error.to_string().contains(
-                "trigger requires its own static individual/organization executor with supplierID"
-            ),
-            "{target}: {error}"
-        );
-    }
+    assert!(
+        error.to_string().contains(
+            "trigger requires its own static individual/organization executor with supplierID"
+        ),
+        "{error}"
+    );
 }
 
 #[test]
 fn rejects_receive_signal_keys_with_separators() {
     let mut definition = target_payment_definition();
     definition["spec"]["stages"][0]["receiveSignals"]["BAD.KEY"] = json!("payment::init.execute");
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("receiveSignals key containing '.' must fail");
     let message = error.to_string();
     assert!(
@@ -603,7 +589,7 @@ fn rejects_receive_signal_keys_with_separators() {
 
     let mut definition = target_payment_definition();
     definition["spec"]["stages"][0]["receiveSignals"]["BAD#KEY"] = json!("payment::init.execute");
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("receiveSignals key containing '#' must fail");
     assert!(
         error
@@ -614,7 +600,7 @@ fn rejects_receive_signal_keys_with_separators() {
 
     let mut definition = target_payment_definition();
     definition["spec"]["stages"][0]["receiveSignals"]["BAD KEY"] = json!("payment::init.execute");
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("receiveSignals key containing whitespace must fail");
     assert!(
         error
@@ -652,7 +638,7 @@ fn error_string_is_truncated_at_the_boundary() {
         .collect::<Vec<_>>();
     let definition = counted_definition(stages);
     let error =
-        compile_zhixu_hook_plan(&definition).expect_err("256 invalid-source stages must fail");
+        compile_zhixu_analysis(&definition).expect_err("256 invalid-source stages must fail");
     let message = error.to_string();
     assert!(
         message.contains("issues truncated: error string capped at 16384 bytes"),
@@ -671,8 +657,7 @@ const SETTLE_ADMISSION: &str = "payment::init.str & ~(control.cxl +14d)";
 fn admissions_compile_into_both_targets() {
     let mut definition = target_payment_definition();
     definition["spec"]["stages"][2]["sendSignals"][0]["validWhen"] = json!([SETTLE_ADMISSION]);
-    let plan =
-        compile_zhixu_hook_plan(&definition).expect("gated sendSignal compiles for hook_plan");
+    let plan = compile_zhixu_analysis(&definition).expect("gated sendSignal compiles for analyze");
     let admissions = plan["admissions"].as_array().unwrap();
     assert_eq!(
         admissions.len(),
@@ -689,7 +674,7 @@ fn admissions_compile_into_both_targets() {
     );
     assert!(
         admission["ast"].is_object(),
-        "hook_plan carries the parsed AST"
+        "analyze carries the parsed AST"
     );
     assert_eq!(
         admissions[0]["dependencies"],
@@ -697,7 +682,7 @@ fn admissions_compile_into_both_targets() {
             { "kind": "negative", "source": "payment", "signalName": "control.cxl" },
             { "kind": "positive", "source": "payment", "signalName": "init.str" },
         ]),
-        "hook_plan carries the full dependency form: {admission:?}"
+        "analyze carries the full dependency form: {admission:?}"
     );
 
     let cloud =
@@ -708,7 +693,7 @@ fn admissions_compile_into_both_targets() {
     assert_eq!(cloud_admission["signalName"], json!("settle.cmp"));
     assert_eq!(
         cloud_admission["cloudAst"]["schemaVersion"],
-        json!("uvp.cloudAst.v4")
+        json!("uvp.cloudAst.v1")
     );
     assert_eq!(
         cloud_admission["dependencies"],
@@ -722,13 +707,13 @@ fn admissions_compile_into_both_targets() {
 
 #[test]
 fn admission_self_reference_is_rejected_in_both_targets() {
-    for target in ["hook_plan", "cloud"] {
+    for target in ["analyze", "cloud"] {
         for header in ["payment", "seller"] {
             let mut definition = target_payment_definition();
             definition["spec"]["stages"][2]["sendSignals"][0]["validWhen"] =
                 json!([format!("{header}::settle.cmp & init.str")]);
-            let result = if target == "hook_plan" {
-                compile_zhixu_hook_plan(&definition)
+            let result = if target == "analyze" {
+                compile_zhixu_analysis(&definition)
             } else {
                 compile_cloud_artifact(&definition)
             };
@@ -745,7 +730,7 @@ fn admission_self_reference_is_rejected_in_both_targets() {
     let mut definition = target_payment_definition();
     definition["spec"]["stages"][2]["sendSignals"][0]["validWhen"] =
         json!(["seller::settle.cmp & init.str"]);
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("a same-named fact under another source class still addresses the declaring signal's fact key");
     assert!(
         error
@@ -774,11 +759,11 @@ fn admission_dangling_references_are_rejected() {
             "is not a declared source in this zhixu",
         ),
     ] {
-        for target in ["hook_plan", "cloud"] {
+        for target in ["analyze", "cloud"] {
             let mut definition = target_payment_definition();
             definition["spec"]["stages"][2]["sendSignals"][0]["validWhen"] = json!([expression]);
-            let result = if target == "hook_plan" {
-                compile_zhixu_hook_plan(&definition)
+            let result = if target == "analyze" {
+                compile_zhixu_analysis(&definition)
             } else {
                 compile_cloud_artifact(&definition)
             };
@@ -802,8 +787,7 @@ fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
         .as_array_mut()
         .unwrap()
         .push(json!({ "name": "" }));
-    let error =
-        compile_zhixu_hook_plan(&empty_name).expect_err("an entry without a name must fail");
+    let error = compile_zhixu_analysis(&empty_name).expect_err("an entry without a name must fail");
     assert!(
         error
             .to_string()
@@ -838,7 +822,7 @@ fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
         .as_array_mut()
         .unwrap()
         .push(json!({ "name": "init.str" }));
-    let error = compile_zhixu_hook_plan(&duplicate)
+    let error = compile_zhixu_analysis(&duplicate)
         .expect_err("bare + canonical self-reference must collide on the expanded capability");
     assert!(
         error.to_string().contains("D031") && error.to_string().contains("duplicate capability"),
@@ -850,7 +834,7 @@ fn admission_name_blank_expression_duplicate_and_unknown_key_faces() {
         .as_array_mut()
         .unwrap()
         .push(json!({ "name": "str", "validwhen": SETTLE_ADMISSION }));
-    let error = compile_zhixu_hook_plan(&unknown_key)
+    let error = compile_zhixu_analysis(&unknown_key)
         .expect_err("a misspelled key must fail at decode, not fold to the zero value");
     assert!(
         error.to_string().contains("unknown field") && error.to_string().contains("validwhen"),
@@ -863,7 +847,7 @@ fn admission_invalid_expression_reports_the_declaring_signal() {
     let mut definition = target_payment_definition();
     definition["spec"]["stages"][2]["sendSignals"][0]["validWhen"] =
         json!(["payment::a.settle.cmp"]);
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("a three-part signal name inside validWhen must fail");
     assert!(
         error
@@ -918,7 +902,7 @@ fn multi_item_admission_composes_one_and_root_and_unions_dependencies() {
         "dependencies are the union across items in first-seen order: {admission}"
     );
 
-    let plan = compile_zhixu_hook_plan(&definition).expect("hook_plan composes the same items");
+    let plan = compile_zhixu_analysis(&definition).expect("analyze composes the same items");
     let plan_admission = &plan["admissions"][0];
     assert_eq!(
         plan_admission["normalizedExpression"],
@@ -927,7 +911,7 @@ fn multi_item_admission_composes_one_and_root_and_unions_dependencies() {
     assert_eq!(
         plan_admission["ast"]["condition"]["kind"],
         json!("and"),
-        "the hook_plan AST carries an and-condition over the item conditions"
+        "the analyze AST carries an and-condition over the item conditions"
     );
 }
 
@@ -1015,7 +999,7 @@ fn rejects_metadata_name_violating_slug_pattern() {
             "stages": [{ "name": "main", "source": "buyer", "executor": { "supplierType": "organization", "supplierID": "org-1" } }]
         }
     });
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("metadata.name outside the slug pattern must fail");
     assert!(
         error
@@ -1038,7 +1022,7 @@ fn rejects_stage_source_exceeding_36_bytes() {
         }
     });
     let error =
-        compile_zhixu_hook_plan(&definition).expect_err("stage source over 36 bytes must fail");
+        compile_zhixu_analysis(&definition).expect_err("stage source over 36 bytes must fail");
     assert!(
         error.to_string().contains("exceeds 36 bytes"),
         "unexpected error: {error}"
@@ -1097,7 +1081,7 @@ fn rejects_receive_signal_key_exceeding_36_bytes() {
                 }]
         }
     });
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("receiveSignals key over 36 bytes must fail");
     assert!(
         error.to_string().contains("key must be 1-36 bytes"),
@@ -1129,8 +1113,8 @@ fn rejects_selected_stages_duplicate_target() {
                         }]
             }
         });
-    let error = compile_zhixu_hook_plan(&definition)
-        .expect_err("duplicate selectedStages target must fail");
+    let error =
+        compile_zhixu_analysis(&definition).expect_err("duplicate selectedStages target must fail");
     assert!(
         error.to_string().contains("contains duplicate target main"),
         "unexpected error: {error}"
@@ -1149,7 +1133,7 @@ fn rejects_executor_supplier_id_over_uuid_length() {
             "stages": [{ "name": "main", "source": "buyer", "executor": { "supplierType": "organization", "supplierID": "a".repeat(37) } }]
         }
     });
-    let error = compile_zhixu_hook_plan(&definition)
+    let error = compile_zhixu_analysis(&definition)
         .expect_err("executor supplierID over 36 bytes must fail");
     assert!(
         error.to_string().contains("exceeds 36 bytes"),
@@ -1160,5 +1144,138 @@ fn rejects_executor_supplier_id_over_uuid_length() {
     assert!(
         error.to_string().contains("exceeds 36 bytes"),
         "unexpected cloud error: {error}"
+    );
+}
+
+fn implicit_entry_definition() -> Value {
+    json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "implicit_entry" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "entry-core" },
+            "stages": [{
+                "name": "entry",
+                "source": "customer",
+                "sendSignals": [
+                    { "name": "str" },
+                    { "name": "cmp" }
+                ],
+                "executor": { "supplierType": "organization", "supplierID": "journey-executor" }
+            }]
+        }
+    })
+}
+
+#[test]
+fn analyze_carries_implicit_entry_and_synthesized_entry_hook() {
+    let analysis = compile_zhixu_analysis(&implicit_entry_definition())
+        .expect("the single implicit entry shape must analyze");
+    assert_eq!(analysis["schemaVersion"], json!("uvp.zhixuAnalysis.v1"));
+    assert_eq!(analysis["implicitEntry"], json!("entry"));
+    assert_eq!(
+        analysis["entryHook"]["rawExpression"],
+        json!("customer::entry.str")
+    );
+    assert_eq!(
+        analysis["entryHook"]["normalizedExpression"],
+        json!("customer::entry.str")
+    );
+    assert_eq!(
+        analysis["entryHook"]["ast"]["condition"],
+        json!({ "kind": "signal", "signalName": "entry.str" })
+    );
+    assert_eq!(
+        analysis["entryHook"]["dependencies"],
+        json!([{ "kind": "positive", "source": "customer", "signalName": "entry.str" }])
+    );
+    assert_eq!(
+        analysis["stages"][0]["triggers"],
+        json!([]),
+        "implicit entry is carried separately from explicit trigger rows"
+    );
+    assert_eq!(
+        analysis["stages"][0]["hooks"],
+        json!([]),
+        "the entry hook is reported once at the analysis top level"
+    );
+}
+
+#[test]
+fn explicit_trigger_stages_are_not_reported_as_implicit_entries() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "explicit_trigger_entry" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "entry-core" },
+            "stages": [{
+                "name": "entry",
+                "source": "customer",
+                "sendSignals": [{ "name": "born", "trigger": true }],
+                "executor": { "supplierType": "organization", "supplierID": "journey-executor" }
+            }]
+        }
+    });
+    let analysis = compile_zhixu_analysis(&definition).expect("explicit trigger entry analyzes");
+    assert_eq!(analysis["implicitEntry"], Value::Null);
+    assert_eq!(analysis["entryHook"], Value::Null);
+    assert_eq!(analysis["stages"][0]["triggers"], json!(["entry.born"]));
+}
+
+#[test]
+fn rejects_implicit_entry_str_with_valid_when() {
+    let mut definition = implicit_entry_definition();
+    definition["spec"]["stages"][0]["sendSignals"][0]["validWhen"] = json!(["customer::entry.cmp"]);
+    let error = compile_zhixu_analysis(&definition)
+        .expect_err("a validWhen on the implicit entry str birth fact must fail");
+    assert!(
+        error.to_string().contains("validWhen")
+            && error.to_string().contains("implicit entry stage"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_multiple_or_observed_implicit_entry_shapes() {
+    let mut multiple = implicit_entry_definition();
+    multiple["spec"]["stages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "second_entry",
+            "source": "customer",
+            "sendSignals": [{ "name": "str" }],
+            "executor": { "supplierType": "organization", "supplierID": "second-executor" }
+        }));
+    let error = compile_zhixu_analysis(&multiple)
+        .expect_err("two no-receiveSignals/no-trigger stages must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("at most one implicit entry stage"),
+        "unexpected error: {error}"
+    );
+
+    let mut observed = implicit_entry_definition();
+    observed["spec"]["stages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "name": "observer",
+            "source": "customer",
+            "receiveSignals": { "OBSERVE": "customer::entry.str" },
+            "sendSignals": [{ "name": "seen" }],
+            "executor": { "supplierType": "organization", "supplierID": "observer-executor" }
+        }));
+    let error = compile_zhixu_analysis(&observed)
+        .expect_err("another stage observing the implicit entry birth fact must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("only the entry stage's own order-trigger hook may observe it"),
+        "unexpected error: {error}"
     );
 }

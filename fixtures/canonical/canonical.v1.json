@@ -2,11 +2,13 @@
   "schemaVersion": "uvp.canonicalJsonCorpus.v1",
   "authority": "uvp-core uvp-ir::canonical_stringify (serde_json integer number identity; float-form literals rejected at the authority)",
   "consumers": [
-    "uvp-protocol packages/compiler canonical.ts must reproduce pass cases byte-for-byte and reject the expectReject cases with an equivalent single rejection face"
+    "uvp-core uvp-ir::canonical_stringify is authoritative for every expectCanonical case: Rust accepts integer literals across the full u64/i64 range and emits them bare.",
+    "uvp-protocol packages/compiler canonical.ts must reproduce every expectCanonical case byte-for-byte and reject expectReject cases with an equivalent single rejection face. A case carrying expectTsReject is the explicit cross-track exception: TS numbers are limited to ±(2^53-1), so TS must reject that input loudly as an unsafe integer and must not claim byte-for-byte alignment with the Rust u64 vector."
   ],
   "rules": [
     "The canonical hash-preimage vocabulary is closed over integers: number literals without '.' or 'e' (u64/i64) canonicalize bare, without a decimal point.",
-    "Float-form number literals are rejected outright: any f64 payload — integral floats (100.0), fractions (1.5), exponent spellings (1e2, 2.5e-8, 1e300), and negative zero (-0.0) — fails loudly at the authoritative canonicalizer, listing the offending token. Cross-language float formatting (ryu vs JS Number->String) carries no byte-for-byte alignment obligation; the single rejection face lives in the Rust authority.",
+    "Integer width is split by track: the Rust authority accepts u64/i64 integer tokens exactly, including values above JS's safe-integer range (> 2^53-1); JS/TS consumers accept only safe integers and must reject larger tokens loudly. A case with expectTsReject is a Rust-only acceptance vector and a TS rejection vector, not a cross-track byte-alignment obligation.",
+    "Float-form number literals are rejected outright by both tracks: any f64 payload — integral floats (100.0), fractions (1.5), exponent spellings (1e2, 2.5e-8, 1e300), and negative zero (-0.0) — fails loudly at the authoritative canonicalizer, listing the offending token. Cross-language float formatting (ryu vs JS Number->String) carries no byte-for-byte alignment obligation; the single rejection face lives in the Rust authority.",
     "Object keys sort by code point; arrays keep order."
   ],
   "cases": [
@@ -16,9 +18,15 @@
       "expectCanonical": "{\"a\":100}"
     },
     {
-      "name": "u64 beyond double precision stays an integer",
+      "name": "max safe integer stays an integer on both tracks",
+      "input": { "a": 9007199254740991 },
+      "expectCanonical": "{\"a\":9007199254740991}"
+    },
+    {
+      "name": "u64 beyond double precision is a Rust acceptance vector and a TS safe-integer rejection",
       "input": { "a": 9007199254740993 },
-      "expectCanonical": "{\"a\":9007199254740993}"
+      "expectCanonical": "{\"a\":9007199254740993}",
+      "expectTsReject": "safe integer"
     },
     {
       "name": "keys sort by code point over integers",

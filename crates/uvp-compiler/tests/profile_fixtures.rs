@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use uvp_compiler::{compile_request, CompileRequest};
 use uvp_hook_dsl::SEMANTIC_VERSION;
 use uvp_ir::canonical_stringify;
@@ -108,24 +108,41 @@ fn assert_success_fields(fixture: &ProfileFixture, value: &Value) {
             fixture.name
         );
     }
-    if let Some(expected_ids) = &fixture.expect.hook_ids {
-        let mut actual_ids: Vec<String> = value["compiledHooks"]
+    let analysis_hooks = || -> Vec<Value> {
+        value["stages"]
             .as_array()
-            .expect("compiledHooks should be an array")
+            .into_iter()
+            .flatten()
+            .flat_map(|stage| {
+                let stage_identifier = stage["stageIdentifier"].as_str().unwrap_or_default();
+                stage["hooks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(move |hook| {
+                        let hook_name = hook["hookName"].as_str().unwrap_or_default();
+                        json!({
+                            "hookId": format!("{stage_identifier}#{hook_name}"),
+                            "dependencies": hook["dependencies"].clone(),
+                        })
+                    })
+            })
+            .collect()
+    };
+    if let Some(expected_ids) = &fixture.expect.hook_ids {
+        let mut actual_ids: Vec<String> = analysis_hooks()
             .iter()
             .map(|hook| hook["hookId"].as_str().unwrap_or_default().to_string())
             .collect();
         actual_ids.sort();
         assert_eq!(
             &actual_ids, expected_ids,
-            "{} compiled hook ids mismatch",
+            "{} analyzed hook ids mismatch",
             fixture.name
         );
     }
     if let Some(expected_counts) = &fixture.expect.hook_dependency_counts {
-        let hooks = value["compiledHooks"]
-            .as_array()
-            .expect("compiledHooks should be an array");
+        let hooks = analysis_hooks();
         for (hook_id, expected_count) in expected_counts {
             let dependency_count = hooks
                 .iter()
@@ -193,9 +210,9 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
     );
 
     match fixture.target.as_str() {
-        "hook_plan" | "evm" => {
+        "analyze" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.hookPlan.v7",
+                value["schemaVersion"], "uvp.zhixuAnalysis.v1",
                 "{}",
                 fixture.name
             );
@@ -203,7 +220,7 @@ fn assert_artifact_invariants(fixture: &ProfileFixture, value: &Value) {
         }
         "cloud" | "cloud_db" => {
             assert_eq!(
-                value["schemaVersion"], "uvp.cloudArtifact.v8",
+                value["schemaVersion"], "uvp.cloudArtifact.v1",
                 "{}",
                 fixture.name
             );

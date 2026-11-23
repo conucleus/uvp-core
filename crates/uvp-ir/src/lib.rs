@@ -59,17 +59,43 @@ pub fn hash_canonical(domain: &str, payload: &Value) -> Result<String> {
     ))
 }
 
-fn strip_definition_display_fields(mut definition: Value) -> Value {
-    let Some(metadata) = definition
+/// Definition identity is content-derived over the track-neutral logic only.
+/// Display/metadata fields (`metadata.name`, `metadata.annotations`,
+/// `metadata.labels`) and track/deployment selectors (`spec.platform`,
+/// `spec.nucleation`) are deliberately excluded so the same Zhixu logic yields
+/// the exact same `definitionUid` on the cloud and chain tracks.
+fn strip_definition_identity_fields(mut definition: Value) -> Value {
+    if let Some(root) = definition.as_object_mut() {
+        if let Some(metadata) = root
+            .get_mut("metadata")
+            .and_then(|metadata| metadata.as_object_mut())
+        {
+            metadata.remove("name");
+            metadata.remove("annotations");
+            metadata.remove("labels");
+        }
+        if let Some(spec) = root.get_mut("spec").and_then(|spec| spec.as_object_mut()) {
+            spec.remove("platform");
+            spec.remove("nucleation");
+        }
+    }
+    definition
+}
+
+/// Dock identity strips display fields only: a dock document's labels and
+/// endpoint declarations are part of its committed content (only
+/// `metadata.name`/`metadata.annotations` are display-only, as documented in
+/// the dock artifact contract).
+fn strip_dock_display_fields(mut dock: Value) -> Value {
+    if let Some(metadata) = dock
         .as_object_mut()
         .and_then(|root| root.get_mut("metadata"))
         .and_then(|metadata| metadata.as_object_mut())
-    else {
-        return definition;
-    };
-    metadata.remove("name");
-    metadata.remove("annotations");
-    definition
+    {
+        metadata.remove("name");
+        metadata.remove("annotations");
+    }
+    dock
 }
 
 fn keccak_hex(preimage: &str) -> String {
@@ -83,14 +109,18 @@ fn keccak_hex(preimage: &str) -> String {
     )
 }
 
-fn content_digest(domain: &str, document: &Value) -> Result<String> {
-    let stripped = strip_definition_display_fields(canonicalize(document)?);
+fn content_digest(domain: &str, document: &Value, strip: fn(Value) -> Value) -> Result<String> {
+    let stripped = strip(canonicalize(document)?);
     let canonical = canonical_stringify(&stripped)?;
     Ok(keccak_hex(&format!("{domain}:{canonical}")))
 }
 
 pub fn derive_definition_uid(definition: &Value) -> Result<String> {
-    let digest = content_digest(DEFINITION_UID_DOMAIN, definition)?;
+    let digest = content_digest(
+        DEFINITION_UID_DOMAIN,
+        definition,
+        strip_definition_identity_fields,
+    )?;
     Ok(format!("zx-{}", &digest[2..34]))
 }
 
@@ -101,7 +131,7 @@ pub struct DockIdentity {
 }
 
 pub fn derive_dock_identity(dock: &Value) -> Result<DockIdentity> {
-    let doc_hash = content_digest(DOCK_UID_DOMAIN, dock)?;
+    let doc_hash = content_digest(DOCK_UID_DOMAIN, dock, strip_dock_display_fields)?;
     Ok(DockIdentity {
         dkid: format!("zd-{}", &doc_hash[2..34]),
         doc_hash,
@@ -127,7 +157,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn definition_uid_is_content_derived_and_display_agnostic() {
+    fn definition_uid_is_content_derived_and_track_agnostic() {
         let base = json!({
             "apiVersion": "uvp/v0",
             "kind": "Zhixu",
@@ -136,29 +166,76 @@ mod tests {
                 "annotations": {"origin": "console"},
                 "labels": {"domain": "demo"}
             },
-            "spec": {"platform": {"type": "cloud"}}
+            "spec": {
+                "platform": {"type": "cloud"},
+                "nucleation": {"id": "n1"},
+                "stages": [{"name": "main", "source": "buyer"}]
+            }
         });
         let uid = derive_definition_uid(&base).unwrap();
         assert!(uid.starts_with("zx-"));
         assert_eq!(uid.len(), 35);
         assert!(uid[3..].chars().all(|c| c.is_ascii_hexdigit()), "{uid}");
 
-        let renamed = json!({
+        // Display fields and track selectors must not fork the identity.
+        let changed_metadata = json!({
             "apiVersion": "uvp/v0", "kind": "Zhixu",
-            "metadata": {"name": "renamed_order", "labels": {"domain": "demo"}},
-            "spec": {"platform": {"type": "cloud"}}
+            "metadata": {
+                "name": "renamed_order",
+                "annotations": {"origin": "chain"},
+                "labels": {"domain": "other", "owner": "someone"}
+            },
+            "spec": {
+                "platform": {"type": "blockchain", "provider": "eth", "network": "base"},
+                "nucleation": {"id": "n2"},
+                "stages": [{"name": "main", "source": "buyer"}]
+            }
         });
-        assert_eq!(uid, derive_definition_uid(&renamed).unwrap());
-        let changed = json!({
+        assert_eq!(uid, derive_definition_uid(&changed_metadata).unwrap());
+
+        let stripped_shell = json!({
             "apiVersion": "uvp/v0", "kind": "Zhixu",
-            "metadata": {"name": "weaving_order", "labels": {"domain": "demo"}},
-            "spec": {"platform": {"type": "cloud"}, "nucleation": {"id": "n1"}}
+            "metadata": {},
+            "spec": {"stages": [{"name": "main", "source": "buyer"}]}
         });
-        assert_ne!(uid, derive_definition_uid(&changed).unwrap());
+        assert_eq!(uid, derive_definition_uid(&stripped_shell).unwrap());
+
+        // Track-neutral logic still forks the identity.
+        let changed_logic = json!({
+            "apiVersion": "uvp/v0", "kind": "Zhixu",
+            "metadata": {"name": "weaving_order"},
+            "spec": {
+                "platform": {"type": "cloud"},
+                "nucleation": {"id": "n1"},
+                "stages": [{"name": "main", "source": "seller"}]
+            }
+        });
+        assert_ne!(uid, derive_definition_uid(&changed_logic).unwrap());
+
         let reordered = serde_json::from_str::<Value>(
-            r#"{"spec":{"platform":{"type":"cloud"}},"metadata":{"labels":{"domain":"demo"},"annotations":{"origin":"console"},"name":"weaving_order"},"kind":"Zhixu","apiVersion":"uvp/v0"}"#,
+            r#"{"spec":{"stages":[{"source":"buyer","name":"main"}],"nucleation":{"id":"n1"},"platform":{"type":"cloud"}},"metadata":{"labels":{"domain":"demo"},"annotations":{"origin":"console"},"name":"weaving_order"},"kind":"Zhixu","apiVersion":"uvp/v0"}"#,
         )
         .unwrap();
         assert_eq!(uid, derive_definition_uid(&reordered).unwrap());
+    }
+
+    #[test]
+    fn dock_identity_keeps_labels_in_content() {
+        let dock = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Dock",
+            "metadata": {"name": "a_to_b", "labels": {"domain": "demo"}},
+            "spec": {"from": {"zhixu": "zx-a", "source": "a"}}
+        });
+        let relabeled = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Dock",
+            "metadata": {"name": "renamed", "labels": {"domain": "other"}},
+            "spec": {"from": {"zhixu": "zx-a", "source": "a"}}
+        });
+        let base = derive_dock_identity(&dock).unwrap();
+        let changed = derive_dock_identity(&relabeled).unwrap();
+        assert_ne!(base.doc_hash, changed.doc_hash);
+        assert_ne!(base.dkid, changed.dkid);
     }
 }

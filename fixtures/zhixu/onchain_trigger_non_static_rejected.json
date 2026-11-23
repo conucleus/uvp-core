@@ -1,7 +1,7 @@
 {
   "name": "order-trigger on an executor-less stage is rejected",
   "semanticVersion": "uvp.semantic.v1",
-  "target": "hook_plan",
+  "target": "analyze",
   "portable": false,
   "input": {
     "apiVersion": "uvp/v0",

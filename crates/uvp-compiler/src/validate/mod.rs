@@ -314,15 +314,19 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
     issues
 }
 
-pub(crate) fn validate_onchain_stage_materialization(entries: &[StageEntry]) -> Vec<String> {
+pub(crate) fn validate_onchain_stage_materialization(
+    entries: &[StageEntry],
+    implicit_entry: Option<&str>,
+) -> Vec<String> {
     let mut issues = Vec::new();
     for entry in entries {
         if entry.stage.receive_signals.is_empty() {
-            if entry.stage.has_trigger() {
+            if entry.stage.has_trigger() || implicit_entry == Some(entry.stage_identifier.as_str())
+            {
                 continue;
             }
             issues.push(format!(
-                "{} declares no receiveSignals and no trigger and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare a trigger set or receiveSignals",
+                "{} declares no receiveSignals and no trigger and compiles to zero hooks: the stage can never materialize on-chain (materialization only happens via this stage's own order-trigger/EMIT_READY hooks) and its sendSignals have no hook to hang on — submitSignal requires the source stage to be materialized and reverts UnknownHook forever (deadlock, no recovery path); declare a trigger set, satisfy the implicit entry shape, or declare receiveSignals",
                 entry.stage_identifier
             ));
         }

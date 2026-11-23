@@ -227,7 +227,7 @@ Stage 字段总表（当前态）：
 
 ## 7. 版本与兼容
 
-- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格；语义/AST/语料/部署清单为 v1。当前语义批的产物面：`uvp.semantic.v1`、`uvp.cloudAst.v4`、`uvp.cloudArtifact.v8`、`uvp.zhixuAnalysis.v4`、`uvp.hookPlan.v8`、`uvp.onchainHookPlan.v8`、`uvp.dock.v1`、`uvp.dockBinding.v1`。同一语义只存在当前版本。
+- 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格；语义/AST/语料/部署清单为 v1。当前语义批的产物面：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.cloudArtifact.v1`、`uvp.zhixuAnalysis.v1`、`uvp.hookPlan.v1`、`uvp.onchainHookPlan.v1`、`uvp.dock.v1`、`uvp.dockBinding.v1`。同一语义只存在当前版本。
 - 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住上述 artifactSchemas、合约 ABI fixture（stateMachine `0.21`、stagePatch `0.10`、lens `0.7`、dockRegistry `0.1` 等）、EIP-712 domains（productSubmit `0.19`、orderLink `0.9`、derivedSignal `0.7`、stageSupplierPatch `0.5`）和 `uvp-eth.addresses.v1`；合约 plan 承诺（publisher、hooksHash、capabilitiesRoot、supplierBindingsRoot、birthAuthorizer、deadline）与复合 `(planId, orderId)` 身份以矩阵和 fixtures 为准。
 - 语法面只有 `sendSignals[].trigger`、同单 hook 与独立 Dock 文档声明。
 
