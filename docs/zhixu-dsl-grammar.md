@@ -24,7 +24,7 @@
 - 编译器注册类型为：`apiVersion: uvp/v0` + `kind: Zhixu`（大小写敏感）。
 - Dock 是独立文档（`apiVersion: uvp/v0` + `kind: Dock`），与 `kind: Zhixu` 并列发布、由 `uvp-core analyzeDock` 单独编译；字段壳为 `apiVersion`/`kind`/`metadata`/`spec`，未知字段按响亮拒绝（uvp-core `deny_unknown_fields` 口径，各轨提交入口的枚举闭集见实现层文档）。
 - 产物版本：本册对应同一语义批的中性分析与产物面为 `uvp.zhixuAnalysis.v1`（定义级分析）、`uvp.cloudAst.v1`（云侧 hook AST）、`uvp.cloudArtifact.v1`（云侧编译产物）、`uvp.hookPlan.v1`（链侧 hook plan）与 `uvp.onchainHookPlan.v1`（链上注册产物），Dock 文档产物为 `uvp.dock.v1`、binding 读面为 `uvp.dockBinding.v1`；同一语义只存在当前版本。
-- 编译器请求面：默认 target 为 `analyze`（共享校验 + 完整 hook IR：stages/hooks 的 `rawExpression`、`normalizedExpression`、AST 与 `dependencies`，出生信号集，隐式 entry 的 `implicitEntry`/`entryHook`，EvmStrict `signalCapabilities` 与 admissions 表达式/AST）；另有 `cloud`/`cloud_db`（云轨产物）。链侧 `hook_plan` lowering 归链轨 TS 编译器，本仓不再产出 legacy 产物；Dock 文档走 `analyzeDock` 请求（`{dock, published}`）。
+- 编译器请求面：默认 target 为 `analyze`（共享校验 + 完整 hook IR：stages/hooks 的 `rawExpression`、`normalizedExpression`、AST 与 `dependencies`，出生信号集，EvmStrict `signalCapabilities` 与 admissions 表达式/AST）；另有 `cloud`/`cloud_db`（云轨产物）。链侧 `hook_plan` lowering 归链轨 TS 编译器，本仓不再产出 legacy 产物；Dock 文档走 `analyzeDock` 请求（`{dock, published}`）。
 - 证据正文不进语言层裁决；各轨存储边界（链上只应保存状态、哈希、metadata URI、签名、权限和事件）见实现层文档。
 - 示例来源是冻结的中性示例域（白皮书四原型 + 水果加工演示域）；产品层词表不进入本册。
 
@@ -156,7 +156,7 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 | `source` | `string` | 是 | 该阶段信号源标识（因果身份类，引用语义见 §5.2）。上限 36 字节、plain identifier——与 hook 标头 source 同限。 |
 | `executor` | `object` | 否 | 执行者配置：`supplierType`/`supplierID`/`selectableResource` 见下表；`supplierType: dock` 表示该阶段由 Dock 绑定的执行者承接（§7.3）。 |
 | `selectedStages` | `[]string` | 否 | 目标阶段引用列表，格式 `{stage}`，每项必须引用真实存在的阶段——当前阶段的执行者可代这些阶段做执行者选择/绑定（selector 语义）。 |
-| `sendSignals` | `[]object` | 否 | 本阶段发送信号声明，条目取 `{name, validWhen?, trigger?}` 三个键（loader 按闭集接收）。`name` 必填非空——裸局部名或 `stage.signal` 两段式自指全名，编译期归一为裸局部名，归一后不可重复。`trigger: true` 标记出生信号（§6）：出生信号的 `name` 须 ∈ 本阶段 `sendSignals`、同阶段内不重复；出生集编译期固定并进入 plan 承诺面。`validWhen` 可选：`[]string` 发射适格声明——每项是完整的 `{source}::{condition}`、全体项 header source 必须一致，缺省即无条件发射（空数组/空项拒绝）；列表语义见 §5.6。信号名取裸局部名或 `{stage}.{signal}` 两段式。 |
+| `sendSignals` | `[]object` | 否 | 本阶段发送信号声明，条目取 `{name, validWhen?, trigger?}` 三个键（loader 按闭集接收）。`name` 必填非空——裸局部名或 `stage.signal` 两段式自指全名，编译期归一为裸局部名，归一后不可重复。`trigger: true` 标记出生信号（§6）：出生信号的 `name` 须 ∈ 本阶段 `sendSignals`、同阶段内不重复；出生集编译期固定并进入 plan 承诺面。`validWhen` 可选：`[]string` 发射适格声明——每项是完整的 `{source}::{condition}`、全体项 header source 必须等于所属阶段的 `source`（禁止跨 source 的 `validWhen`），缺省即无条件发射（空数组/空项拒绝）；列表语义见 §5.6。信号名取裸局部名或 `{stage}.{signal}` 两段式。 |
 | `receiveSignals` | `map[string]string` | 否 | key 是通道名称（不可含 `.` 或 `#`、不含任何空白字符，长度 1-36 字节）；value 是同单 Hook DSL（§5）：只在本订单上下文求值，可引用本秩序内任意阶段已声明的信号；跨秩序事实由静态 Dock 的发射条件映射进本订单（§7）。投递的运行期语义见实现层文档（云轨 `uvp-cloud.md` §7）。 |
 | `fileResources` | `map[string]FileResource` | 否 | 文件资源句柄映射（字段形态见附录 A）。每个条目必须是对象且 `fileType` 为必填非空字符串；`fileType` 对 uvp-core **完全 opaque**——值域开放、不解释、不做类型分派。条目其余键是应用自定义 opaque payload，原样保留，core 不读取、不校验、不哈希。运行期四模式见 §4.1。 |
 
@@ -172,9 +172,9 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 
 - 阶段完全不给出 `executor` 块时是 **dynamic 阶段**：必须可被其他阶段通过 `selectedStages` 覆盖到，否则编译拒绝（"没有分配 executor，也没有被 selectedStages 引用"）。覆盖解决的是"无 executor 块"的可达性与选择权归属，不豁免静态执行者的 supplierID 存在性；链轨把它作为 dynamic 阶段接受，并在订单运行期由 selector 按单指派 supplierId（详见 `uvp-chain.md` §2）。
 - 出生集非空的阶段由静态 plain 执行者承接（`supplierType` 为 `individual`/`organization`、`supplierID` 非空）；出生权只落在这类执行者上。`supplierType: dock` 的阶段以 `receiveSignals` 声明绑定面，其执行者身份在运行期选定（§7.3）。
-- ⚠ **阶段物化门（onchain 接受域，core 裁决、`analyze` 内执行）**：uvp-core 在 `analyze` 的链轨接受域执行该闸——链上阶段只能由本阶段 order-trigger（出生槽位）hook 或 EMIT_READY hook 物化，每个阶段都必须具备至少一个物化路径：既无出生信号又无 `receiveSignals` 的阶段编译为零 hook、永不可物化且无恢复路径，整体拒绝；**不给出 `executor` 块的阶段是 dynamic 阶段，由自身 receive hook 的 EMIT_READY 物化**（TS lowering 产物带 dynamic executor 位 32，plan 不为它写 default supplier/route/binding），不再按“无 executor 即纯 watcher 死锁”拒绝，但执行者拓扑仍要求它被其他阶段的 `selectedStages` 从静态执行者可达，且运行期在首个信号前必须由 selector 指派 supplierId；`supplierType: dock` 阶段以静态 dock 执行者通过（其 hooks 为 EMIT_READY 并带 dock executor 位），cloud 产物面免检。**隐式 entry 例外**：全定义恰有一个「无 `receiveSignals`、无 `trigger`、声明 `str`、静态 plain 执行者、无 `selectedStages`」的首阶段时，`analyze` 返回 `implicitEntry` 与其合成 `str` 表达式的 `entryHook`（AST/`dependencies` 齐备），链轨 TS 以该 hook 物化该阶段；非法形状（多个隐式 entry、非首阶段、缺 `str`、dock/无执行者、`str` 带 `validWhen`、其他 hook 观察该出生键）由 `analyze` 具名拒绝。闸的完整叙述（EMIT_READY 编译形态、dynamic 阶段的 supplier 指派与 `StageSupplierNotAssigned`、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
+- ⚠ **阶段物化门（onchain 接受域，core 裁决、`analyze` 内执行）**：uvp-core 在 `analyze` 的链轨接受域执行该闸——链上阶段只能由本阶段 order-trigger（出生槽位）hook 或 EMIT_READY hook 物化，每个阶段都必须具备至少一个物化路径：既无出生信号又无 `receiveSignals` 的阶段编译为零 hook、永不可物化且无恢复路径，整体拒绝；**不给出 `executor` 块的阶段是 dynamic 阶段，由自身 receive hook 的 EMIT_READY 物化**（TS lowering 产物带 dynamic executor 位 32，plan 不为它写 default supplier/route/binding），不再按“无 executor 即纯 watcher 死锁”拒绝，但执行者拓扑仍要求它被其他阶段的 `selectedStages` 从静态执行者可达，且运行期在首个信号前必须由 selector 指派 supplierId；`supplierType: dock` 阶段以静态 dock 执行者通过共享校验（其 hooks 为 EMIT_READY 并带 dock executor 位），**链轨编译器额外要求每个 dock 阶段必须被至少一个静态执行者阶段的 `selectedStages` 覆盖**（否则链上永久不可选），cloud 产物面免检。闸的完整叙述（EMIT_READY 编译形态、dynamic 阶段的 supplier 指派与 `StageSupplierNotAssigned`、`submitSignal` 恒 revert `UnknownHook` 等链上后果）见 `uvp-chain.md`。
 - ⚠ 表达"谁有权指定别的阶段执行者"只看 `selectedStages`；阶段执行者类型只看 `executor.supplierType`。链轨的 selector 必须是 selector 阶段当单的 assigned supplier account（无 orderCreator 旁路），被指派 SID 必须 active（`isActiveSupplier`）。
-- ⚠ 对会创建新订单的阶段，显式出生声明面只有出生信号一条建单通道：`sendSignals[].trigger: true`（空订单号提交时出生，§6）；§4 的隐式 entry 形状是兼容的既有形状，不新增 DSL 字段、由首阶段 `str` 形状识别；dock 不创建订单（§7），`str`/`cmp` 等信号名在显式出生面没有内建建单语义，订单号不可自报（§1）。
+- ⚠ 对会创建新订单的阶段，出生声明面只有出生信号一条建单通道：`sendSignals[].trigger: true`（空订单号提交时出生，§6）；dock 不创建订单（§7），`str`/`cmp` 等信号名没有内建建单语义，订单号不可自报（§1）。
 
 onchain 实现层的附加接受域见 `uvp-chain.md`（uvp-eth 根）：
 
@@ -309,7 +309,7 @@ buyer::b.cmp & ~((a.cmp +5s) +10s)      # 否决位操作数内禁止嵌套延�
 | 否决位合法位 | 仅 `&` 直接子项 | 否定无位置限制——根位、`\|` 分支、`&` 子项、延时操作数内均合法（过滤只在一拍求值、不进调度，`(~A)+5s`、`(A & ~B)+5s` 均接受）；仍拒两点：`~` 操作数词表与钩子位相同（裸信号或延时表达式——双重否定 `~(~A)`、组合否定 `~(A&B)` 拒），嵌套延时禁令两档同闸（延时操作数内不得再含延时节点，`(A & ~(B+14d))+5s` 按嵌套延时报错） |
 | 相同项 | duration 字面量语法与 30 天上限、`~` 操作数词表、两段式寻址与身份闸、深度上限 | 同左 |
 
-**列表形态**：`validWhen` 是 `{source}::{condition}` 的完整表达式列表。逐项独立过筛（适格位是最宽容档，规则项内全覆盖）；全体项 header source 必须一致（否则编译拒绝——适格产物只携带单一 source 标签）；编译期折叠为一棵 AND（N=1 形态不变），依赖取并集，`rawExpression` 逐项以数组保留进 admissions 供诊断。缺键=无条件发射；空数组/空项拒绝（提示删键）。
+**列表形态**：`validWhen` 是 `{source}::{condition}` 的完整表达式列表。逐项独立过筛（适格位是最宽容档，规则项内全覆盖）；**禁止跨 source 的 `validWhen`**——全体项 header source 必须等于所属阶段的 `source`（否则编译拒绝 `D032`）；编译期折叠为一棵 AND（N=1 形态不变），依赖取并集，`rawExpression` 逐项以数组保留进 admissions 供诊断。缺键=无条件发射；空数组/空项拒绝（提示删键）。
 
 **跨轨叙述的拆词纪律**：「请求级门 → 吸收 → 适格」三层各自独立，勿混称为一个「适格」。「请求级门」指鉴权/签名/deadline/提交者授权一类入口闸（链轨 `submitSignal` 的入口闸；云轨 HTTP 入口与 HMAC 单 sender 语义）——链轨的发信权（assigned supplier account 校验）住在这一层，不在适格层；「吸收」指重复事实的 first-win 幂等（不再过任何筛）；「适格」仅指本节 `validWhen` 的发射过滤（pre-state 求值）。云轨的 validWhen 时间窗与链轨的 supplier account 发信权分属第 3/1 层、物理不同；两轨在第 2/3 层同位同序（见下段）。
 
@@ -474,7 +474,7 @@ dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单
 
 ### 7.6 字段闭集
 
-阶段与 Dock 按 §4/§7.2 的字段闭集书写：显式出生由 `sendSignals[].trigger: true` 表达，兼容的隐式 entry 形状（§4 物化门例外）由 `analyze` 识别并返回 `implicitEntry`/`entryHook`；跨秩序发射条件由独立 Dock 文档的 `spec.signalMap` 表达；dock 执行者由阶段 `executor.supplierType: dock` 表达；`triggerHookId` 等接受态字段由入口按闭集裁决。loader / analyze 按闭集接收，字段级细节以 §4/§7.2 为准。
+阶段与 Dock 按 §4/§7.2 的字段闭集书写：出生由 `sendSignals[].trigger: true` 显式声明；跨秩序发射条件由独立 Dock 文档的 `spec.signalMap` 表达；dock 执行者由阶段 `executor.supplierType: dock` 表达；`triggerHookId` 等接受态字段由入口按闭集裁决。loader / analyze 按闭集接收，字段级细节以 §4/§7.2 为准。
 
 ### 7.7 外部事实与秩序间上下文传播
 
@@ -702,7 +702,7 @@ spec:
 | `stage.selectedStages` | []string | 否 | `{stage}` 真实存在 | §4 |
 | `stage.fileWriters` | []string | 否 | 引用本定义其他阶段名（唯一、不自指）；stage 级文件写 allowlist，写权复用 writer 阶段当前 assigned supplier 的阶段授权 | §4/§4.1 |
 | `stage.sendSignals[].name` | string | 是 | 裸名或两段式自指全名，归一唯一 | §4 |
-| `stage.sendSignals[].validWhen` | []string | 否 | 发射适格（过滤档）；每项完整 `{source}::{condition}`，header source 全等 | §5.6 |
+| `stage.sendSignals[].validWhen` | []string | 否 | 发射适格（过滤档）；每项完整 `{source}::{condition}`，header source 必须等于所属阶段 `source`（禁止跨 source） | §5.6 |
 | `stage.sendSignals[].trigger` | bool | 否 | `true` = 出生信号；条目须 ∈ sendSignals、同阶段不重复、编译期固定 | §4/§6 |
 | `stage.receiveSignals` | map | 否 | key=通道名（1-36B，无 `.`/`#`/空白）；value=同单 hook | §4/§5/§6 |
 | `executor.supplierType` | string | 是 | individual/organization/dock | §4 |

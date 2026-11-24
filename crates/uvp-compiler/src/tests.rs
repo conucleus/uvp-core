@@ -1045,7 +1045,7 @@ fn multi_item_admission_requires_every_item_ready() {
 }
 
 #[test]
-fn admission_items_must_share_one_header_source() {
+fn admission_cross_source_valid_when_is_forbidden() {
     let mut definition = target_payment_definition();
     definition["spec"]["stages"]
         .as_array_mut()
@@ -1057,13 +1057,29 @@ fn admission_items_must_share_one_header_source() {
             "sendSignals": [{ "name": "mark" }],
             "executor": { "supplierType": "organization", "supplierID": "receipt-writer" }
         }));
+
     definition["spec"]["stages"][2]["sendSignals"][0]["validWhen"] =
-        json!(["payment::init.str", "seller::receipts.mark",]);
+        json!(["seller::receipts.mark"]);
+    for (target, result) in [
+        ("analyze", compile_zhixu_analysis(&definition)),
+        ("cloud", compile_cloud_artifact(&definition)),
+    ] {
+        let error = result.expect_err(&format!("single-item cross-source validWhen must fail ({target})"));
+        assert!(
+            error.to_string().contains(
+                "D032 settle.sendSignals[cmp].validWhen[0]: cross-source validWhen is forbidden (expected owning stage source payment, got seller)"
+            ),
+            "{target}: {error}"
+        );
+    }
+
+    definition["spec"]["stages"][2]["sendSignals"][0]["validWhen"] =
+        json!(["payment::init.str", "seller::receipts.mark"]);
     let error = compile_cloud_artifact(&definition)
-        .expect_err("items addressing different header sources must fail");
+        .expect_err("multi-item cross-source validWhen must fail");
     assert!(
         error.to_string().contains(
-            "D032 settle.sendSignals[cmp].validWhen: every item must address the same header source (payment); item 1 addresses seller"
+            "D032 settle.sendSignals[cmp].validWhen[1]: cross-source validWhen is forbidden (expected owning stage source payment, got seller)"
         ),
         "{error}"
     );
@@ -1229,63 +1245,8 @@ fn rejects_executor_supplier_id_over_uuid_length() {
     );
 }
 
-fn implicit_entry_definition() -> Value {
-    json!({
-        "apiVersion": "uvp/v0",
-        "kind": "Zhixu",
-        "metadata": { "name": "implicit_entry" },
-        "spec": {
-            "platform": { "type": "evm" },
-            "nucleation": { "id": "entry-core" },
-            "stages": [{
-                "name": "entry",
-                "source": "customer",
-                "sendSignals": [
-                    { "name": "str" },
-                    { "name": "cmp" }
-                ],
-                "executor": { "supplierType": "organization", "supplierID": "journey-executor" }
-            }]
-        }
-    })
-}
-
 #[test]
-fn analyze_carries_implicit_entry_and_synthesized_entry_hook() {
-    let analysis = compile_zhixu_analysis(&implicit_entry_definition())
-        .expect("the single implicit entry shape must analyze");
-    assert_eq!(analysis["schemaVersion"], json!("uvp.zhixuAnalysis.v1"));
-    assert_eq!(analysis["implicitEntry"], json!("entry"));
-    assert_eq!(
-        analysis["entryHook"]["rawExpression"],
-        json!("customer::entry.str")
-    );
-    assert_eq!(
-        analysis["entryHook"]["normalizedExpression"],
-        json!("customer::entry.str")
-    );
-    assert_eq!(
-        analysis["entryHook"]["ast"]["condition"],
-        json!({ "kind": "signal", "signalName": "entry.str" })
-    );
-    assert_eq!(
-        analysis["entryHook"]["dependencies"],
-        json!([{ "kind": "positive", "source": "customer", "signalName": "entry.str" }])
-    );
-    assert_eq!(
-        analysis["stages"][0]["triggers"],
-        json!([]),
-        "implicit entry is carried separately from explicit trigger rows"
-    );
-    assert_eq!(
-        analysis["stages"][0]["hooks"],
-        json!([]),
-        "the entry hook is reported once at the analysis top level"
-    );
-}
-
-#[test]
-fn explicit_trigger_stages_are_not_reported_as_implicit_entries() {
+fn explicit_trigger_stages_analyze_without_implicit_entry() {
     let definition = json!({
         "apiVersion": "uvp/v0",
         "kind": "Zhixu",
@@ -1302,62 +1263,37 @@ fn explicit_trigger_stages_are_not_reported_as_implicit_entries() {
         }
     });
     let analysis = compile_zhixu_analysis(&definition).expect("explicit trigger entry analyzes");
-    assert_eq!(analysis["implicitEntry"], Value::Null);
-    assert_eq!(analysis["entryHook"], Value::Null);
+    assert!(analysis.get("implicitEntry").is_none());
+    assert!(analysis.get("entryHook").is_none());
     assert_eq!(analysis["stages"][0]["triggers"], json!(["entry.born"]));
 }
 
 #[test]
-fn rejects_implicit_entry_str_with_valid_when() {
-    let mut definition = implicit_entry_definition();
-    definition["spec"]["stages"][0]["sendSignals"][0]["validWhen"] = json!(["customer::entry.cmp"]);
+fn stage_without_receive_signals_or_trigger_is_rejected_even_if_first_with_str() {
+    let definition = json!({
+        "apiVersion": "uvp/v0",
+        "kind": "Zhixu",
+        "metadata": { "name": "no_implicit_entry" },
+        "spec": {
+            "platform": { "type": "evm" },
+            "nucleation": { "id": "entry-core" },
+            "stages": [{
+                "name": "entry",
+                "source": "customer",
+                "sendSignals": [
+                    { "name": "str" },
+                    { "name": "cmp" }
+                ],
+                "executor": { "supplierType": "organization", "supplierID": "journey-executor" }
+            }]
+        }
+    });
     let error = compile_zhixu_analysis(&definition)
-        .expect_err("a validWhen on the implicit entry str birth fact must fail");
-    assert!(
-        error.to_string().contains("validWhen")
-            && error.to_string().contains("implicit entry stage"),
-        "unexpected error: {error}"
-    );
-}
-
-#[test]
-fn rejects_multiple_or_observed_implicit_entry_shapes() {
-    let mut multiple = implicit_entry_definition();
-    multiple["spec"]["stages"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "name": "second_entry",
-            "source": "customer",
-            "sendSignals": [{ "name": "str" }],
-            "executor": { "supplierType": "organization", "supplierID": "second-executor" }
-        }));
-    let error = compile_zhixu_analysis(&multiple)
-        .expect_err("two no-receiveSignals/no-trigger stages must fail");
+        .expect_err("a stage with no receiveSignals and no trigger must fail materialization");
     assert!(
         error
             .to_string()
-            .contains("at most one implicit entry stage"),
-        "unexpected error: {error}"
-    );
-
-    let mut observed = implicit_entry_definition();
-    observed["spec"]["stages"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "name": "observer",
-            "source": "customer",
-            "receiveSignals": { "OBSERVE": "customer::entry.str" },
-            "sendSignals": [{ "name": "seen" }],
-            "executor": { "supplierType": "organization", "supplierID": "observer-executor" }
-        }));
-    let error = compile_zhixu_analysis(&observed)
-        .expect_err("another stage observing the implicit entry birth fact must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("only the entry stage's own order-trigger hook may observe it"),
+            .contains("entry declares no receiveSignals and no trigger and compiles to zero hooks"),
         "unexpected error: {error}"
     );
 }

@@ -19,7 +19,7 @@
 | `〔范围裁决〕` 供应商身份注册与 Registry 分工 | 云侧 `local` supplier registry 维护运行时对象与回调 handler | 一个 `UVPIdentityRegistry` 含两个互不授权对方的命名空间：<br>1. supplier capability/account（SID 铸造、永久 1:1 account 绑定、`pending/active/suspended/revoked` 状态）是唯一执行身份；plan 绑定、patch/dock 指派与发信权都经 `accountOf` 解析且 SID 必须 `active`；<br>2. subjectId↔account 身份绑定只作信任存证，不参与状态机发信权校验。<br>`zhixu-registry`（链下库）：非用户面的 permissionless 数据层，只存 `ZhixuRecord`，登记不等于背书 | 两轨身份底座不同：云侧靠运营方库内档案，链侧靠 `UVPIdentityRegistry` 的 supplier 命名空间强注册 + `active` 校验；`zhixu-registry` 不承担状态机发信权 |
 | `〔范围裁决〕` 供应商状态映射 | 支持 `active` / `disabled` / `revoked` | 支持 `pending` / `active` / `suspended` / `revoked` | 状态映射：`active` ↔ `active`、`disabled` ↔ `suspended`、`revoked` ↔ `revoked`；链轨的 `pending`（自注册待激活态）在云轨无对应状态 |
 | `sendSignals` 裸信号名 | 接受 | 接受（编译为 `relation=current` 同单能力） | 两轨完全一致，无跨轨差异 |
-| `sendSignals[].validWhen`（发射适格声明） | 接受（过滤档解析进 `admissions` 数组，入口求值不通过返回类型化非重试拒绝） | 接受（折叠为 AND 指令计划、带 `HOOK_FLAG_ADMISSION` 位 8 进 `hooksHash`；不通过 revert `SignalAdmissionRejected`） | 语法与静态校验两轨一致；但见下方「Dock 内部 output 过 `validWhen` 筛」的实现不对称 |
+| `sendSignals[].validWhen`（发射适格声明） | 接受（过滤档解析进 `admissions` 数组，入口求值不通过返回类型化非重试拒绝；禁止跨 source，header source 必须等于所属阶段 `source`） | 接受（折叠为 AND 指令计划、带 `HOOK_FLAG_ADMISSION` 位 8 进 `hooksHash`；不通过 revert `SignalAdmissionRejected`；同左禁止跨 source） | 语法与静态校验（含禁止跨 source `D032`）两轨一致；但见下方「Dock 内部 output 过 `validWhen` 筛」的实现不对称 |
 | `〔实现不对称〕` 无锚延时（`(~A)+5s` 一类纯否定延时操作数） | 接受（Filter 档一拍求值下瞬时值良定义） | `commitPlan` 注册期拒绝（无锚延时在求值侧恒非 Ready；手工 plan 防线） | 编译接受域不同：云轨可注册，链轨不可注册 |
 | 阶段出生信号（`sendSignals[].trigger: true`） | 接受（`triggers` 投影进云产物；空 `order_id` + 出生信号建单） | 接受（每条出生信号合成 `SIGNAL` + `ORDER_TRIGGER_MINT / EMIT_READY` hook） | 两轨同语义：出生信号是唯一 DSL 出生声明面 |
 | 出生信号的出生适格（`validWhen`） | 接受（出生前按空订单上下文求值；不通过为类型化非重试拒绝） | 接受（创建订单前按空订单上下文求值；不通过 revert `SignalAdmissionRejected`） | 两轨同口径：出生写入与普通信号同过适格面 |
@@ -32,6 +32,7 @@
 | `〔范围裁决〕` 零 `receiveSignals` 且零出生信号的阶段（仅 `sendSignals`） | 接受（云产物无链上物化面，该阶段无 hook） | 拒绝（阶段物化门：零 hook 永不可物化，由 `uvp-core analyze` 校验） | 云轨接受、链轨拒绝；该形态在链上没有物化与恢复路径 |
 | 出生集非空阶段的成员与执行者校验 | 拒绝非法形状（共享 `uvp-core analyze` 校验） | 拒绝非法形状（同一共享 `uvp-core analyze` 校验） | 两轨同拒（单源共享校验，非轨差异） |
 | 多出生信号 / 与 dock 并存 | 接受（多条出生信号合法；dock 是 binding，不建单） | 接受（多条 trigger hook 合法；dock 阶段带 dock 标记，不建单） | 两轨同口径：读面必须显式枚举/选择出生线 |
+| `〔范围裁决〕` `supplierType: dock` 阶段的 `selectedStages` 覆盖 | 可选（云侧 `selector_stage_identifier` 可选，不要求静态执行者阶段覆盖） | 必填（链轨编译器要求每个 `dock` 阶段必须被至少一个静态执行者阶段的 `selectedStages` 覆盖，否则拒绝编译） | 云轨允许独立/未覆盖的 dock 阶段，链轨拒绝（无 selector 覆盖则链上永远无法调用 `selectStageDockSupplier`） |
 | `〔范围裁决〕` dynamic 阶段（无 `executor` 块、仅被 `selectedStages` 覆盖且声明 `receiveSignals`） | 接受（云 runtime 按云侧执行者解析承接） | 接受（须被静态执行者 `selectedStages` 可达；hook 带 `HOOK_FLAG_DYNAMIC_EXECUTOR` 位 32；运行期由 selector 在首信号前指派 `supplierId`，未指派 revert `StageSupplierNotAssigned`） | 两轨都接受该定义形态；运行期指派机制不同（云侧动态配置 vs 链上强注册 + 首信号前指派门） |
 | 同一 signalKey 被多个阶段/hook 观察 | 接受（依赖索引多对多，无阶段 owner） | 接受（依赖索引多对多，各阶段按自身物化位独立物化并宣告 `HookReady`） | 两轨同口径：多观察完全合法 |
 | `〔gas/DoS 边界〕` 依赖键总数 / 单键 hook 扇出 | 无此校验（云产物不设上限） | TS 预检 + 合约双闸（依赖键总数 ≤ 1024、单键 hook 扇出 ≤ 16） | 规模上限是链上防 DoS 成本边界，不改变语言语义 |

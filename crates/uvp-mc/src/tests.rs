@@ -861,7 +861,7 @@ fn multi_source_admission_header_is_a_typed_error_not_a_panic() {
     .expect_err("multi-source admission must be rejected, not panicked on");
     let message = error.to_string();
     assert!(
-        message.contains("multi-source") && message.contains("lane.out"),
+        message.contains("D032") && message.contains("cross-source validWhen is forbidden"),
         "error must name the unsupported shape: {message}"
     );
 }

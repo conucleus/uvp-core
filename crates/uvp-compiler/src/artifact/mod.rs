@@ -313,22 +313,13 @@ pub(crate) fn build_signal_admissions(
                 if !admission_issues.is_empty() {
                     return Err(CompilerError::Issues(admission_issues.join("; ")));
                 }
+                if parsed.source != entry.stage.source {
+                    return Err(CompilerError::Issues(format!(
+                        "D032 {}.sendSignals[{}].validWhen[{index}]: cross-source validWhen is forbidden (expected owning stage source {}, got {})",
+                        entry.stage_identifier, declared.name, entry.stage.source, parsed.source
+                    )));
+                }
                 parsed_items.push(parsed);
-            }
-            let header = parsed_items[0].source.clone();
-            if let Some((index, divergent)) =
-                parsed_items
-                    .iter()
-                    .enumerate()
-                    .skip(1)
-                    .find_map(|(index, parsed)| {
-                        (parsed.source != header).then(|| (index, parsed.source.clone()))
-                    })
-            {
-                return Err(CompilerError::Issues(format!(
-                    "D032 {}.sendSignals[{}].validWhen: every item must address the same header source ({header}); item {index} addresses {divergent} (the admission artifact carries a single source tag)",
-                    entry.stage_identifier, declared.name
-                )));
             }
             let mut admission = Map::new();
             admission.insert(
