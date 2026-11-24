@@ -4,8 +4,6 @@ use thiserror::Error;
 
 pub const DEFINITION_UID_DOMAIN: &str = "uvp:definition-uid:v2";
 
-pub const DOCK_UID_DOMAIN: &str = "uvp:dock-uid:v1";
-
 pub const HOOK_PLAN_HASH_DOMAIN: &str = "uvp:hook-plan-artifact:v1";
 
 pub const ONCHAIN_PLAN_HASH_DOMAIN: &str = "uvp:onchain-hook-plan-artifact:v1";
@@ -82,22 +80,6 @@ fn strip_definition_identity_fields(mut definition: Value) -> Value {
     definition
 }
 
-/// Dock identity strips display fields only: a dock document's labels and
-/// endpoint declarations are part of its committed content (only
-/// `metadata.name`/`metadata.annotations` are display-only, as documented in
-/// the dock artifact contract).
-fn strip_dock_display_fields(mut dock: Value) -> Value {
-    if let Some(metadata) = dock
-        .as_object_mut()
-        .and_then(|root| root.get_mut("metadata"))
-        .and_then(|metadata| metadata.as_object_mut())
-    {
-        metadata.remove("name");
-        metadata.remove("annotations");
-    }
-    dock
-}
-
 fn keccak_hex(preimage: &str) -> String {
     let digest = Keccak256::digest(preimage.as_bytes());
     format!(
@@ -122,20 +104,6 @@ pub fn derive_definition_uid(definition: &Value) -> Result<String> {
         strip_definition_identity_fields,
     )?;
     Ok(format!("zx-{}", &digest[2..34]))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DockIdentity {
-    pub dkid: String,
-    pub doc_hash: String,
-}
-
-pub fn derive_dock_identity(dock: &Value) -> Result<DockIdentity> {
-    let doc_hash = content_digest(DOCK_UID_DOMAIN, dock, strip_dock_display_fields)?;
-    Ok(DockIdentity {
-        dkid: format!("zd-{}", &doc_hash[2..34]),
-        doc_hash,
-    })
 }
 
 pub fn keccak256_utf8_hex(value: &str) -> String {
@@ -217,25 +185,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(uid, derive_definition_uid(&reordered).unwrap());
-    }
-
-    #[test]
-    fn dock_identity_keeps_labels_in_content() {
-        let dock = json!({
-            "apiVersion": "uvp/v0",
-            "kind": "Dock",
-            "metadata": {"name": "a_to_b", "labels": {"domain": "demo"}},
-            "spec": {"from": {"zhixu": "zx-a", "source": "a"}}
-        });
-        let relabeled = json!({
-            "apiVersion": "uvp/v0",
-            "kind": "Dock",
-            "metadata": {"name": "renamed", "labels": {"domain": "other"}},
-            "spec": {"from": {"zhixu": "zx-a", "source": "a"}}
-        });
-        let base = derive_dock_identity(&dock).unwrap();
-        let changed = derive_dock_identity(&relabeled).unwrap();
-        assert_ne!(base.doc_hash, changed.doc_hash);
-        assert_ne!(base.dkid, changed.dkid);
     }
 }

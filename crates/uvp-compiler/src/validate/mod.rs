@@ -90,27 +90,6 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                     executor.supplier_type
                 ));
             }
-            if executor.supplier_type == "dock" {
-                if executor
-                    .supplier_id
-                    .as_deref()
-                    .is_some_and(|supplier_id| !supplier_id.trim().is_empty())
-                {
-                    issues.push(format!(
-                        "spec.stages[{stage_index}].executor.supplierID is forbidden when supplierType is \"dock\": the dock executor identity is bound by a Dock link at runtime"
-                    ));
-                }
-                if stage.receive_signals.is_empty() {
-                    issues.push(format!(
-                        "spec.stages[{stage_index}] supplierType \"dock\" requires receiveSignals: the link attach conditions are evaluated against them"
-                    ));
-                }
-                if stage.has_trigger() {
-                    issues.push(format!(
-                        "spec.stages[{stage_index}] supplierType \"dock\" must not declare a non-empty trigger: trigger stages require a static individual/organization executor"
-                    ));
-                }
-            }
             if let Some(selectable) = &executor.selectable_resource {
                 let path = format!("spec.stages[{stage_index}].executor.selectableResource");
                 match selectable.as_object() {
@@ -261,9 +240,6 @@ pub(crate) fn validate_stage_executors(entries: &[StageEntry], bindings: &[Value
         let Some(executor) = entry.stage.executor.as_ref() else {
             continue;
         };
-        if executor.supplier_type == "dock" {
-            continue;
-        }
         let supplier_id = executor.supplier_id.as_deref().unwrap_or("");
         if supplier_id.trim().is_empty() {
             issues.push(format!(
@@ -510,7 +486,6 @@ pub(crate) fn valid_signal_declaration(value: &str) -> bool {
 fn has_static_executor(executor: Option<&ZhixuExecutor>) -> bool {
     match executor {
         None => false,
-        Some(executor) if executor.supplier_type == "dock" => true,
         Some(executor) => executor
             .supplier_id
             .as_deref()

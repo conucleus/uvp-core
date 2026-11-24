@@ -331,8 +331,7 @@
         "params": {
           "values": [
             "individual",
-            "organization",
-            "dock"
+            "organization"
           ],
           "trim": false,
           "corpus": "uvp-core/fixtures/closed-sets/closed-sets.v1.json（schemaVersion uvp.closedSets.v1；rust uvp-model SUPPLIER_TYPES 与 TS compiler SUPPLIER_TYPES 两侧测试对同一语料逐元素相等比对）",

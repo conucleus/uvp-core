@@ -18,7 +18,6 @@ struct Vectors {
     schema_version: String,
     uid_vectors: Vec<UidCell>,
     cases: Vec<CommitmentCase>,
-    dock_vectors: Vec<DockVectorCell>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,110 +160,6 @@ fn definition_uid_matches_every_pinned_cell() {
     );
 }
 
-#[test]
-fn dock_identity_and_resolved_ids_match_every_pinned_cell() {
-    let vectors: Vectors = serde_json::from_str(VECTORS).expect("commitment vectors should decode");
-    for cell in &vectors.dock_vectors {
-        let identity =
-            uvp_ir::derive_dock_identity(&cell.input.dock).expect("dock document should hash");
-        assert_eq!(
-            identity.dkid, cell.expected.dkid,
-            "{}: dkid diverged from the pinned vector",
-            cell.name
-        );
-        assert_eq!(
-            identity.doc_hash, cell.expected.doc_hash,
-            "{}: docHash diverged from the pinned vector",
-            cell.name
-        );
-        assert_eq!(
-            uvp_ir::derive_definition_uid(&cell.input.from).unwrap(),
-            cell.expected.from.zhixu,
-            "{}: from.zhixu diverged from the pinned vector",
-            cell.name
-        );
-        assert_eq!(
-            uvp_ir::derive_definition_uid(&cell.input.to).unwrap(),
-            cell.expected.to.zhixu,
-            "{}: to.zhixu diverged from the pinned vector",
-            cell.name
-        );
-        assert_eq!(
-            cell.expected.from.source_id,
-            uvp_ir::keccak256_utf8_hex(&cell.expected.from.source),
-            "{}: from.sourceId is not keccak(source)",
-            cell.name
-        );
-        assert_eq!(
-            cell.expected.to.stage_id,
-            uvp_ir::keccak256_utf8_hex(&cell.expected.to.stage),
-            "{}: to.stageId is not keccak(stage)",
-            cell.name
-        );
-        assert_eq!(
-            cell.expected.to.source_id,
-            uvp_ir::keccak256_utf8_hex(&cell.expected.to.source),
-            "{}: to.sourceId is not keccak(source)",
-            cell.name
-        );
-        for output in &cell.expected.outputs {
-            assert_eq!(
-                output.stage_id, cell.expected.to.stage_id,
-                "{}: output stageId diverged from to.stageId",
-                cell.name
-            );
-            assert_eq!(
-                output.source_id, cell.expected.to.source_id,
-                "{}: output sourceId diverged from to.sourceId",
-                cell.name
-            );
-            assert_eq!(
-                output.signal_id,
-                uvp_ir::keccak256_utf8_hex(&format!(
-                    "{}.{}",
-                    cell.expected.to.stage, output.signal
-                )),
-                "{}: output signalId is not keccak(to.stage.signal)",
-                cell.name
-            );
-            assert_eq!(
-                output.target_order_relation, 0,
-                "{}: output targetOrderRelation must be 0 (current order)",
-                cell.name
-            );
-            for atom in &output.atoms {
-                assert_eq!(
-                    atom.source, cell.expected.from.source,
-                    "{}: atom source diverged from from.source",
-                    cell.name
-                );
-                assert_eq!(
-                    atom.source_id,
-                    uvp_ir::keccak256_utf8_hex(&atom.source),
-                    "{}: atom sourceId is not keccak(source)",
-                    cell.name
-                );
-                assert_eq!(
-                    atom.stage_id,
-                    uvp_ir::keccak256_utf8_hex(&atom.stage),
-                    "{}: atom stageId is not keccak(stage)",
-                    cell.name
-                );
-                assert_eq!(
-                    atom.signal_id,
-                    uvp_ir::keccak256_utf8_hex(&format!("{}.{}", atom.stage, atom.signal)),
-                    "{}: atom signalId is not keccak(stage.signal)",
-                    cell.name
-                );
-                assert_eq!(
-                    atom.target_order_relation, 0,
-                    "{}: atom targetOrderRelation must be 0 (current order)",
-                    cell.name
-                );
-            }
-        }
-    }
-}
 
 #[test]
 fn plan_hash_preimages_rehash_to_every_pinned_cell() {

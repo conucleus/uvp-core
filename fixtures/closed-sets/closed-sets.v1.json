@@ -1,5 +1,5 @@
 {
   "schemaVersion": "uvp.closedSets.v1",
   "note": "链上承诺闭集词表的跨语言钉死语料：supplierTypes 是引擎解释面（决定 dock/dynamic hook flags），由 Rust（uvp-model）与 TS（compiler）两侧测试对同一份文件逐元素相等比对。fileType 的值域开放，不属于闭集词表。改本文件必须同改两侧实现。",
-  "supplierTypes": ["individual", "organization", "dock"]
+  "supplierTypes": ["individual", "organization"]
 }

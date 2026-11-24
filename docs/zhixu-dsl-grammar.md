@@ -9,7 +9,7 @@
 
 本册按 `uvp-core` 当前代码边界整理，以以下 crate 为准：
 
-- `uvp-core/crates/uvp-model/src/lib.rs`（定义模型与 strict 形状）与 `uvp-core/crates/uvp-compiler/src/dock.rs`（dock source/linker 权威）
+- `uvp-core/crates/uvp-model/src/lib.rs`（定义模型与 strict 形状；Dock 已从协议内核移除）
 - `uvp-core/crates/uvp-compiler/src/validate/`（定义级校验权威门，随 Rust compile 裁决；onchain 产物线的阶段物化门在同模块；sendSignals/validWhen 的适格门在同 crate 的 `artifact/mod.rs`）
 - `uvp-core/crates/uvp-hook-dsl`（§5 表达式语法/语义/求值的唯一解析器与求值器）
 - `uvp-core/crates/uvp-ir`（§2.1 定义 uid 派生单源）

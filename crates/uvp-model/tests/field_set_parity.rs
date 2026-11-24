@@ -8,8 +8,8 @@
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use uvp_model::{
-    DockDefinition, DockFrom, DockSpec, DockTo, Nucleation, ObjectMeta, ZhixuDefinition,
-    ZhixuExecutor, ZhixuPlatform, ZhixuSendSignal, ZhixuSpec, ZhixuStage,
+    Nucleation, ObjectMeta, ZhixuDefinition, ZhixuExecutor, ZhixuPlatform, ZhixuSendSignal,
+    ZhixuSpec, ZhixuStage,
 };
 
 const FIELDS: &str = include_str!("../../../fixtures/closed-sets/fields.v1.json");
@@ -81,30 +81,7 @@ fn struct_field_sets_match_the_pinned_corpus() {
         },
     };
 
-    let dock = DockDefinition {
-        api_version: "uvp/v0".to_string(),
-        kind: "Dock".to_string(),
-        metadata: ObjectMeta {
-            name: "demo_dock".to_string(),
-            labels: [("k".to_string(), "v".to_string())].into_iter().collect(),
-            annotations: [("a".to_string(), "b".to_string())].into_iter().collect(),
-        },
-        spec: DockSpec {
-            from: DockFrom {
-                zhixu: "zx-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-                source: "buyer".to_string(),
-            },
-            to: DockTo {
-                zhixu: "zx-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-                stage: "attach".to_string(),
-            },
-            signal_map: [("started".to_string(), "intake.execute".to_string())]
-                .into_iter()
-                .collect(),
-        },
-    };
-
-    let cases: [(&str, BTreeSet<String>); 12] = [
+    let cases: [(&str, BTreeSet<String>); 8] = [
         ("root", keys_of(&root)),
         ("metadata", keys_of(&root.metadata)),
         ("spec", keys_of(&root.spec)),
@@ -119,10 +96,6 @@ fn struct_field_sets_match_the_pinned_corpus() {
             "executor",
             keys_of(root.spec.stages[0].executor.as_ref().unwrap()),
         ),
-        ("dockRoot", keys_of(&dock)),
-        ("dockSpec", keys_of(&dock.spec)),
-        ("dockFrom", keys_of(&dock.spec.from)),
-        ("dockTo", keys_of(&dock.spec.to)),
     ];
     for (group, actual) in cases {
         assert_eq!(

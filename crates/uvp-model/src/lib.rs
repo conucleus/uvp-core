@@ -146,40 +146,8 @@ pub struct ZhixuExecutor {
     pub selectable_resource: Option<Value>,
 }
 
-pub const SUPPLIER_TYPES: [&str; 3] = ["individual", "organization", "dock"];
+pub const SUPPLIER_TYPES: [&str; 2] = ["individual", "organization"];
 
 pub fn is_known_supplier_type(value: &str) -> bool {
     SUPPLIER_TYPES.contains(&value)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockDefinition {
-    pub api_version: String,
-    pub kind: String,
-    pub metadata: ObjectMeta,
-    pub spec: DockSpec,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockSpec {
-    pub from: DockFrom,
-    pub to: DockTo,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub signal_map: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockFrom {
-    pub zhixu: String,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DockTo {
-    pub zhixu: String,
-    pub stage: String,
 }

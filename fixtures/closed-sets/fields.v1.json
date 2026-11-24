@@ -8,9 +8,5 @@
   "nucleation": ["id", "params"],
   "stage": ["name", "source", "executor", "selectedStages", "sendSignals", "receiveSignals", "fileResources", "fileWriteTargets"],
   "sendSignalEntry": ["name", "validWhen", "trigger"],
-  "executor": ["supplierType", "supplierID", "selectableResource"],
-  "dockRoot": ["apiVersion", "kind", "metadata", "spec"],
-  "dockSpec": ["from", "to", "signalMap"],
-  "dockFrom": ["zhixu", "source"],
-  "dockTo": ["zhixu", "stage"]
+  "executor": ["supplierType", "supplierID", "selectableResource"]
 }
