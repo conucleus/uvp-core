@@ -13,10 +13,10 @@
 
 - **事实**：已经发生、不可改写的信号；每条事实最终锚定到一个订单。
 - **提交管线**：`(stage, signal, orderId?, payload, resources, auth)` 的成员检查、上下文确定与适格求值。
-- **出生判定**：空订单号 + 出生信号（`sendSignals` 条目标记 `trigger: true`）→ 从出生事实派生订单号、建档，并把该信号写为首条事实。
+- **出生判定**：空订单号 + 出生信号（`sendSignals` 条目标记 `trigger: true`）→ 运行期生成订单号、建档，并把该信号写为首条事实。
 - **跨秩序协作**：只有静态 Dock 一条通道（独立 `kind: Dock` 文档声明 A→B 发射条件；B 侧目标阶段声明 `executor.supplierType: dock`，运行期建立 binding）；同秩序内的事实连接用同单 hook。
 
-一句话口径：`trigger: true` 是 `sendSignals` 条目上的出生标记；空订单号 + 出生信号建单；带订单号的出生信号是普通信号；非出生信号的空订单号拒绝；出生先过 `validWhen`（空订单上下文）。order 号一律从出生事实纯函数派生，调用方不可自报。
+一句话口径：`trigger: true` 是 `sendSignals` 条目上的出生标记；空订单号 + 出生信号建单；带订单号的出生信号是普通信号；非出生信号的空订单号拒绝；出生先过 `validWhen`（空订单上下文）。订单号由运行期生成、调用方不可自报；出生按调用方显式提供的幂等键去重，载荷不参与订单号派生。
 
 指令集为 SIGNAL / NOT / AND / OR / DELAY：携带集外指令的 plan 在 `commitPlan` 注册边界响亮拒绝。DSL 语法面只有 `sendSignals[].trigger`、同单 hook 与独立 Dock 文档声明。
 
@@ -31,24 +31,24 @@
 | 提交形态 | 信封特征 | 结果 |
 |---|---|---|
 | 订单内提交 | 携带 `order_id`，且订单已存在 | 落在该订单，按 first-win 吸收 |
-| 出生提交 | `order_id` 为空，且 `signal` 是本阶段出生信号 | 从出生事实派生订单号、登记/创建订单，该信号成为订单首条事实 |
+| 出生提交 | `order_id` 为空，且 `signal` 是本阶段出生信号 | 运行期生成订单号、登记/创建订单，该信号成为订单首条事实 |
 | 空单提交（非出生信号） | `order_id` 为空，`signal` 不是本阶段出生信号 | 具名拒绝（如 `NotTriggerSignal`） |
 
-出生提交在提交管线上完成出生判定：出生事实自身即新订单的首条事实。同一出生事实重试幂等——同一定义、stage、signal 与载荷/幂等键得到同一订单号。
+出生提交在提交管线上完成出生判定：出生事实自身即新订单的首条事实。同一出生事实按调用方显式提供的幂等键重试幂等：同一幂等键不会新建第二张订单（云轨返回既有 `order_id`；链轨 revert `DuplicateTriggerKey` 并携带既有 `order_id`），载荷不进入订单号派生。
 
 ### 1.2 事实纪律三元组（不变量）
 
 无论提交形态，一条事实必须具备：
 
-1. **去重身份**（first-win，重复吸收）：订单内事实按 `(定义, order_id, signal_name)` 去重；出生提交的去重身份由订单号派生元组承载（同一出生事实恒同订单号）。
+1. **去重身份**（first-win，重复吸收）：订单内事实按 `(定义, order_id, signal_name)` 去重；出生提交按显式幂等键去重（链轨 `(submitter, idempotencyKey)`，云轨 `(zhixu_id, sender_id, fact_key)`）。
 2. **事实标签**（全序 + tie-break）：云侧 `ready_at + seq`，链侧 `(txHash, logIndex)`。一切投影按事实标签排序，不按到达时间。
-3. **溯源**：发送方域/单/阶段/信号；出生提交携带的载荷与可选 `factKey` 进入订单号派生，供幂等重试与审计使用。
+3. **溯源**：发送方域/单/阶段/信号；出生提交携带的幂等键进入去重映射，供重试与审计使用。
 
-**可重放是唯一不变量**：给定全部事实 + 不可变定义 + Dock 声明与 binding 记录，重放必然收敛到同一订单集合。订单上下文与事实成立解耦：空订单号的出生提交先派生订单，再写事实。
+**可重放是唯一不变量**：给定全部事实 + 不可变定义 + Dock 声明与 binding 记录，重放必然收敛到同一订单集合。订单上下文与事实成立解耦：空订单号的出生提交先创建订单，再写事实。
 
 ### 1.3 事实归属的语义结论
 
-- 事实保持自己的家；出生是从出生事实**派生新身份**并记录溯源关联，不移动事实、不产生双重身份。
+- 事实保持自己的家；出生是新建订单身份并把出生事实写为首条事实，不移动事实、不产生双重身份。
 - 一条出生事实至多派生一个订单号；跨出生信号的并发协调归调用方/执行者，引擎只保证"同一出生事实同一订单号"。
 - 订单只出现在"没有它就无法路由、无法担责"的地方。
 
@@ -70,7 +70,7 @@
 2. **确定上下文**：`orderId` 为空 → **空订单上下文**（无 facts/files）；`orderId` 非空 → 订单必须存在，不存在即拒绝；随后在订单上下文求值。
 3. **适格求值**：signal 声明了 `validWhen` 时按语言手册 §5.6 求值；不通过即拒绝（链轨 revert `SignalAdmissionRejected`，云轨类型化非重试拒绝）。出生信号在空订单上下文求值：没有既成 facts/files，否定条件为真、存在与延时成熟条件为假；仅含存在依赖的适格形态因此不会 Ready。
 4. **带单提交**：`orderId` 非空时是普通信号；信号是否属于出生集不影响其普通身份。
-5. **出生提交**：`orderId` 为空且该信号不是本阶段出生信号 → 拒绝（具名 `NotTriggerSignal` 一类入口错误）；该信号是出生信号 → 从出生事实派生订单号、登记/创建订单，并把该信号写为该订单首条事实，返回订单号。
+5. **出生提交**：`orderId` 为空且该信号不是本阶段出生信号 → 拒绝（具名 `NotTriggerSignal` 一类入口错误）；该信号是出生信号 → 运行期生成订单号、登记/创建订单，并把该信号写为该订单首条事实，返回订单号。
 6. **并发**：跨出生信号的并发协调归调用方/执行者；引擎只保证"同一出生事实同一订单号"。
 
 各轨入口错误名与字段级校验见实现层文档；语言层要求拒绝具名、可定位到 stage/signal。
@@ -91,7 +91,7 @@ Dock 是 **B 侧声明的静态 A→B 时间窗订阅**：B 侧发布独立 `kin
 2. **dock 执行者阶段**：目标阶段以 `executor.supplierType: dock` 承接，并用 `receiveSignals` 声明绑定面；dock 执行者身份在运行期由订单在挂接 stage 一次性选定（stage patch），选中后固定，换选在运行期响亮拒绝。dock 阶段不进 plan 级执行者路由与候选集。
 3. **binding**：`dock_link` 文件项（值 = A 订单号，canonical `0x`+64 hex）写入/改写即建立/切换 binding；一个（B 订单, 挂接 stage）至多一个当前 binding。链轨 `bindingId` 为 **7 个 32-byte word**：`keccak256(abi.encode("uvp.dock.binding_id.v1", dkid, toPlanId, toOrderId, toStageId, fromPlanId, fromOrderId))`，身份维度就是这 7 个 word；`dock_link` 的 `contentHash` 只在 poke 时认证载荷正文，不匹配即 `DockBindingContentHashMismatch`，binding 的事件、view 与事实 provenance 都以 bindingId 为准。
 4. **A/B 窗口与发射**：A 窗口 = `signalMap` 表达式在 A 订单事实上的求值（锚点/延时语义同文法手册 §5.4）；B 窗口 = 输出信号 `validWhen` 在发射前的 pre-state 复核（文法手册 §5.6）。A/B 窗口交集时发射 B 输出信号；逐 output first-win（已存在的 B 事实不覆盖），发射事实的 provenance 携带 binding id。链轨 `pokeDockBinding` permissionless；窗口当前值由读面（`getStageDockBinding`/`dockOutputWindow`、`GET /v0/dock-bindings`）按当前时刻 live 求值，不持久化窗口历史。
-5. **订单身份与 binding**：订单由出生通道创建、订单号恒由出生事实派生（§3）；Dock 在既有 B 订单上以 binding 承载发射，A 订单保持原身份。异常承接走治理分叉，与 dock 无关。
+5. **订单身份与 binding**：订单由唯一出生入口创建、订单号由运行期生成（§3）；Dock 在既有 B 订单上以 binding 承载发射，A 订单保持原身份。异常承接没有协议内第二建单通道，与 dock 无关。
 6. **回放**：binding 状态由（dock 执行者选择记录、`dock_link` 文件项、poke/发射事实）重建，不依赖链下持久 binding 表；回放必须收敛到同一 binding 集合与同一 B 事实集合。
 7. **对等原则与单源**：dock 双方是秩序对等关系（§2.1 乐高原则）；一条 Dock 只引用一个 `from.source` 下的 atoms；终态只由本地阶段/订单结束驱动。
 
@@ -123,18 +123,17 @@ Dock 是 **B 侧声明的静态 A→B 时间窗订阅**：B 侧发布独立 `kin
 
 ## 3. 出生层（Birth）
 
-链轨运行期共三条出生通道：outside-trigger（以出生信号开放提交）、order-link 派生建单、治理分叉 `forkOrder`。DSL 声明面只有出生信号一条：`sendSignals[].trigger: true`；Dock 协作在既有 B 订单上以 binding 承载发射（§2.4）。
+链轨运行期只有一条出生入口：`UVPStateMachine.submitSignal` 以空 `orderId` 提交出生信号（`sendSignals[].trigger: true` 合成 trigger hook）。Dock 协作在既有 B 订单上以 binding 承载发射（§2.4）。
 
 | 通道 | 声明 | 机制 | 保证 |
 |---|---|---|---|
-| 出生信号（DSL 声明，两轨） | `sendSignals[].trigger: true`（唯一 DSL 出生声明点） | 空订单号 + 出生信号提交：从出生事实纯函数派生订单号，登记/创建订单，把该信号写为首条事实；幂等重试得到同一订单号 | **无需知情者的存在性**：任一授权提交者以同一出生事实均可幂等建单 |
-| 链轨运行期出生通道（定义面不声明） | order-link 模块入口 / 治理分叉 `forkOrder` | order-link 派生建单；fork 从父单历史重放带血缘的新单（各自独立派生域） | 订单号由各通道纯函数派生、调用方不可自报；详见 `uvp-chain.md` |
+| 出生信号（DSL 声明，两轨唯一出生入口） | `sendSignals[].trigger: true` | 空订单号 + 出生信号提交：运行期生成订单号（链轨 `_newOrderId`，云轨随机 UUID），登记/创建订单，把该信号写为首条事实；显式幂等键重试不新建第二张订单（云轨复用既有 `order_id`；链轨 revert `DuplicateTriggerKey` 并携带既有 `order_id`） | **无需知情者的存在性**：出生阶段当前生效的 assigned supplier account 以同一幂等键均可幂等建单 |
 
 - Dock 协作在既有 B 订单上以 binding 承载发射（§2.4）。
 - `str` 是调用方约定的信号名；订单创建语义只由出生信号承载。
-- 出生事实的派生元组显式包含可选的 `factKey`（保留后端既有 FactKey 重试语义），同一出生事实重试幂等。
-- 一个出生事实至多派生一个订单号；跨出生信号的并发协调归调用方/执行者。
-- 出生事实的溯源关系由事实自身携带的载荷与订单号派生承载；血缘边章唯一、first-win、落定后不可改写。
+- 出生幂等键由调用方显式提供（链轨 `idempotencyKey`、云轨 `fact_key`），载荷不参与订单号派生。
+- 一个出生事实至多对应一个订单号；跨出生信号的并发协调归调用方/执行者。
+- 出生事实的溯源关系由提交者、阶段、信号与显式幂等键承载；first-win 落定后不可改写。
 
 ---
 
@@ -154,7 +153,7 @@ Dock 是 **B 侧声明的静态 A→B 时间窗订阅**：B 侧发布独立 `kin
   source: match
   executor: { supplierType: organization, supplierID: juice-market-executor }
   receiveSignals:
-    PAIR_READY: "match::exchange.surplus_noted & match::exchange.demand_noted"
+    PAIR_READY: "match::exchange.surplus_noted & exchange.demand_noted"
   sendSignals: [{name: surplus_noted}, {name: demand_noted}, {name: deal}, {name: err}]
 
 # 同单推进：普通 hook（订单上下文，引用本订单内其他阶段的信号）
@@ -221,14 +220,14 @@ Stage 字段总表（当前态）：
 ## 6. 回放口径
 
 - 回放基线：全部事实（订单内事实 + 出生提交事实）+ 不可变定义 + Dock 声明与 binding 记录（dock 执行者选择、`dock_link`、发射事实）。
-- 出生信号：事实重放 → 纯函数派生订单号 → 同一订单集合，不漂移；同一出生事实重试不产生新单。
+- 出生信号：事实重放 → 运行期生成的订单号由幂等键映射稳定复现 → 同一订单集合，不漂移；同一出生事实重试不产生新单。
 - hook 判决（普通表达式）：维持现有 hook_state 语义层（init/wait/ready/cxl，终态不可变）。
 - 投递层（重试/退避/dead/复活）只服务普通执行者投递；dock 面不经 `ExecuteCommand`（由 Dock 声明与 binding 驱动），其错误面见 §2.6。
 
 ## 7. 版本与兼容
 
 - 版本口径：协议制品统一为 `uvp.<artifact>.v<N>` 点号风格；语义/AST/语料/部署清单为 v1。当前语义批的产物面：`uvp.semantic.v1`、`uvp.cloudAst.v1`、`uvp.cloudArtifact.v1`、`uvp.zhixuAnalysis.v1`、`uvp.hookPlan.v1`、`uvp.onchainHookPlan.v1`、`uvp.dock.v1`、`uvp.dockBinding.v1`。同一语义只存在当前版本。
-- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住上述 artifactSchemas、合约 ABI fixture（stateMachine `0.21`、stagePatch `0.10`、lens `0.7`、dockRegistry `0.1` 等）、EIP-712 domains（productSubmit `0.19`、orderLink `0.9`、derivedSignal `0.7`、stageSupplierPatch `0.5`）和 `uvp-eth.addresses.v1`；合约 plan 承诺（publisher、hooksHash、capabilitiesRoot、supplierBindingsRoot、birthAuthorizer、deadline）与复合 `(planId, orderId)` 身份以矩阵和 fixtures 为准。
+- 兼容矩阵 `uvp-stack.v1.json` 是当前版本真相：它钉住上述 artifactSchemas、合约 ABI fixture（全部 `0.1`，含 stateMachine、planRegistration、identityRegistry、stagePatch、lens、dockRegistry 等）、EIP-712 domains（productSubmit `1`、derivedSignal `1`、stageSupplierPatch `1`）和 `uvp-eth.addresses.v1`；合约 plan 承诺为六字段（publisher、hooksHash、capabilitiesRoot、supplierBindingsRoot、fileWritersHash、deadline），plan runtime hash 域为 `uvp.plan.runtime.v8`，复合 `(planId, orderId)` 身份以矩阵和 fixtures 为准。
 - 语法面只有 `sendSignals[].trigger`、同单 hook 与独立 Dock 文档声明。
 
 ## 8. 当前模型裁决
@@ -236,9 +235,9 @@ Stage 字段总表（当前态）：
 | 裁决 | 结论 |
 |---|---|
 | 出生声明点 | `sendSignals[].trigger: true` 是唯一 DSL 出生声明面；条目 ∈ `sendSignals`、无重复、编译期固定 |
-| 出生通道 | 空订单号 + 出生信号出生；空订单号 + 非出生信号拒绝；带订单号的出生信号是普通信号；dock 不建单（链轨运行期另有 order-link/fork） |
+| 出生通道 | 空订单号 + 出生信号出生；空订单号 + 非出生信号拒绝；带订单号的出生信号是普通信号；dock 不建单（链轨同样只有 `submitSignal(orderId=0)` 一条入口） |
 | 出生适格 | 出生写入前在空订单上下文求值 `validWhen`；不通过即拒绝（链轨 `SignalAdmissionRejected`） |
-| 订单号 | 由出生事实纯函数派生，调用方不可自报；派生元组包含可选 `factKey` 以保证重试幂等 |
+| 订单号 | 由运行期生成（链轨 `_newOrderId`，云轨随机 UUID），调用方不可自报；显式幂等键保证重试幂等，载荷不进入订单号派生 |
 | 出生执行者 | 必须静态 plain 执行者（非 dock、supplierID 非空）；出生权不随 dock 绑定或运行时 patch 漂移 |
 | 同域事实连接 | 只用同单 hook：hook 在订单上下文求值，可引用本秩序任意阶段的信号 |
 | 跨秩序 | 只有静态 Dock：独立 `kind: Dock` 文档 + 目标阶段 `supplierType: dock`；不新增 `parents` |

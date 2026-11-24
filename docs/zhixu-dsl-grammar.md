@@ -20,7 +20,7 @@
 
 ## 0. 版本、范围与阅读路径
 
-- 覆盖对象：`kind: Zhixu` 与 `kind: Dock`（独立文档，§7）。云轨另有运行时注册对象 `kind: Supplier`（形态与机制见 `uvp-cloud.md`）；链上轨道没有 `Supplier` 顶层对象——供应商档案、KYC/KYB、handler、能力标签与审核材料都是 Store 链下数据，链上只有 `UVPSupplierRegistry` 记录的 SID（UUID 编码的 `bytes32`）、其唯一 supplier account 与 `pending/active/suspended/revoked` 状态（见 `uvp-chain.md` 与 `docs/engineering/supplier-identity-model.md`）。
+- 覆盖对象：`kind: Zhixu` 与 `kind: Dock`（独立文档，§7）。云轨另有运行时注册对象 `kind: Supplier`（形态与机制见 `uvp-cloud.md`）；链上轨道没有 `Supplier` 顶层对象——供应商档案、KYC/KYB、handler、能力标签与审核材料都是 Store 链下数据，链上只有 `UVPIdentityRegistry` 的 supplier 命名空间记录的 SID（UUID 编码的 `bytes32`）、其唯一 supplier account 与 `pending/active/suspended/revoked` 状态（见 `uvp-chain.md` 与 `docs/engineering/supplier-identity-model.md`）。
 - 编译器注册类型为：`apiVersion: uvp/v0` + `kind: Zhixu`（大小写敏感）。
 - Dock 是独立文档（`apiVersion: uvp/v0` + `kind: Dock`），与 `kind: Zhixu` 并列发布、由 `uvp-core analyzeDock` 单独编译；字段壳为 `apiVersion`/`kind`/`metadata`/`spec`，未知字段按响亮拒绝（uvp-core `deny_unknown_fields` 口径，各轨提交入口的枚举闭集见实现层文档）。
 - 产物版本：本册对应同一语义批的中性分析与产物面为 `uvp.zhixuAnalysis.v1`（定义级分析）、`uvp.cloudAst.v1`（云侧 hook AST）、`uvp.cloudArtifact.v1`（云侧编译产物）、`uvp.hookPlan.v1`（链侧 hook plan）与 `uvp.onchainHookPlan.v1`（链上注册产物），Dock 文档产物为 `uvp.dock.v1`、binding 读面为 `uvp.dockBinding.v1`；同一语义只存在当前版本。
@@ -60,13 +60,13 @@
 | 问题 | 机制 | 权威章 |
 |---|---|---|
 | 事实怎么流到我的订单上 | **同单 hook**：`receiveSignals` 表达式只在本订单上下文内求值，可引用本秩序内任意阶段已声明的信号（头 source 只是本域因果身份类）；跨秩序没有直连，B 侧以静态 Dock 声明 A 事实到 B 信号的发射条件（§7） | §5、§6、§7 |
-| 新订单从哪里来 | 订单创建在 DSL 声明面只有出生信号一条通道：`sendSignals[].trigger: true` 的信号以空订单号提交时出生新单（§6.1–§6.4）；Dock 协作在既有订单上以 binding 承载发射（§7）。链轨运行期另有 order-link/fork 出生通道，见实现层文档。订单号由运行期生成（随机/nonce），调用方不可自报；出生去重依赖必填的显式幂等键（`fact_key` / `idempotencyKey`） | §6、§7 |
+| 新订单从哪里来 | 订单创建在 DSL 声明面只有出生信号一条通道：`sendSignals[].trigger: true` 的信号以空订单号提交时出生新单（§6.1–§6.4）；Dock 协作在既有订单上以 binding 承载发射（§7）。链轨运行期同样只有 `submitSignal(orderId=0)` 这一条出生入口。订单号由运行期生成（链轨为合约 nonce 派生的 `orderId`，云轨为随机 UUID），调用方不可自报；出生去重依赖必填的显式幂等键（`fact_key` / `idempotencyKey`） | §6、§7 |
 | 阶段的执行者是谁 | 定义静态 `supplierID`（plain），或声明 `supplierType: dock` 由运行期在挂接 stage 一次性选定 dock supplier 并终身钉住；订单级 stage→SID 指派/交接不承载 dock 绑定；出生阶段只允许静态 plain 执行者（§4/§7.3，各轨 patch 面见实现层文档） | §4、§7.3 |
 
 两条边界一句话（全册唯一表述，各处只留指针）：
 
 - **"跨 source 类" ≠ "跨秩序"**：hook 的头 source 与条件里的 `stage.signal` 都只在本域解析；跨秩序事实级联只有静态 Dock 订阅一条通道。
-- **外部事实的唯一入口是执行者自发 signal**（链上 = source 阶段 assigned supplier 的 supplier account 以 EIP-712 签名提交 signal，或由 relayer 经 `submitSignalFor` 代付；空订单号的出生提交同样是一条签名 signal，提交权由计划 `birthAuthorizer` 承诺）；任何声明本身都不会发送 signal，系统不主动向外部收集事实。
+- **外部事实的唯一入口是执行者自发 signal**（链上 = source 阶段 assigned supplier 的 supplier account 以 EIP-712 签名提交 signal，或由任意 relayer 转发该签名；空订单号的出生提交同样是一条签名 signal，提交权由出生阶段当前生效的 assigned supplier account 承载）；任何声明本身都不会发送 signal，系统不主动向外部收集事实。
 
 四类跨行业形态（分馏/撮合/委托/收购）与机制的对应叙述见白皮书 §2.2；现行表达见 §8.3 与规格 §5 的形态对照。
 
@@ -288,7 +288,7 @@ buyer::b.cmp & ~((a.cmp +5s) +10s)      # 否决位操作数内禁止嵌套延�
 
 在 hook 位置（`receiveSignals`）下，`~` 的操作数为延时表达式（衰减否决位）当且仅当该 `~(…)` 是 `&` 的直接子项时合法；根位、`|` 分支位、`~` 操作数（双重否定）、延时操作数内一律编译期拒绝，报错写明位置要求。禁用不是词表洁癖：否决位的就绪会衰减（内层成熟即翻假），而延时的成熟是永久的——外层延时若锚在已过期的否决上，到期重评会把早已翻假的否决当真放行。
 
-链上注册门同款双闸（`UVPPlanRegistration._validateHook` 的 vetoTerm/vetoInside 位——针对 hook 位置的手工 plan 防线，见 `uvp-chain.md`）：指令计划里 `NOT` 仅在操作数为裸 `SIGNAL` 或延时产出时合法，否决位出现在根位、`OR` 分支位或任何 `DELAY` 操作数内一律 revert。
+链上注册门同款双闸（`UVPPlanRegistration._validateInstructions` 的 vetoTerm/vetoInside 位——针对 hook 位置的手工 plan 防线，见 `uvp-chain.md`）：指令计划里 `NOT` 仅在操作数为裸 `SIGNAL` 或延时产出时合法，否决位出现在根位、`OR` 分支位或任何 `DELAY` 操作数内一律 revert。
 
 三态语义（同一形态随求值时刻的窗口判定；链上在交易内即时判定——`_notValue` 按当时的 `block.timestamp` 对内层到期时刻做窗口比较，不持久化中间态；语义语料与 Go 对拍测试同形态钉死）：
 
@@ -319,7 +319,7 @@ buyer::b.cmp & ~((a.cmp +5s) +10s)      # 否决位操作数内禁止嵌套延�
 
 **作用域**：外部提交在写入前按 pre-state 求值；内部 Dock 输出将目标信号的 `validWhen` 视为 B 侧发射窗口的组成部分（`Wait` 时正常等待不报错、`Impossible` 时干净终止、`Ready` 时发射）。出生信号也可以声明 `validWhen`：空订单号提交时按**空订单上下文**求值——该上下文没有既成 facts/files，否定条件为真、存在与延时成熟条件为假；仅含存在依赖的适格形态因此不会在出生时 Ready，能由否定条件判真的形态可以。空订单上下文的出生适格由各轨消费者在出生写入前执行（链轨 revert `SignalAdmissionRejected`，云轨为类型化非重试拒绝），本册只钉语言层求值语义。编译期拒绝：表达式引用本信号自身即自证无效；引用的每个 `stage.signal` 受引用存在性约束——目标信号须在目标 stage 的 `sendSignals` 中声明。适格族拒绝文案逐项带下标 `validWhen[i]` 定位（同族格式）。
 
-**链上双闸（见 `uvp-chain.md`）**：适格声明编为与钩子同款的 CompactHook 指令计划，以旗标位 8（`HOOK_FLAG_ADMISSION`）随 hooksHash 进 plan 承诺——适格声明不留未签名面。注册门 `_validateAdmission`（`_validateHook` 的过滤档兄弟）在 `commitPlan` 时校验指令计划：与钩子档同源的保留闸是 NOT 操作数词表（裸 SIGNAL 或延时产出）、**延时操作数正向锚点**与嵌套延时禁令——过滤档书写层按共享词表接受 `(~A)+5s` 一类纯否定延时操作数（一拍求值下瞬时值良定义，云轨同词表），链轨对它的裁决是**注册期拒绝**（无锚延时在求值侧是恒未决死代码，commitPlan 挡下而非留死代码上链）。提交卡点 `_requireSignalAdmission`（`_submitSignal` 内、幂等吸收之后）按 `block.timestamp` 求值——无锚延时恒非 Ready（§5.4 anchored 语义，求值侧防御纵深）。无适格声明的 plan 由订单级 `admissionsDeclared` 位短路——零额外冷读。
+**链上双闸（见 `uvp-chain.md`）**：适格声明编为与钩子同款的 CompactHook 指令计划，以旗标位 8（`HOOK_FLAG_ADMISSION`）随 hooksHash 进 plan 承诺——适格声明不留未签名面。注册门 `_registerPlanAdmission`（`_validateInstructions` 的过滤档兄弟）在 `commitPlan` 时校验指令计划：与钩子档同源的保留闸是 NOT 操作数词表（裸 SIGNAL 或延时产出）、**延时操作数正向锚点**与嵌套延时禁令——过滤档书写层按共享词表接受 `(~A)+5s` 一类纯否定延时操作数（一拍求值下瞬时值良定义，云轨同词表），链轨对它的裁决是**注册期拒绝**（无锚延时在求值侧是恒未决死代码，commitPlan 挡下而非留死代码上链）。提交卡点 `_requireSignalAdmission`（`_submitSignal` 内、幂等吸收之后）按 `block.timestamp` 求值——无锚延时恒非 Ready（§5.4 anchored 语义，求值侧防御纵深）。无适格声明的 plan 由订单级 `admissionsDeclared` 位短路——零额外冷读。
 
 ```yaml
 sendSignals:
@@ -373,7 +373,7 @@ sendSignals:
 信号名 `str` / `cmp` / `err` / `cxl` 是**调用方约定**，引擎对它们没有内建语义；`str` 不是特殊出生信号，建单判定只认出生信号标记与订单号形态：
 
 - 语言层承诺的订单创建声明通道只有一条：出生信号（`sendSignals[].trigger: true`）以空订单号提交（§6.1 第 5 步）；dock 不创建订单（§7.4）。订单号由运行期生成、调用方不可自报，并由必填的显式幂等键去重（§6.4）。
-- 各轨建单判定的接受口径与出生提交通道是实现层语义：云轨引擎只认空 `orderId` + 出生信号（非出生信号的空订单号确定性拒绝）；链轨合约只认三条出生通道（order-trigger 开放提交、order-link 模块派生建单、治理分叉 `forkOrder`——见 `uvp-chain.md`），dock 不建单。两轨口径对照见 `uvp-chain.md` 附录 B。
+- 各轨建单判定的接受口径与出生提交通道是实现层语义：云轨引擎只认空 `orderId` + 出生信号（非出生信号的空订单号确定性拒绝）；链轨合约同样只认 `submitSignal(orderId=0)` + 出生信号这一条入口（非出生信号的空订单号确定性拒绝，见 `uvp-chain.md`），dock 不建单。两轨口径对照见 `uvp-chain.md` 附录 B。
 - 约定俗成的生命周期词汇：`str` 是执行器生命周期中的第一条有效 signal（"我接了这个阶段实例"）；不要把订单创建语义放在普通业务 signal 上；`cmp`/`err`/`cxl` 都应建立在已存在的订单上；当前协议不要求单独的 `ack` 创建语义。同名异物提示一处：本节的 `cxl` 是调用方约定的信号名；§5.4 求值输出词表中没有 `cxl`——「裁决不可能成立」对应的求值状态是 `impossible`，与这里的信号名仅字面相近、无语义关联。
 
 ### 6.4 出生事实与幂等键
@@ -382,7 +382,7 @@ sendSignals:
 
 幂等键是**调用方可控的事实身份**（两轨在出生时均要求显式填写：`fact_key` / `idempotencyKey`）：同一业务事实被报以两个不同幂等键会生成两张不同订单，事实身份纪律归调用方——引擎不解析事实正文，无从代为判重。
 
-各轨订单号生成与去重键作用域属实现层语义，两轨对照见 `cross-track-matrix.md`：云轨由 `gen_random_uuid()` 生成 `order_id`，按 `(zhixu_id, sender_id, fact_key)` 去重归并；链轨由合约 `_newOrderId`（nonce 递增）生成 `orderId`，按 `(submitter, idempotencyKey)` 去重（外部签名入口重复 revert `DuplicateTriggerKey` 并带回既有 `existingOrderId`，详见 `uvp-chain.md`）。
+各轨订单号生成与去重键作用域属实现层语义，两轨对照见 `cross-track-matrix.md`：云轨由 `gen_random_uuid()` 生成 `order_id`，按 `(zhixu_id, sender_id, fact_key)` 去重归并；链轨由合约 `_newOrderId`（`keccak256(abi.encode(block.prevrandao, address(this), orderNonce))`，nonce 递增）生成 `orderId`，按 `(submitter, idempotencyKey)` 去重（外部签名入口重复 revert `DuplicateTriggerKey` 并带回既有 `existingOrderId`，详见 `uvp-chain.md`）。
 
 ### 6.5 保证清单
 
@@ -390,11 +390,11 @@ sendSignals:
 
 ### 6.6 出生提交通道（链上）
 
-链上出生提交的请求体、capability 词表闸与出生提交者授权（birthAuthorizer 承诺）见链轨实现层文档 `uvp-chain.md`（uvp-eth 根）§4.1；语言层的出生声明面见 §4 `sendSignals[].trigger`、§6.1–§6.4。
+链上出生提交的请求体、capability 词表闸与发信权（出生阶段当前生效的 assigned supplier account）见链轨实现层文档 `uvp-chain.md`（uvp-eth 根）§4.1；语言层的出生声明面见 §4 `sendSignals[].trigger`、§6.1–§6.4。
 
 ### 6.7 出生条目的链上编译规则
 
-出生信号编译为 order-trigger hook（`orderTriggerKind=trigger`）：每条出生信号一条 hook，依赖键为该出生事实的 `source::stage.signal`；出生路径在空订单上下文求值 `validWhen`（§5.6/§6.1），不通过 revert `SignalAdmissionRejected`。多条出生 hook 合法；plan 级单 `birthAuthorizer`；`triggerHookId` 显式选择出生线。artifact/manifest 以 `triggers[]` 枚举出生入口。dock 阶段的 hooks 带 dock executor 标记，发射由 §7 的 binding 驱动。钩子位标志全集与依赖键 ≤1024 闸见链轨实现层文档 `uvp-chain.md`（uvp-eth 根）；语言层的出生与适格语义见 §6.1/§5.6。
+出生信号编译为 order-trigger hook（`orderTriggerKind=trigger`）：每条出生信号一条 hook，依赖键为该出生事实的 `source::stage.signal`；出生路径在空订单上下文求值 `validWhen`（§5.6/§6.1），不通过 revert `SignalAdmissionRejected`。多条出生 hook 合法；提交权由出生阶段当前生效的 assigned supplier account 承载，合约按 `(planId, sourceId, signalId)` 解析 trigger hook；artifact/manifest 以 `triggers[].hookId` 枚举出生入口供读面选择。dock 阶段的 hooks 带 dock executor 标记，发射由 §7 的 binding 驱动。钩子位标志全集与依赖键 ≤1024 闸见链轨实现层文档 `uvp-chain.md`（uvp-eth 根）；语言层的出生与适格语义见 §6.1/§5.6。
 
 ---
 
@@ -454,7 +454,7 @@ spec:
 | `receiveSignals` | map | 必须非空 | dock 阶段的接收 hook 是绑定声明面；其 hooks 编译时带 `HOOK_FLAG_DOCK_EXECUTOR` 标记。 |
 | `sendSignals[].trigger` | — | 不适用 | 出生权由 plain 执行者阶段承载；dock 阶段的输出信号可带 `validWhen`，作发射适格（§5.6）。 |
 
-dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单在挂接 stage 一次性选定（两轨均经订单级 stage patch：选中后固定，换选在运行期响亮拒绝）。链轨选择记录携 `supplierId`（选中 SID 必须 active），该 SID 的 supplier account（`UVPSupplierRegistry.accountOf`）即该 stage 的发信账户——没有订单级授权行写入；SID↔account 永久绑定、无轮换，状态（suspend/revoke）变化即时生效。定义面只声明 dock 执行者类型，目标选择在运行期由 stage patch 完成。
+dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单在挂接 stage 一次性选定（两轨均经订单级 stage patch：选中后固定，换选在运行期响亮拒绝）。链轨选择记录携 `supplierId`（选中 SID 必须 active），该 SID 的 supplier account（`UVPIdentityRegistry.accountOf`）即该 stage 的发信账户——没有订单级授权行写入；SID↔account 永久绑定、无轮换，状态（suspend/revoke）变化即时生效。定义面只声明 dock 执行者类型，目标选择在运行期由 stage patch 完成。
 
 ### 7.4 绑定、时间窗与发射（运行期语义）
 
@@ -467,7 +467,7 @@ dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单
 ### 7.5 单源原则与边界
 
 - **A/B 各自单源**：一条 Dock 只引用一个 `from.source` 下的 atoms；B 侧输出只属 `to.stage.source` 语境。
-- **订单身份**：订单由出生通道创建、订单号恒由出生事实派生；Dock 在既有 B 订单上以 binding 承载发射，A 订单保持原身份；异常承接走治理分叉（§6.3），与 dock 无关。
+- **订单身份**：订单由出生通道创建、订单号由运行期生成且调用方不可自报；Dock 在既有 B 订单上以 binding 承载发射，A 订单保持原身份；协议内不存在第二条建单或异常承接通道，与 dock 无关。
 - **终态归属**：终态只由本地阶段/订单结束驱动，输出本身不改变终态。
 - **逐 output first-win**：binding 建立后再 poke 时，已发射 output 保留首次事实（first-win），历史保持原样。
 - **静态声明**：Dock 文档是静态 A→B 订阅，双方对等；运行期错误面（选择冲突、载荷缺失、内容哈希不符等）见两轨实现层文档。
@@ -478,7 +478,7 @@ dock 阶段不进 plan 级 supplier 路由与候选集；dock supplier 由订单
 
 ### 7.7 外部事实与秩序间上下文传播
 
-外部事实只有一条建模路径：**执行器自发 signal 即入口**（§1）。静态 Dock 在这条路径上的角色是发射条件声明：外部事实先进入 A 侧 backend/executor，执行者明确发送的 canonical UVP signal（链上=source 阶段 assigned supplier 的 supplier account 按 EIP-712 提交，或经 `submitSignalFor` 由 relayer 代付而业务签名仍归该 supplier account）才进入 UVP 信号集合；Dock 只声明"A 订单事实 → B 输出信号"的发射条件；事实保持原位与归属。
+外部事实只有一条建模路径：**执行器自发 signal 即入口**（§1）。静态 Dock 在这条路径上的角色是发射条件声明：外部事实先进入 A 侧 backend/executor，执行者明确发送的 canonical UVP signal（链上=source 阶段 assigned supplier 的 supplier account 按 EIP-712 签名提交，任意 relayer 可转发该签名）才进入 UVP 信号集合；Dock 只声明"A 订单事实 → B 输出信号"的发射条件；事实保持原位与归属。
 
 ---
 
@@ -604,7 +604,7 @@ spec:
     # 出生阶段：trading 域每提交一条成交事实 closed（空订单号），出生一单。
     # 出生信号（sendSignals[].trigger: true）编译为 order-trigger hook；
     # 出生路径先在空订单上下文求值 validWhen
-    # （§6.7），现实成立后由计划授权的出生提交者（birthAuthorizer）提交
+    # （§6.7），现实成立后由出生阶段当前生效的 assigned supplier account 提交
     # 出生——链上细节见 uvp-chain.md。
     - name: on_deal
       source: settlement
@@ -665,7 +665,7 @@ spec:
   source: match
   executor: { supplierType: organization, supplierID: 1e5b7d93-4c2a-4f86-9b30-5d7f9a1c3e60 }
   receiveSignals:
-    MATCH_READY: "match::exchange.surplus_noted & match::exchange.demand_noted"
+    MATCH_READY: "match::exchange.surplus_noted & exchange.demand_noted"
   sendSignals: [{name: surplus_noted}, {name: demand_noted}, {name: deal}, {name: err}]
 ```
 
@@ -676,7 +676,7 @@ spec:
   source: buyer
   executor: { supplierType: organization, supplierID: 8f2a4c61-5d3b-4a79-8c40-7e9b1d3f5a80 }
   receiveSignals:
-    SCREEN: "buyer::demand_intake.noted & ~buyer::demand_intake.rejected"
+    SCREEN: "buyer::demand_intake.noted & ~demand_intake.rejected"
   sendSignals: [{name: noted}, {name: rejected}, {name: accepted}]
 ```
 

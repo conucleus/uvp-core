@@ -240,7 +240,10 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
         Expr::Not(inner) => format!("~{}", normalize_cloud(inner, precedence)),
         Expr::Delay {
             expr, raw_duration, ..
-        } => format!("{} + {raw_duration}", normalize_cloud(expr, precedence)),
+        } => format!(
+            "{} + {raw_duration}",
+            normalize_for_delay_operand_cloud(expr)
+        ),
         Expr::And(terms) => terms
             .iter()
             .map(|term| normalize_cloud(term, precedence))
@@ -260,6 +263,13 @@ fn normalize_cloud(expr: &Expr, parent_precedence: u8) -> String {
         return format!("({body})");
     }
     body
+}
+
+fn normalize_for_delay_operand_cloud(expr: &Expr) -> String {
+    match expr {
+        Expr::Signal(_) => normalize_cloud(expr, 0),
+        _ => format!("({})", normalize_cloud(expr, 0)),
+    }
 }
 
 fn precedence(expr: &Expr) -> u8 {

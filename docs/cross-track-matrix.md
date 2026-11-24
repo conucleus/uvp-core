@@ -16,16 +16,16 @@
 |---|---|---|---|
 | `〔范围裁决〕` `spec.platform.type` / `.network` 与跨轨移植 | 声明 `cloud` 等运行域；`spec.platform` **不参与** `definitionUid` 计算 | 声明 `blockchain` 等运行域；`spec.platform` **不参与** `definitionUid`，但进入链轨 `planHash` 计算 | 同一份定义把 `cloud` 改成 `blockchain` 或改 `network` **不会改变 UID**，Dock 里的 `from.zhixu`/`to.zhixu` 引用无需更新；链轨 plan 身份会随 platform 改变，需重新生成链轨产物 |
 | `〔范围裁决〕` `kind: Supplier` 注册对象 | 接受（云轨独有运行时注册对象，见 `uvp-cloud.md` §1） | 不存在该对象（供应商档案/KYC 属 Store 链下数据） | 链轨不消费 `kind: Supplier` YAML；供应商档案归链下 Store 管理 |
-| `〔范围裁决〕` 供应商身份注册与三类 Registry 分工 | 云侧 `local` supplier registry 维护运行时对象与回调 handler | 分工明确的三件套：<br>1. `UVPSupplierRegistry`（链上）：供应商自注册产生 `pending` SID（`bytes32` UUID），registrar 激活为 `active` 后才可参与 plan 绑定、patch/dock 指派与发信号；SID↔account 永久 1:1 绑定，无轮换、revoke 不释放地址；<br>2. `UVPIdentityRegistry`（链上）：只做线下主体与链上账户的绑定/撤销存证，产品面作信任背书，不参与状态机发信权校验；<br>3. `zhixu-registry`（链下库）：非用户面的 permissionless 数据层，只存 `ZhixuRecord`/`IdentityClaim`，登记不等于背书 | 两轨身份底座不同：云侧靠运营方库内档案，链侧靠 `UVPSupplierRegistry` 强注册 + `active` 校验；`UVPIdentityRegistry` 与 `zhixu-registry` 不承担状态机发信权 |
+| `〔范围裁决〕` 供应商身份注册与 Registry 分工 | 云侧 `local` supplier registry 维护运行时对象与回调 handler | 一个 `UVPIdentityRegistry` 含两个互不授权对方的命名空间：<br>1. supplier capability/account（SID 铸造、永久 1:1 account 绑定、`pending/active/suspended/revoked` 状态）是唯一执行身份；plan 绑定、patch/dock 指派与发信权都经 `accountOf` 解析且 SID 必须 `active`；<br>2. subjectId↔account 身份绑定只作信任存证，不参与状态机发信权校验。<br>`zhixu-registry`（链下库）：非用户面的 permissionless 数据层，只存 `ZhixuRecord`，登记不等于背书 | 两轨身份底座不同：云侧靠运营方库内档案，链侧靠 `UVPIdentityRegistry` 的 supplier 命名空间强注册 + `active` 校验；`zhixu-registry` 不承担状态机发信权 |
 | `〔范围裁决〕` 供应商状态映射 | 支持 `active` / `disabled` / `revoked` | 支持 `pending` / `active` / `suspended` / `revoked` | 状态映射：`active` ↔ `active`、`disabled` ↔ `suspended`、`revoked` ↔ `revoked`；链轨的 `pending`（自注册待激活态）在云轨无对应状态 |
 | `sendSignals` 裸信号名 | 接受 | 接受（编译为 `relation=current` 同单能力） | 两轨完全一致，无跨轨差异 |
 | `sendSignals[].validWhen`（发射适格声明） | 接受（过滤档解析进 `admissions` 数组，入口求值不通过返回类型化非重试拒绝） | 接受（折叠为 AND 指令计划、带 `HOOK_FLAG_ADMISSION` 位 8 进 `hooksHash`；不通过 revert `SignalAdmissionRejected`） | 语法与静态校验两轨一致；但见下方「Dock 内部 output 过 `validWhen` 筛」的实现不对称 |
+| `〔实现不对称〕` 无锚延时（`(~A)+5s` 一类纯否定延时操作数） | 接受（Filter 档一拍求值下瞬时值良定义） | `commitPlan` 注册期拒绝（无锚延时在求值侧恒非 Ready；手工 plan 防线） | 编译接受域不同：云轨可注册，链轨不可注册 |
 | 阶段出生信号（`sendSignals[].trigger: true`） | 接受（`triggers` 投影进云产物；空 `order_id` + 出生信号建单） | 接受（每条出生信号合成 `SIGNAL` + `ORDER_TRIGGER_MINT / EMIT_READY` hook） | 两轨同语义：出生信号是唯一 DSL 出生声明面 |
 | 出生信号的出生适格（`validWhen`） | 接受（出生前按空订单上下文求值；不通过为类型化非重试拒绝） | 接受（创建订单前按空订单上下文求值；不通过 revert `SignalAdmissionRejected`） | 两轨同口径：出生写入与普通信号同过适格面 |
-| `〔实现不对称〕` 出生订单号与幂等键 | 运行期由 `gen_random_uuid()` 随机生成 `order_id`；出生请求**必填** `fact_key`，按 `(zhixu_id, sender_id, fact_key)` 去重归并到既有订单 | 运行期由合约 `_newOrderId`（nonce 递增）生成 `orderId`；出生请求**必填** `idempotencyKey`，按 `(submitter, idempotencyKey)` 去重 | 两轨都已改为「运行期生成订单号 + 出生必填显式幂等键」，不再由载荷哈希派生订单号；跨轨差异在于去重作用域与重放响应（见下一行） |
-| `〔范围裁决〕` at-least-once 重试对「出生重放」的响应 | 静默幂等吸收：同一 `(zhixu_id, sender_id, fact_key)` 重试返回原 `order_id`（`duplicate=true`） | 分入口处理：`triggerOrderFromOutsideFor` 重复命中 `(submitter, idempotencyKey)` 时 revert `DuplicateTriggerKey`（携带 `existingOrderId`）；`birthAuthorizer` 合约直接入口同 order+signal **no-op 吸收**；普通重复事实 `submitSignal` **first-win 幂等吸收** | 重试方在两轨拿到的响应面不同（云轨返回原单号成功，链轨外部签名入口 revert 但携带 `existingOrderId`），调用方不能假设错误面同构 |
-| `〔范围裁决〕` 请求级鉴权门与发信权 | HTTP 入口（`/v0/signals` 等）挂**全局/部署级 HMAC 验签**（`httpAuth.sharedSecret` 或 `httpAuth.senders` 密钥表），校验请求的 `sender_id` 与时间戳/nonce，**不按阶段执行者（per-stage executor）鉴权** | 只认 source 阶段的 `assigned supplier account`（active patch → 计划 default → dynamic 未指派为 0），经 `UVPSupplierRegistry.accountOf` 实时解析且 SID 必须 `active`；支持 EIP-712 签名代付 `submitSignalFor`（EOA ECDSA / 合约 EIP-1271，`msg.sender` 仅作 relayer） | 云轨入口是全局服务级 HMAC 鉴权，链轨入口是阶段级强绑定钱包签名；跨轨叙事与客户端不得假设存在同一张阶段授权表 |
-| `〔范围裁决〕` 订单级信号授权 `SignalAuthorization` | 云轨保留订单级事实/权限记录 | 已彻底删除（相关结构、存储、事件与 `authorizations` 参数全部移除），发信权完全由 `assigned supplier account` 承载 | 链轨不存在订单级 submitter allowlist，对账与 SDK 不得再引用该事件面 |
+| `〔实现不对称〕` 出生订单号与幂等键 | 运行期由 `gen_random_uuid()` 随机生成 `order_id`；出生请求**必填** `fact_key`，按 `(zhixu_id, sender_id, fact_key)` 去重归并到既有订单 | 运行期由合约 `_newOrderId`（prevrandao/address/nonce 派生）生成 `orderId`；出生请求**必填** `idempotencyKey`，按 `(submitter, idempotencyKey)` 去重 | 两轨都已改为「运行期生成订单号 + 出生必填显式幂等键」，不再由载荷哈希派生订单号；跨轨差异在于去重作用域与重放响应（见下一行） |
+| `〔范围裁决〕` at-least-once 重试对「出生重放」的响应 | 静默幂等吸收：同一 `(zhixu_id, sender_id, fact_key)` 重试返回原 `order_id`（`duplicate=true`） | 统一 `submitSignal`：出生路径重复命中 `(submitter, idempotencyKey)` 时 revert `DuplicateTriggerKey`（携带 `existingOrderId`）；普通重复事实 first-win 幂等吸收 | 重试方在两轨拿到的响应面不同（云轨返回原单号成功，链轨出生重放 revert 但携带 `existingOrderId`），调用方不能假设错误面同构 |
+| `〔范围裁决〕` 请求级鉴权门与发信权 | HTTP 入口（`/v0/signals` 等）挂**全局/部署级 HMAC 验签**（`httpAuth.sharedSecret` 或 `httpAuth.senders` 密钥表），校验请求的 `sender_id` 与时间戳/nonce，**不按阶段执行者（per-stage executor）鉴权** | 只认 source 阶段的 `assigned supplier account`（active patch → 计划 default → dynamic 未指派为 0），经 `UVPIdentityRegistry.accountOf` 实时解析且 SID 必须 `active`；`submitSignal` 支持 EIP-712 签名代付（EOA ECDSA / 合约 EIP-1271，`msg.sender` 仅作 relayer；空 signature 时 `msg.sender` 必须等于 submitter） | 云轨入口是全局服务级 HMAC 鉴权，链轨入口是阶段级强绑定钱包签名；跨轨叙事与客户端不得假设存在同一张阶段授权表 |
 | 静态 Dock 注册与 binding 建立（`kind: Dock`、`dock_link`、poke） | `/v0/dock` 注册静态 Dock；选中 dock supplier、写 `dock_link` 后按 A/B 窗口 live 求值发射 | `UVPDockRegistry.registerDock`（dkid=`zd-<32hex>`）校验 A/B capability proof；`selectStageDockSupplier` 一次性选定 supplier；`dock_link`（A 单号）确定 binding（7 word `bindingId`），`pokeDockBinding` 逐 output first-win 发射 | 语义同构，核心差异在窗口时钟域（DB 时钟 vs `block.timestamp`）与簿记/授权门（见下行） |
 | `〔范围裁决〕` Dock 交付簿记、窗口历史与授权门 | 读时 live view 派生（binding 不落库、无持久窗口历史）；单运营方信任域内鉴权（选中即授权） | 链上永久事件（`DockBindingPoked`/`DockOutputSubmitted`），历史窗口时间不上链；须由 selector 阶段调用 `selectStageDockSupplier`（或携 EIP-712 签名 `selectStageDockSupplierFor`）一次性选定且不可换选；写 `dock_link` 后任何人可 poke | 历史窗口不可直接对比，对账需按事件 + 当前窗口；信任模型差异（运营方鉴权 vs 链上 selector 签名门）须显式披露 |
 | `〔实现不对称〕` Dock 内部 output 过 `validWhen` 筛的现行行为 | 内部 dock output 发射目前仍会过目标 `validWhen` 筛；不满足时报错并按投递策略重试 | 内部 dock output 发射目前也会过目标 `validWhen` 筛；不满足时通过 `return false` **静默跳过**该 output，不 revert 整笔 poke 交易 | 属已知实现分歧（理想设计为「内部事实不过适格筛」）：云轨表现为报错重试，链轨表现为单条静默跳过（待后续统一） |
@@ -38,12 +38,12 @@
 | `spec.stages[].fileWriters`（跨阶段文件写授权） | 接受：stage 级 allowlist（target 声明谁可写；self 隐式）；writer 阶段当前 assigned supplier 即写权主体，复用阶段 supplier 授权 | 接受：同一 allowlist 语义；写权由 writer 阶段 `assigned supplier account` 承接，不生成独立 capability 叶 | 两轨同义；`fileWriters` 只做定义级引用校验，运行期授权复用阶段 supplier 授权 |
 | `fileResources` 的声明边界 | 只要求条目为对象 + 非空 `fileType`；其余键为应用 opaque payload，原样保存 | 同左；`fileType` 与 payload 均不进入共享校验的语义解释 | 两轨同口径：`fileType` 值域开放，payload 语义归应用仓 |
 | 文件写入模式（运行期） | bare signal、bare file、atomic signal+file、`fileWriters` 跨阶段写四模式；file-only 不计业务信号、不跑 admission/hook | 同左四模式；signal 与 file 同笔原子生效，跨阶段写受 `fileWriters` allowlist 约束 | 模式与授权语义同构；存储/事件/API 形态属实现层 |
-| 文件资源存储与完整性 | 运行期按 opaque `{key, payload}` 保存；不在共享层定义文件操作状态机、rolling/双哈希 | 同左；只保存 runtime 自有的 `{key, payload}` 或 handle 形态 | 跨轨不互认文件哈希；正文版本与完整性归应用/轨道，不得假设可读正文 |
-| `〔实现不对称〕` 批量信号提交 | HTTP `/v0/signals` **不提供批量提交**，仅支持单条提交 | 单笔合约交易可原子发射多条信号；任一条 `validWhen` 不通过则**整批 revert**，单条事实仍按 first-win 吸收 | 两轨提交粒度不同：云轨单条独立提交，链轨可借助 EVM 交易原子性打包多条发射 |
+| 文件资源存储与完整性 | 运行期按 opaque `{key, payload}` 保存；不在共享层定义文件操作状态机、rolling/双哈希 | 同左；只保存 runtime 自有的 `{key, payload}`，同 key 覆盖，无 handle/版本号 | 跨轨不互认文件哈希；正文版本与完整性归应用/轨道，不得假设可读正文 |
+| 批量信号提交 | HTTP `/v0/signals` **不提供批量提交**，仅支持单条提交 | 同样不提供 Batch：`submitSignal` 每次只接收一个 `SignalSubmission`；EVM 调用方自行串联多次单信号调用时，每一步仍按单信号独立裁决与回滚 | 两轨同口径：每条外部信号都是独立原子事件，不存在整批 revert 的批量入口 |
 | `〔实现不对称〕` 嵌套延时形态的裁决 | 编译期拒绝（`uvp-core` 解析层 `reject_nested_delay`） | 编译期拒绝（同左）+ `commitPlan` 链上注册门再拒（手工 plan 防线） | 正规编译器路径两轨同拒；链轨额外对绕过编译器的手工 plan 兜底 |
 | `〔实现不对称〕` YAML 裸标量装载 | Go 装载：`Y`/`yes`/`on`→布尔、`010`→8、`1_000`→1000 | TS 装载：`010`→10、其余按字符串 | 同一未加引号的 YAML 跨轨可能派生出不同 UID（Rust 正本按 `"010"` 字符串）；所有标量值位一律加引号是作者纪律 |
 | `〔链物理〕` 成熟裁决边界 | `(due, due+1ms]` 闭区间宽限：窗内到达的负事实仍参与裁决、判负赢（DB 时钟域） | `block.timestamp` 秒域、同秒内按块内交易序裁决，无毫秒宽限 | 负事实恰在 `due` 后瞬间到达时两轨结果可能分叉 |
-| `〔链物理〕` 求值超时熔断（`poison` 终态） | 有：FFI 连续求值超时熔断为 `poison`，人工 revive 是唯一出口 | 无：链上交易无求值超时熔断概念 | 跨轨对账时须剔除云轨 `poison` 态订单/钩子 |
+| `〔链物理〕` 求值超时熔断（`poison` 终态） | 有：FFI 连续求值超时或永久求值失败熔断为 `poison`，人工 revive 是唯一出口 | 无：链上交易无求值超时熔断概念 | 跨轨对账时须剔除云轨 `poison` 态订单/钩子 |
 
 ---
 
@@ -60,7 +60,7 @@
 - **共享层边界**：`uvp-core` 只校验 `fileType` 非空字符串与 `fileWriters` 阶段引用（存在、不自指、唯一）；条目其余键是应用 opaque payload，原样透传，不读取、不校验、不哈希。`fileType` 值域开放，core 不做类型分派。
 - **四模式**：① bare signal——仅信号；② bare file——仅文件写入，不产生业务 signal、不计信号数、不跑 admission/hook；③ atomic signal+file——同一笔提交内信号与文件写入原子生效；④ `fileWriters` 跨阶段写——目标阶段的 allowlist 指定 writer 阶段，writer 阶段当前 assigned supplier 获得写权，复用阶段 supplier 授权。
 - **授权**：本阶段自身隐式可写；跨阶段写只按 target `fileWriters` 判定，写权随该 writer 阶段在本订单的当前 assigned supplier 变化。不生成独立 capability 证明。
-- **存储**：运行期自行保存 opaque `{key, payload}`（或 handle）；文件正文版本、完整性、冲突策略由应用层/轨道存储决定，不在共享 DSL 或 core 中定义文件操作状态机、rolling/双哈希。
+- **存储**：运行期自行保存 opaque `{key, payload}`；文件正文版本、完整性、冲突策略由应用层/轨道存储决定，不在共享 DSL 或 core 中定义文件操作状态机、rolling/双哈希。
 
 > **手工 plan 作者自负（两轨通用纪律）**：编译器是唯一正规入口。绕过编译器手工构造的 plan 不受编译期语义门保护，缺陷会在运行期才暴露（例如链轨手工构造「复合出生钩子」在出生时先被判 Cancelled，导致 `InvalidTriggerHook` 整笔回滚）。手工构造 plan 或 artifact 的一切后果由作者自负。
 

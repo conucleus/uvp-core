@@ -1,11 +1,11 @@
 {
   "version": "uvp.error-taxonomy.v1",
-  "description": "UVP unified error taxonomy: one source of truth for retry/terminal/benign classification semantics across the three producers (Go cloud engine, chain-services, executor-kit). Base fields record the currently-unified lane semantics; where producers still diverge, the divergence is recorded under producer_overrides and listed as needs-ruling in the conformance reports. Consumers pin version + sha256 and run completeness/consistency suites against this file.",
+  "description": "UVP unified error taxonomy: one source of truth for retry/terminal/benign classification semantics across the active producers (Go cloud engine, executor-kit). Base fields record the currently-unified lane semantics; where producers still diverge, the divergence is recorded under producer_overrides and listed as needs-ruling in the conformance reports. Consumers pin version + sha256 and run completeness/consistency suites against this file.",
   "field_semantics": {
     "code": "Unified snake_case identifier for a cross-repo error condition.",
     "condition": "Human-readable trigger condition for the classification.",
     "layer": "One of: chain (on-chain / contract revert / receipt), transport (RPC/network), db (PostgreSQL server-side), application (business/validation/config), messaging (downstream message delivery), infra (process-local infrastructure).",
-    "producers": "Repos that classify this condition: go-cloud-engine | chain-services | executor-kit.",
+    "producers": "Repos that classify this condition: go-cloud-engine | executor-kit.",
     "retryable": "True when a later attempt with unchanged inputs can succeed (transient, operator-recoverable, or self-healing).",
     "backoff": "Retry scheduling: exponential (capped), fixed (constant window), sweep (bounded in-process retries then durable queue replay), reconcile_poll (periodic re-probe), none.",
     "dead_letter": "True when the failure is terminal for the submission/job path and must be parked for human triage instead of retried.",
@@ -18,253 +18,120 @@
       "code": "insufficient_funds",
       "condition": "Gas payer balance cannot cover the broadcast (insufficient funds / insufficient balance at tx signing or eth_sendRawTransaction).",
       "layer": "chain",
-      "producers": ["chain-services", "executor-kit"],
+      "producers": ["executor-kit"],
       "retryable": true,
       "backoff": "exponential",
       "dead_letter": false,
       "benign_scan_outcome": false,
       "internal_names": {
-        "chain-services": ["relayer_insufficient_funds"],
         "executor-kit": ["insufficient_funds"]
       },
-      "notes": "Route-4 unification: funding the gas payer is operator-recoverable and no txHash exists, so the same signed payload may be retried after top-up. Aligned in relayer (classifyRelaySubmitterError), submissions broadcast-adapter, and executor-kit errors.ts MESSAGE_PATTERNS."
+      "notes": "Route-4 unification: funding the gas payer is operator-recoverable and no txHash exists, so the same signed payload may be retried after top-up. Executor-kit errors.ts MESSAGE_PATTERNS classifies insufficient_funds."
     },
     {
       "code": "duplicate_signal",
       "condition": "The chain's own dedupe fact: SignalAlreadyExists() revert (decoded name, plain sentence, or raw selector 0xa2e92828) proves the exact signal already exists on chain.",
       "layer": "chain",
-      "producers": ["chain-services", "executor-kit"],
+      "producers": ["executor-kit"],
       "retryable": false,
       "backoff": "none",
       "dead_letter": true,
       "benign_scan_outcome": false,
       "internal_names": {
-        "chain-services": ["signal_already_exists"],
         "executor-kit": ["duplicate_signal", "DUPLICATE_SIGNAL"]
       },
       "producer_overrides": {
         "executor-kit": {
           "dead_letter": false,
           "benign_scan_outcome": true,
-          "notes": "Executor-kit treats the dedupe fact as benign: the signal is counted delivered, the job lands in `ignored`, and a scan that only met duplicate_signal must exit 0 (BENIGN_SCAN_OUTCOME_ERROR_KINDS). Chain-services relayer/submissions instead dead-letter the submission ledger entry. Needs-ruling: unified disposition for the same on-chain fact."
+          "notes": "Executor-kit treats the dedupe fact as benign: the signal is counted delivered, the job lands in `ignored`, and a scan that only met duplicate_signal must exit 0 (BENIGN_SCAN_OUTCOME_ERROR_KINDS)."
         }
       },
-      "notes": "Retryable=false everywhere (re-submitting cannot change chain state). Terminal disposition diverges: dead_letter=true in chain-services vs benign ignored in executor-kit (see producer_overrides)."
+      "notes": "Retryable=false: re-submitting cannot change chain state. Executor-kit treats the dedupe fact as benign (see producer_overrides)."
+    },
+    {
+      "code": "duplicate_trigger_key",
+      "condition": "Birth trigger replay with an already-consumed (submitter, idempotencyKey); the state machine reverts DuplicateTriggerKey(submitter, idempotencyKey, existingOrderId).",
+      "layer": "chain",
+      "producers": ["executor-kit"],
+      "retryable": false,
+      "backoff": "none",
+      "dead_letter": false,
+      "benign_scan_outcome": true,
+      "internal_names": {
+        "executor-kit": ["DuplicateTriggerKey"]
+      },
+      "notes": "At-least-once birth must recover the existing order id instead of dead-lettering: the revert proves the earlier submission landed, so the submitter adopts existingOrderId. uvp-client MESSAGE_PATTERNS and its taxonomy kind map must add DuplicateTriggerKey; that mapping is owned by uvp-client and is a required follow-up when this table lands."
     },
     {
       "code": "nonce_conflict",
       "condition": "Tx-pool / nonce race texts: nonce too low, nonce has already been used, replacement transaction underpriced, already known, same hash was already imported.",
       "layer": "chain",
-      "producers": ["chain-services", "executor-kit"],
+      "producers": ["executor-kit"],
       "retryable": true,
       "backoff": "exponential",
       "dead_letter": false,
       "benign_scan_outcome": false,
       "internal_names": {
-        "chain-services": ["duplicate_transaction"],
         "executor-kit": ["nonce_conflict"]
       },
-      "notes": "Ruled single-value (A-30): a nonce conflict is recovered by re-preparing a fresh nonce (chain-services re-assembles with a new gas nonce; executor-kit recomputes the account nonce on every attempt), so every producer retries and none dead-letters. chain-services broadcast catch-phases still probe candidate txHash receipts first: a success receipt resolves submitted, a mined revert resolves terminal transaction_reverted, and an unreadable receipt stays in the retryable transaction_receipt_unknown lane."
+      "notes": "Ruled single-value (A-30): a nonce conflict is recovered by re-preparing a fresh nonce (executor-kit recomputes the account nonce on every attempt), so the producer retries and does not dead-letter."
     },
     {
       "code": "rpc_network",
       "condition": "Transport/RPC faults before the request was accepted: timeouts, ETIMEDOUT/ECONNRESET/ECONNREFUSED/AbortError, HTTP 429 rate limit, 502/503/504 gateway failures, fetch failed, socket hang up.",
       "layer": "transport",
-      "producers": ["chain-services", "executor-kit"],
+      "producers": ["executor-kit"],
       "retryable": true,
       "backoff": "exponential",
       "dead_letter": false,
       "benign_scan_outcome": false,
       "internal_names": {
-        "chain-services": ["rpc_unavailable", "rpc_timeout"],
         "executor-kit": ["rpc_network", "RPC_NETWORK"]
       },
-      "notes": "Verdict aligned (retryable=true, capped exponential). Detection breadth differs: relayer (rpc_unavailable) and executor-kit (rpc_network) also match 429/rate-limit/network keywords; submissions and stage-patch adapters (rpc_timeout) match only timeout/socket keywords — a 429 there falls to the generic retryable fallback, same verdict. relayer rpc_unavailable also covers ECONNREFUSED."
+      "notes": "Verdict aligned (retryable=true, capped exponential). Executor-kit detection breadth covers 429/rate-limit/network keywords; any narrower producer fallback keeps the same retryable verdict."
     },
     {
       "code": "transaction_reverted",
-      "condition": "Transaction definitively reverted: receipt status reverted/failed, or a generic execution-reverted error that is not UnknownOrder.",
+      "condition": "Transaction definitively reverted: receipt status reverted/failed, or a generic execution-reverted error.",
       "layer": "chain",
-      "producers": ["chain-services", "executor-kit"],
+      "producers": ["executor-kit"],
       "retryable": false,
       "backoff": "none",
       "dead_letter": true,
       "benign_scan_outcome": false,
       "internal_names": {
-        "chain-services": ["transaction_reverted"],
         "executor-kit": ["SubmitSignalReceiptError (receipt status reverted; classified through the conservative non-retryable fallback)"]
       },
-      "notes": "Relayer must test UnknownOrder before the generic reverted rule (viem composite text contains both). Reconcile treats receipt status reverted/failed as terminal failed/non-retryable. Executor-kit never rebroadcasts after a reverted receipt; the txHash stays on the job audit trail."
+      "notes": "Executor-kit never rebroadcasts after a reverted receipt; the txHash stays on the job audit trail."
     },
     {
       "code": "transaction_receipt_unknown",
       "condition": "Broadcast happened but the outcome is not yet known or not authoritative: receipt missing, receipt status unknown/omitted, or receipt-wait transport failure with the txHash preserved.",
       "layer": "chain",
-      "producers": ["chain-services", "executor-kit"],
+      "producers": ["executor-kit"],
       "retryable": true,
       "backoff": "reconcile_poll",
       "dead_letter": false,
       "benign_scan_outcome": false,
       "internal_names": {
-        "chain-services": ["transaction_receipt_unknown", "tx_reconcile_timeout"],
         "executor-kit": ["SubmitSignalReceiptError (receipt wait failed; cause-classified, e.g. rpc_network, txHash kept)"]
       },
-      "notes": "An unknown receipt must never be classified as a revert: it stays in the reconcile/retry lane until the chain decides. Reconcile verdicts: pending (no txHash, missing receipt, unknown status) retryable=true; stale_pending (tx_reconcile_timeout) retryable=true; receipt success but projection missing -> indexing, terminal non-retryable; projection present -> confirmed. Executor-kit keeps the broadcast txHash on the job and only rebroadcasts after the receipt proves absence."
-    },
-    {
-      "code": "unknown_order",
-      "condition": "Contract revert UnknownOrder(): the order is not (yet) registered on the state machine.",
-      "layer": "chain",
-      "producers": ["chain-services"],
-      "retryable": true,
-      "backoff": "exponential",
-      "dead_letter": false,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["unknown_order"]
-      },
-      "notes": "Typical transient: order registration may still be propagating. The UnknownOrder check must precede the generic reverted rule in both relayer and submissions adapters (same composite-text hazard)."
+      "notes": "An unknown receipt must never be classified as a revert: it stays in the reconcile/retry lane until the chain decides. Executor-kit keeps the broadcast txHash on the job and only rebroadcasts after the receipt proves absence."
     },
     {
       "code": "unauthorized",
-      "condition": "Authorization/signature rejections: unauthorized submitter or selector, invalid business/signal/stage-patch signature, verified-signer mismatch, missing verified signer, relayer key reused as participant signer.",
+      "condition": "Authorization/signature rejections: unauthorized submitter or selector, invalid business/signal/stage-patch signature, verified-signer mismatch, missing verified signer.",
       "layer": "chain",
-      "producers": ["chain-services", "executor-kit"],
+      "producers": ["executor-kit"],
       "retryable": false,
       "backoff": "none",
       "dead_letter": true,
       "benign_scan_outcome": false,
       "internal_names": {
-        "chain-services": ["unauthorized_signal_submitter", "selector_not_authorized", "invalid_business_signature", "invalid_signal_signature", "invalid_stage_executor_patch_signature", "invalid_stage_resource_patch_signature", "verified_signer_mismatch", "missing_verified_signer", "relayer_business_signer_reuse"],
         "executor-kit": ["unauthorized", "UNAUTHORIZED"]
       },
       "notes": "Executor-kit also matches AccessControlUnauthorizedAccount / OwnableUnauthorizedAccount revert names and generic 'unauthorized' text."
-    },
-    {
-      "code": "payload_signature_expired",
-      "condition": "Signature deadline has expired (preflight deadline check or on-chain ExpiredSignalSignature revert).",
-      "layer": "chain",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["expired_payload_deadline", "expired_signal_signature"]
-      },
-      "notes": "Relayer expired_payload_deadline and submissions expired_signal_signature (both the preflight check and the on-chain revert)."
-    },
-    {
-      "code": "prepared_payload_expired",
-      "condition": "A prepared submission/stage patch aged past its validity window before broadcast (local expiry, no chain contact).",
-      "layer": "application",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": false,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["submission_expired", "stage_executor_patch_expired", "stage_resource_patch_expired"]
-      },
-      "notes": "Terminal-expired status (not_retryable) but deliberately NOT dead-lettered: the payload simply ages out; a fresh prepare produces a new submission."
-    },
-    {
-      "code": "chain_id_mismatch",
-      "condition": "Configured chainId does not match the RPC endpoint's reported chain (preflight getChainId or error text).",
-      "layer": "transport",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["chain_id_mismatch"]
-      },
-      "notes": "Configuration defect; retry cannot fix it, operator must fix config."
-    },
-    {
-      "code": "broadcast_in_flight_limit",
-      "condition": "Local concurrency guard: another broadcast for the same order/submitter is already in flight.",
-      "layer": "application",
-      "producers": ["chain-services"],
-      "retryable": true,
-      "backoff": "exponential",
-      "dead_letter": false,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["order_relay_in_flight", "broadcast_rate_limited"]
-      },
-      "notes": "Self-healing contention (TOCTOU-safe in-flight counters); retry after the backoff window."
-    },
-    {
-      "code": "duplicate_signer_nonce",
-      "condition": "Replay/nonce-reuse dedupe on the submission path: the signer nonce is already reserved, the submission nonce was already used, or a stage-patch nonce is stale (already used on chain).",
-      "layer": "application",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["duplicate_signer_nonce", "duplicate_submit", "stale_stage_executor_patch_nonce", "stale_stage_resource_patch_nonce", "duplicate_stage_executor_patch_nonce", "duplicate_stage_resource_patch_nonce"]
-      },
-      "notes": "Lane nuances: submissions duplicate_submit answers HTTP 409 instead of dead-lettering; the stage-patch lane does not model dead_letter on its failed results, and its duplicate_/stale_stage_*_patch_nonce 409s are pre-broadcast service-layer checks of the same replay-dedupe condition. Core verdict shared: a replayed nonce is deterministic, never retried."
-    },
-    {
-      "code": "duplicate_tx_hash",
-      "condition": "Broadcast returned a txHash already recorded for another submission (cross-submission collision).",
-      "layer": "chain",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["duplicate_tx_hash"]
-      },
-      "notes": "safe-broadcast-adapter txHash ownership dedupe (in-memory + durable claimTxHash)."
-    },
-    {
-      "code": "retry_budget_exhausted",
-      "condition": "Retry budget for the submission is spent (maxRetryAttempts exceeded) or the last failure was non-retryable so further broadcast attempts are blocked.",
-      "layer": "application",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["broadcast_retry_exhausted", "broadcast_retry_blocked"]
-      },
-      "notes": "relayer (RelayService retry budget) and safe-broadcast-adapter share the errorCode broadcast_retry_exhausted; broadcast_retry_blocked is the safe-broadcast variant when the stored last failure was non-retryable."
-    },
-    {
-      "code": "persist_failed_after_broadcast",
-      "condition": "The broadcast succeeded (txHash exists) but persisting the submission/ledger record failed; the nonce is consumed and the receipt is unknown.",
-      "layer": "application",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": true,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["persist_failed"]
-      },
-      "notes": "Irreversible-from-service: a txHash-bearing terminal fallback is recorded and the nonce stays reserved; blind rebroadcast would risk a second on-chain transaction."
-    },
-    {
-      "code": "evidence_bind_failed",
-      "condition": "The chain broadcast already succeeded (submission carries a txHash) but the server-side evidence binding (uploaded→bound with on-chain location) failed after the submit; the submission itself is unaffected.",
-      "layer": "application",
-      "producers": ["chain-services"],
-      "retryable": true,
-      "backoff": "reconcile_poll",
-      "dead_letter": false,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["evidence_bind_failed"]
-      },
-      "notes": "Retryable because the on-chain commit is done and binding is a service-side state transition: the failed bind is audited, the evidence references stay persisted on the submission record, and the reconcile worker's evidence-bind sweep retries the binding from those references each poll until the proof reports bound."
     },
     {
       "code": "not_trigger_signal",
@@ -312,59 +179,42 @@
       "code": "signal_admission_rejected",
       "condition": "Signal admission (validWhen) is not Ready for the target pre-state; birth triggers evaluate in the empty-order context. The chain reverts SignalAdmissionRejected(orderId, sourceId, signalId); cloud answers a typed non-retryable business rejection naming the signal and the failed expression.",
       "layer": "chain",
-      "producers": ["go-cloud-engine", "chain-services"],
+      "producers": ["go-cloud-engine"],
       "retryable": false,
       "backoff": "none",
       "dead_letter": true,
       "benign_scan_outcome": false,
       "internal_names": {
-        "go-cloud-engine": ["SIGNAL_ADMISSION_REJECTED"],
-        "chain-services": ["SignalAdmissionRejected"]
+        "go-cloud-engine": ["SIGNAL_ADMISSION_REJECTED"]
       },
-      "notes": "Rejection writes no fact/delivery row. Not retryable with unchanged inputs: the caller must supply the missing dependency facts and submit a new attempt (a new attempt is not a duplicate because the rejected emission never landed). The chain's receipt-level classification is also caught by transaction_reverted; this entry names the condition for pre-broadcast/cloud classification."
+      "notes": "Rejection writes no fact/delivery row. Not retryable with unchanged inputs: the caller must supply the missing dependency facts and submit a new attempt (a new attempt is not a duplicate because the rejected emission never landed). The chain's receipt-level classification is also caught by transaction_reverted; this entry names the condition for cloud classification."
     },
     {
       "code": "malformed_payload",
       "condition": "Deterministic caller-input defect: payload fails validation before any side effect (missing/oversized/illegal fields, unsigned/malformed envelope, prepared submission without planId).",
       "layer": "application",
-      "producers": ["go-cloud-engine", "chain-services", "executor-kit"],
+      "producers": ["go-cloud-engine", "executor-kit"],
       "retryable": false,
       "backoff": "none",
       "dead_letter": true,
       "benign_scan_outcome": false,
       "internal_names": {
         "go-cloud-engine": ["statemachine.PermanentError (signal validation paths: 空白 parent_order_ids、dock 保留命名空间、超宽字段、引用不存在的阶段)", "dbops.ValidationError", "compiler zhixu_handler ValidationError (超宽标识 22001 双保险)"],
-        "chain-services": ["malformed_relay_payload", "missing_order_id", "missing_nonce", "order_plan_unresolved"],
         "executor-kit": ["validation_failure", "VALIDATION_FAILURE", "ValidationError type"]
       },
       "notes": "Retrying identical bytes re-fails identically. Executor-kit exception: an undecodable HookReady log is isolated as a terminal `ignored` job (isolateUndecodableLog, fallback kind validation_failure) so a mixed-ABI deployment skips instead of crashing; still non-retryable and counted in decode failures."
     },
     {
-      "code": "broadcast_disabled",
-      "condition": "Broadcast adapter is deliberately not configured; the request is verified but no chain transaction is attempted.",
-      "layer": "application",
-      "producers": ["chain-services"],
-      "retryable": false,
-      "backoff": "none",
-      "dead_letter": false,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["broadcast_disabled"]
-      },
-      "notes": "Feature-not-configured sentinel (status not_attempted), not a failure classification."
-    },
-    {
       "code": "transient_infra_error",
       "condition": "Unrecognized failure with no deterministic marker, treated by default as transient infrastructure noise (DB/network hiccup, generic broadcast failure).",
       "layer": "infra",
-      "producers": ["go-cloud-engine", "chain-services"],
+      "producers": ["go-cloud-engine"],
       "retryable": true,
       "backoff": "exponential",
       "dead_letter": false,
       "benign_scan_outcome": false,
       "internal_names": {
-        "go-cloud-engine": ["isSignalErrorRetryable default true", "isRetryableProcessingError default true", "deliveryBackoff (base 1s, cap 5min)"],
-        "chain-services": ["relay_broadcast_failed", "state_machine_broadcast_failed", "stage_executor_patch_broadcast_failed", "stage_resource_patch_broadcast_failed", "stage_patch_failed"]
+        "go-cloud-engine": ["isSignalErrorRetryable default true", "isRetryableProcessingError default true", "deliveryBackoff (base 1s, cap 5min)"]
       },
       "notes": "Default-retryable fallback. Divergence: executor-kit's fallback is deliberately conservative (see unknown_unclassified). Go delivery retries burn a bounded 12-round exponential budget before giving up."
     },
@@ -381,7 +231,7 @@
         "executor-kit": ["unknown (classifyExecutorKitError fallback kind)"]
       },
       "producer_overrides": {},
-      "notes": "Executor-kit deliberately guesses nothing: unclassifiable failures dead-letter instead of being silently retried. Needs-ruling: opposite default from go-cloud-engine/chain-services transient_infra_error fallbacks — a cross-producer port of a handler must re-classify, not copy the fallback."
+      "notes": "Executor-kit deliberately guesses nothing: unclassifiable failures dead-letter instead of being silently retried. Needs-ruling: opposite default from the go-cloud-engine transient_infra_error fallback — a cross-producer port of a handler must re-classify, not copy the fallback."
     },
     {
       "code": "missing_handler",
@@ -484,20 +334,6 @@
         "go-cloud-engine": ["httpprotocol.BusinessError.Retryable=false", "isRetryableProcessingError BusinessError branch", "executors/http_receiver PermanentError passthrough (SIGNAL_PROCESSING_FAILED retryable=false)", "cmd/statemachine/app isSignalErrorRetryable PermanentError branches"]
       },
       "notes": "The receiver side mirrors this: pkg/executors/http_receiver re-derives retryable from statemachine.PermanentError so downstream-declared non-retry semantics survive the HTTP hop; BusinessError{Retryable:true} stays in the delivery retry lane with the standard exponential backoff."
-    },
-    {
-      "code": "post_commit_step_pending",
-      "condition": "A post-commit side effect (signal notification / projection automation) failed after the projection cursor advanced; it must not be dropped and must not rewind the cursor.",
-      "layer": "infra",
-      "producers": ["chain-services"],
-      "retryable": true,
-      "backoff": "sweep",
-      "dead_letter": false,
-      "benign_scan_outcome": false,
-      "internal_names": {
-        "chain-services": ["indexer #runPostCommitStepWithBoundedRetry", "sweepPendingPostCommitSteps", "durable pending post-commit queue (savePendingPostCommitStep / admin-ops replay)"]
-      },
-      "notes": "Bounded in-process retries (exponential delays), then the step is persisted to the durable pending queue; the background sweep re-delivers before each incremental refresh and dequeues on success, otherwise it stays queued with an attempt counter."
     }
   ]
 }

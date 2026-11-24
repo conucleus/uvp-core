@@ -145,6 +145,42 @@ fn cloud_ast_preserves_delay_operand_and_source() {
 }
 
 #[test]
+fn cloud_normalization_parenthesizes_not_inside_delay() {
+    let parsed = parse_hook(ParseHookRequest {
+        profile: Profile::CloudCompat,
+        gate: Gate::Filter,
+        hook_name: "ADMIT".to_string(),
+        hook: "buyer::(~a.cmp)+5s".to_string(),
+    })
+    .unwrap();
+    assert_eq!(parsed.runtime_condition, "(~a.cmp) + 5s");
+
+    let reparsed = parse_hook(ParseHookRequest {
+        profile: Profile::CloudCompat,
+        gate: Gate::Filter,
+        hook_name: "ADMIT".to_string(),
+        hook: format!("buyer::{}", parsed.runtime_condition),
+    })
+    .unwrap();
+    assert_eq!(reparsed.cloud_ast, parsed.cloud_ast);
+    assert_eq!(reparsed.runtime_condition, parsed.runtime_condition);
+
+    let evaluate = |ast: serde_json::Value| {
+        eval_compiled_hook(EvalCompiledHookRequest {
+            profile: Profile::CloudCompat,
+            gate: Gate::Filter,
+            ast,
+            signals: vec![],
+            now: "2026-04-27T00:00:10.000Z".to_string(),
+        })
+        .unwrap()
+        .state
+    };
+    assert_eq!(evaluate(parsed.cloud_ast), EvalState::NeedsMore);
+    assert_eq!(evaluate(reparsed.cloud_ast), EvalState::NeedsMore);
+}
+
+#[test]
 fn delay_ready_at_overflow_evaluates_to_error_instead_of_panic() {
     let poisoned = json!({
         "schemaVersion": CLOUD_AST_SCHEMA_VERSION,
