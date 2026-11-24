@@ -366,10 +366,6 @@ fn conjunct_verdict(
             Expr::Signal(name) => resolve.get(&format!("{source}::{name}")).copied(),
             _ => None,
         },
-        Expr::Delay { expr, .. } => match expr.as_ref() {
-            Expr::Signal(name) => resolve.get(&format!("{source}::{name}")).copied(),
-            _ => None,
-        },
         _ => None,
     };
     let (branches, exhausted) = branches_of_expr(rest, source, resolve);
@@ -403,7 +399,7 @@ fn conjunct_verdict(
                     need.push(fact);
                 }
             }
-            Expr::Delay { .. } | Expr::Signal(_) => {
+            Expr::Signal(_) => {
                 let Some(fact) = conjunct_fact else {
                     witnessed = true;
                     break;
@@ -475,5 +471,43 @@ fn render_expr(expr: &Expr) -> String {
                 format!("({operand}) + {raw_duration}")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn delay_gate_conjunct_is_not_reported_as_removable() {
+        let definition = json!({
+            "apiVersion": "uvp/v0",
+            "kind": "Zhixu",
+            "metadata": { "name": "delay-gate-lint" },
+            "spec": {
+                "platform": { "type": "test" },
+                "nucleation": { "id": "n" },
+                "stages": [
+                    {
+                        "name": "s",
+                        "source": "s",
+                        "executor": { "supplierType": "individual", "supplierID": "s" },
+                        "sendSignals": [
+                            { "name": "done" }
+                        ],
+                        "receiveSignals": {
+                            "g": "s::s.done & (s.done + 1h)"
+                        }
+                    }
+                ]
+            }
+        });
+        let report = lint_hooks(&definition).expect("lint_hooks must succeed");
+        assert!(
+            !report.findings.iter().any(|f| f.conjunct.contains('+')),
+            "delay gate `s.done + 1h` must not be flagged as REMOVABLE: {:?}",
+            report.findings
+        );
     }
 }

@@ -80,10 +80,10 @@ pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOu
         index += 1;
         let mut step = eval_step(&decoded, &signals, arrived_at, &mut status, &mut terminal)?;
         while !terminal && step.state == EvalState::Wait {
-            let Some(due_at) = step.ready_at else {
+            let Some(mut due_at) = step.ready_at else {
                 break;
             };
-            let decision_at = due_at
+            let mut decision_at = due_at
                 .checked_add_signed(chrono::Duration::milliseconds(MATURITY_DECISION_SLACK_MS))
                 .ok_or_else(|| {
                     ReplayError::Message(
@@ -97,6 +97,21 @@ pub fn replay_compiled_hook(request: CloudReplayRequest) -> Result<CloudReplayOu
                 step = eval_step(&decoded, &signals, arrived_at, &mut status, &mut terminal)?;
                 if terminal || step.state != EvalState::Wait {
                     break;
+                }
+                if let Some(new_due_at) = step.ready_at {
+                    if new_due_at < due_at {
+                        due_at = new_due_at;
+                        decision_at = due_at
+                            .checked_add_signed(chrono::Duration::milliseconds(
+                                MATURITY_DECISION_SLACK_MS,
+                            ))
+                            .ok_or_else(|| {
+                                ReplayError::Message(
+                                    "maturity decision point overflows the replay timestamp range"
+                                        .to_string(),
+                                )
+                            })?;
+                    }
                 }
             }
             if terminal || step.state != EvalState::Wait {
@@ -328,6 +343,25 @@ mod tests {
             reversed.status, STATUS_READY,
             "earliest arrival (T-10000s) must win regardless of feed order"
         );
+    }
+
+    #[test]
+    fn or_delay_shortening_refreshes_decision_at() {
+        // 判别形状：a.start 在 T-10800s 落地，+4h 到期于 T+3600s；随后 b.fast
+        // 在 T-7200s 落地，+1h 到期于 T-3600s（ready_at 缩短）；c.cancel 在
+        // T-1800s 落地。若内层 Wait 循环不刷新 decision_at，会继续吞掉 T-1800s
+        // 的 c.cancel 判成 CXL；刷新后在 T-3600s+slack 裁决 READY。
+        let outcome = walk(
+            "src::(a.start + 4h | b.fast + 1h) & ~c.cancel",
+            &[
+                ("a.start", iso(10800)),
+                ("b.fast", iso(7200)),
+                ("c.cancel", iso(1800)),
+            ],
+            &iso(0),
+        )
+        .expect("replay must succeed");
+        assert_eq!(outcome.status, STATUS_READY);
     }
 
     #[test]
