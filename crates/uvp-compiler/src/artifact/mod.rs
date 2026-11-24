@@ -99,10 +99,10 @@ fn cloud_stage_artifact(entry: &StageEntry) -> Result<Value> {
                 .map_err(|err| CompilerError::Message(err.to_string()))?,
         );
     }
-    if !entry.stage.file_writers.is_empty() {
+    if !entry.stage.file_write_targets.is_empty() {
         stage.insert(
-            "fileWriters".to_string(),
-            serde_json::to_value(&entry.stage.file_writers)
+            "fileWriteTargets".to_string(),
+            serde_json::to_value(&entry.stage.file_write_targets)
                 .map_err(|err| CompilerError::Message(err.to_string()))?,
         );
     }

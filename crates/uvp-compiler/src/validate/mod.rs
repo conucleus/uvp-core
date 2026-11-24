@@ -131,7 +131,7 @@ pub(crate) fn validate_zhixu_shape(definition: &ZhixuDefinition) -> Vec<String> 
                 issues.push(issue);
             }
         }
-        issues.extend(validate_file_writers(stage, &stage_names));
+        issues.extend(validate_file_write_targets(stage, &stage_names));
         if stage.source.trim().is_empty() {
             issues.push(format!(
                 "spec.stages[{stage_index}].source must be non-empty"
@@ -180,35 +180,35 @@ fn is_plain_source_identifier(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
-fn validate_file_writers(stage: &ZhixuStage, stage_names: &BTreeSet<&str>) -> Vec<String> {
+fn validate_file_write_targets(stage: &ZhixuStage, stage_names: &BTreeSet<&str>) -> Vec<String> {
     let mut issues = Vec::new();
     let mut seen = BTreeSet::new();
-    for writer in &stage.file_writers {
-        if writer.trim().is_empty() {
+    for target in &stage.file_write_targets {
+        if target.trim().is_empty() {
             issues.push(format!(
-                "{}.fileWriters contains an empty stage reference",
+                "{}.fileWriteTargets contains an empty stage reference",
                 stage.name
             ));
             continue;
         }
-        if writer == &stage.name {
+        if target == &stage.name {
             issues.push(format!(
-                "{}.fileWriters must not reference the declaring stage itself (self is implicit)",
+                "{}.fileWriteTargets must not reference the declaring stage itself (self is implicit)",
                 stage.name
             ));
             continue;
         }
-        if !stage_names.contains(writer.as_str()) {
+        if !stage_names.contains(target.as_str()) {
             issues.push(format!(
-                "{}.fileWriters references unknown stage {}",
-                stage.name, writer
+                "{}.fileWriteTargets references unknown stage {}",
+                stage.name, target
             ));
             continue;
         }
-        if !seen.insert(writer.as_str()) {
+        if !seen.insert(target.as_str()) {
             issues.push(format!(
-                "{}.fileWriters contains duplicate writer stage {}",
-                stage.name, writer
+                "{}.fileWriteTargets contains duplicate target stage {}",
+                stage.name, target
             ));
         }
     }

@@ -36,7 +36,7 @@
 | 触发建单 / 订单号派生 | §4 `sendSignals[].trigger` 行 → §6.1–§6.4 → §8.2 |
 | 跨秩序协作 | §1 三轴表 → §7 → §8 |
 | 定义被编译器拒绝 | 出错字段所在章（§4/§5/§7）的约束行 |
-| 文件资源 / 写入模式 | §4 `fileResources`/`fileWriters` 行 → §4.1 四模式 |
+| 文件资源 / 写入模式 | §4 `fileResources`/`fileWriteTargets` 行 → §4.1 四模式 |
 | 计划要上链 / 两轨行为对照 | 链轨实现层 `uvp-chain.md`（阶段物化门详述、出生提交通道、链上编译规则、附录 B 对照矩阵） |
 | 投递没发生 / 运行期解析 | `uvp-cloud.md`（云轨时序红线与运行期执行者解析） |
 
@@ -74,7 +74,7 @@
 
 ### 2.1 内容派生身份（uid）
 
-定义身份是内容派生 uid `zx-<32hex>`——preimage 为定义文档 canonical JSON 剔除**展示字段与非逻辑选择器**（`metadata.name`、`metadata.annotations`、`metadata.labels`、`spec.platform`、`spec.nucleation`）后的形态，`keccak256("uvp:definition-uid:v2:" + canonical)` 取摘要前 32 hex。`spec.stages`、`spec.stages[].sendSignals`/`receiveSignals`/`executor`/`fileWriters` 等定义逻辑的内容照常参与派生；`spec.platform` 的 `type`/`provider`/`network`/`version`/`params`、`spec.nucleation` 的 `id`/`params` 与 `metadata.labels` 一律不进入 preimage。因此同一份 Zhixu 逻辑在云轨与链轨之间移植（例如 `platform.type: cloud` ↔ `blockchain`、换 `network`、换 `nucleation.id`、换 labels）得到**完全相同**的 `definitionUid`，Dock 里的 `from.zhixu`/`to.zhixu` 引用无需随之更新；链轨 `planHash` 仍把 `platform` 纳入产物承诺（§3.2），跨轨/跨网移植会生成新的链轨 plan 身份，但定义 uid 不变。同一内容跨环境、跨轨得到同一 uid：重复发布是幂等 no-op，内容一变即新身份——不存在「重发布一个定义」的概念。唯一限定（YAML 裸标量）：「同一内容」以装载器解析后的结果为准——裸标量（`010`、`Y`/`yes`/`on`、`0b101`、`1_000` 一类）在 Rust / TS / Go 三轨装载器下解析结果真分歧（`uvp-core` `fixtures/yaml/yaml-scalar-parity.v1.json` 语料逐格钉住），同一 YAML 文件跨轨可派生出不同 uid；值位书写一律用带引号字符串是作者纪律（对照行见 `uvp-chain.md` 附录 B）。DSL 壳不携带任何身份——`metadata.uid` 一旦出现即按未知字段响亮拒绝（uvp-core `deny_unknown_fields` 口径），uid 恒由发布方按内容派生后写入，作者不手写。权威实现是 Rust `uvp_ir::derive_definition_uid`（domain 常量 `uvp:definition-uid:v2`）；链轨 TS 编译器同公式、共享金向量互钉（见 `uvp-chain.md`）。日志与错误消息按 `name(uid前8hex)` 渲染。云轨运行时零哈希，机器面寻址键即该 uid；跨秩序引用一律按 uid 精确指向（§7.2）。
+定义身份是内容派生 uid `zx-<32hex>`——preimage 为定义文档 canonical JSON 剔除**展示字段与非逻辑选择器**（`metadata.name`、`metadata.annotations`、`metadata.labels`、`spec.platform`、`spec.nucleation`）后的形态，`keccak256("uvp:definition-uid:v2:" + canonical)` 取摘要前 32 hex。`spec.stages`、`spec.stages[].sendSignals`/`receiveSignals`/`executor`/`fileWriteTargets` 等定义逻辑的内容照常参与派生；`spec.platform` 的 `type`/`provider`/`network`/`version`/`params`、`spec.nucleation` 的 `id`/`params` 与 `metadata.labels` 一律不进入 preimage。因此同一份 Zhixu 逻辑在云轨与链轨之间移植（例如 `platform.type: cloud` ↔ `blockchain`、换 `network`、换 `nucleation.id`、换 labels）得到**完全相同**的 `definitionUid`，Dock 里的 `from.zhixu`/`to.zhixu` 引用无需随之更新；链轨 `planHash` 仍把 `platform` 纳入产物承诺（§3.2），跨轨/跨网移植会生成新的链轨 plan 身份，但定义 uid 不变。同一内容跨环境、跨轨得到同一 uid：重复发布是幂等 no-op，内容一变即新身份——不存在「重发布一个定义」的概念。唯一限定（YAML 裸标量）：「同一内容」以装载器解析后的结果为准——裸标量（`010`、`Y`/`yes`/`on`、`0b101`、`1_000` 一类）在 Rust / TS / Go 三轨装载器下解析结果真分歧（`uvp-core` `fixtures/yaml/yaml-scalar-parity.v1.json` 语料逐格钉住），同一 YAML 文件跨轨可派生出不同 uid；值位书写一律用带引号字符串是作者纪律（对照行见 `uvp-chain.md` 附录 B）。DSL 壳不携带任何身份——`metadata.uid` 一旦出现即按未知字段响亮拒绝（uvp-core `deny_unknown_fields` 口径），uid 恒由发布方按内容派生后写入，作者不手写。权威实现是 Rust `uvp_ir::derive_definition_uid`（domain 常量 `uvp:definition-uid:v2`）；链轨 TS 编译器同公式、共享金向量互钉（见 `uvp-chain.md`）。日志与错误消息按 `name(uid前8hex)` 渲染。云轨运行时零哈希，机器面寻址键即该 uid；跨秩序引用一律按 uid 精确指向（§7.2）。
 
 ### 2.2 事实不可改写与 first-win
 
@@ -140,7 +140,7 @@ Dock 是独立文档，不在 `Zhixu.spec` 内：`apiVersion: uvp/v0` + `kind: D
 |---|---|---|---|
 | `spec.stages` | `array` | 是 | 至少 1 个。 |
 | `spec.stages[].name` | `string` | 是 | 秩序内全局不可重复。 |
-| `spec.stages[].fileWriters` | `[]string` | 否 | 跨阶段文件写 **stage 级 allowlist**：每项引用本定义内另一个阶段名，表示该阶段获准写本阶段的文件映射；本阶段自身隐式可写，不得自引用。项须真实存在、不得重复；运行期以 writer 阶段在本订单的**当前 assigned supplier** 作为写权主体（换执行者即换写权），直接复用阶段 supplier 授权——不生成独立 capability 或专用 writer 证明。字段参与定义身份派生（§2.1）；文件写入的四种运行期模式见 §4.1。 |
+| `spec.stages[].fileWriteTargets` | `[]string` | 否 | 跨阶段文件写 **stage 级 allowlist**（"我能写谁"，与 `selectedStages` 同构）：每项引用本定义内另一个阶段名，表示本阶段获准写该目标阶段的文件映射；本阶段自身隐式可写，不得自引用。项须真实存在、不得重复；运行期以 writer 阶段在本订单的**当前 assigned supplier** 作为写权主体（换执行者即换写权），直接复用阶段 supplier 授权。字段参与定义身份派生（§2.1）；文件写入的四种运行期模式见 §4.1。 |
 
 **Dock 文档**（独立于 Zhixu）：`kind: Dock` 的 `spec.from`/`spec.to`/`spec.signalMap` 声明静态 A→B 发射条件，完整语义见 §7.2。
 
@@ -183,10 +183,10 @@ onchain 实现层的附加接受域见 `uvp-chain.md`（uvp-eth 根）：
 
 ### 4.1 文件资源与写入模式（四模式）
 
-`fileResources` 是资源声明，不是文件内容协议；`fileWriters` 是阶段级写授权引用。二者在共享层的职责严格限于：
+`fileResources` 是资源声明，不是文件内容协议；`fileWriteTargets` 是阶段级写授权引用。二者在共享层的职责严格限于：
 
 - `fileResources.<key>`：必须是对象，且 `fileType` 为非空字符串。`fileType` 对 uvp-core 完全 opaque（开放值域、不做枚举或 type-specific 校验）；条目其余键是应用自定义 opaque payload，core 原样透传，不读取、不校验、不哈希。
-- `fileWriters`：每项引用本定义内的另一个阶段名，必须存在、不可重复、不可自指；本阶段自身隐式可写。它只声明"哪个阶段的当前 assigned supplier 可以写本阶段的文件映射"。
+- `fileWriteTargets`：每项引用本定义内的另一个阶段名，必须存在、不可重复、不可自指；本阶段自身隐式可写。它只声明"本阶段的当前 assigned supplier 可以写哪些目标阶段的文件映射"。
 
 写权在运行期直接复用阶段 supplier 授权：writer 阶段在本订单的当前 assigned supplier/role 即写权主体，换执行者即换写权。共享层不生成独立 capability、专用 writer 证明或文件哈希。
 
@@ -197,7 +197,7 @@ onchain 实现层的附加接受域见 `uvp-chain.md`（uvp-eth 根）：
 | bare signal | 仅 signal | 普通信号提交，不触碰文件映射。 |
 | bare file | 仅 `{key, payload}` | 只落文件写入；不是业务 signal，不计信号数、不跑 admission/hook。 |
 | atomic signal+file | signal 与 `{key, payload}` 同笔 | 信号与文件写入原子生效（全成或全不成）；signal 仍按 §6 管线判定与推进。 |
-| `fileWriters` 跨阶段写 | writer 阶段提交 `{key, payload}` | 目标阶段 `fileWriters` 含该 writer 阶段时获准写目标文件映射；授权复用 writer 阶段的 assigned supplier。 |
+| `fileWriteTargets` 跨阶段写 | writer 阶段提交 `{key, payload}` | writer 阶段 `fileWriteTargets` 含该目标阶段时获准写目标文件映射；授权复用 writer 阶段的 assigned supplier。 |
 
 三层职责落点：uvp-core 只做上述声明/引用校验（Layer 1）；轨道运行期提供四模式与 supplier 授权（Layer 2）；应用仓解释 opaque payload 的业务含义（Layer 3，例如内部餐券/凭据）。文件正文的版本、完整性与冲突策略归应用层/轨道存储；共享层不定义文件操作状态机、rolling/双重哈希或专用文件证明。Dock binding 的载荷摘要见 §7.4，与本节的文件写入无关。
 
@@ -700,7 +700,7 @@ spec:
 | `stage.name` | string | 是 | 秩序内唯一 | §4 |
 | `stage.source` | string | 是 | ≤36B plain identifier | §4 |
 | `stage.selectedStages` | []string | 否 | `{stage}` 真实存在 | §4 |
-| `stage.fileWriters` | []string | 否 | 引用本定义其他阶段名（唯一、不自指）；stage 级文件写 allowlist，写权复用 writer 阶段当前 assigned supplier 的阶段授权 | §4/§4.1 |
+| `stage.fileWriteTargets` | []string | 否 | 引用本定义其他阶段名（唯一、不自指）；stage 级文件写 allowlist，写权复用 writer 阶段当前 assigned supplier 的阶段授权 | §4/§4.1 |
 | `stage.sendSignals[].name` | string | 是 | 裸名或两段式自指全名，归一唯一 | §4 |
 | `stage.sendSignals[].validWhen` | []string | 否 | 发射适格（过滤档）；每项完整 `{source}::{condition}`，header source 必须等于所属阶段 `source`（禁止跨 source） | §5.6 |
 | `stage.sendSignals[].trigger` | bool | 否 | `true` = 出生信号；条目须 ∈ sendSignals、同阶段不重复、编译期固定 | §4/§6 |

@@ -72,35 +72,34 @@ pub struct ZhixuStage {
     /// (never interpreted, hashed, or reduced to file-op state).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_resources: BTreeMap<String, Value>,
-    /// Stage-level file-write allowlist: references to other stages in this
-    /// definition (self is implicit). Run-time authorization reuses the writer
-    /// stage's assigned supplier/role; the shared layer emits no capability or
-    /// Merkle material for it.
+    /// Stage-level file-write target allowlist: references to other stages in this
+    /// definition whose files this stage may write (self is implicit). Run-time
+    /// authorization reuses this stage's assigned supplier/role.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "deserialize_file_writers"
+        deserialize_with = "deserialize_file_write_targets"
     )]
-    pub file_writers: Vec<String>,
+    pub file_write_targets: Vec<String>,
 }
 
-fn deserialize_file_writers<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+fn deserialize_file_write_targets<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let raw = Vec::<Value>::deserialize(deserializer)?;
-    let mut writers = Vec::with_capacity(raw.len());
+    let mut targets = Vec::with_capacity(raw.len());
     for (index, entry) in raw.into_iter().enumerate() {
         match entry {
-            Value::String(writer) => writers.push(writer),
+            Value::String(target) => targets.push(target),
             other => {
                 return Err(serde::de::Error::custom(format!(
-                    "spec.stages[].fileWriters[{index}] must be a stage-name string, found {other}"
+                    "spec.stages[].fileWriteTargets[{index}] must be a stage-name string, found {other}"
                 )))
             }
         }
     }
-    Ok(writers)
+    Ok(targets)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

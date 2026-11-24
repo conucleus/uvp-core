@@ -219,27 +219,27 @@ fn file_resource_payload_is_opaque_and_forwarded_unchanged() {
 }
 
 #[test]
-fn file_writers_are_stage_references_with_no_shared_capability_material() {
+fn file_write_targets_are_stage_references_with_no_shared_capability_material() {
     let mut definition = target_payment_definition();
-    definition["spec"]["stages"][0]["fileWriters"] = json!(["control", "settle"]);
+    definition["spec"]["stages"][0]["fileWriteTargets"] = json!(["control", "settle"]);
 
-    let analysis = compile_zhixu_analysis(&definition).expect("stage writer refs must compile");
+    let analysis = compile_zhixu_analysis(&definition).expect("stage target refs must compile");
     assert_eq!(
-        analysis["stages"][0]["fileWriters"],
+        analysis["stages"][0]["fileWriteTargets"],
         json!(["control", "settle"])
     );
     assert!(
         analysis.get("fileWriterCapabilities").is_none(),
-        "fileWriters must not synthesize a separate capability table"
+        "fileWriteTargets must not synthesize a separate capability table"
     );
 
-    let artifact = compile_cloud_artifact(&definition).expect("stage writer refs must compile");
+    let artifact = compile_cloud_artifact(&definition).expect("stage target refs must compile");
     assert_eq!(
-        artifact["stages"][0]["fileWriters"],
+        artifact["stages"][0]["fileWriteTargets"],
         json!(["control", "settle"])
     );
 
-    for (label, writers, expected) in [
+    for (label, targets, expected) in [
         ("self", json!(["init"]), "self is implicit"),
         (
             "unknown",
@@ -249,22 +249,22 @@ fn file_writers_are_stage_references_with_no_shared_capability_material() {
         (
             "duplicate",
             json!(["control", "control"]),
-            "duplicate writer stage control",
+            "duplicate target stage control",
         ),
         ("empty", json!([""]), "empty stage reference"),
     ] {
         let mut invalid = target_payment_definition();
-        invalid["spec"]["stages"][0]["fileWriters"] = writers;
+        invalid["spec"]["stages"][0]["fileWriteTargets"] = targets;
         let error = compile_zhixu_analysis(&invalid)
             .err()
-            .unwrap_or_else(|| panic!("{label} fileWriters must be rejected"));
+            .unwrap_or_else(|| panic!("{label} fileWriteTargets must be rejected"));
         assert!(error.to_string().contains(expected), "{label}: {error}");
     }
 
     let mut non_string = target_payment_definition();
-    non_string["spec"]["stages"][0]["fileWriters"] = json!(["control", 7]);
+    non_string["spec"]["stages"][0]["fileWriteTargets"] = json!(["control", 7]);
     let error = compile_zhixu_analysis(&non_string)
-        .expect_err("fileWriters entries must be stage-name strings");
+        .expect_err("fileWriteTargets entries must be stage-name strings");
     assert!(
         error.to_string().contains("must be a stage-name string"),
         "{error}"
