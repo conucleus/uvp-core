@@ -209,15 +209,6 @@ fn file_resource_shape_issue(path: &str, key: &str, resource: &Value) -> Option<
     }
 }
 
-pub(crate) fn is_definition_uid(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 35
-        && bytes.starts_with(b"zx-")
-        && bytes[3..]
-            .iter()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
-}
-
 pub(crate) fn is_name_slug(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.is_empty() || bytes.len() > MAX_IDENTIFIER_BYTES || !bytes[0].is_ascii_lowercase() {
