@@ -45,6 +45,10 @@ exports.parseHook = function parseHook(request) {
   return unwrap(native.parseHookJson(JSON.stringify(request)));
 };
 
+exports.analyzeDock = function analyzeDock(request) {
+  return unwrap(native.analyzeDockJson(JSON.stringify(request)));
+};
+
 exports.evaluateHook = function evaluateHook(request) {
   return unwrap(native.evalCompiledHookJson(JSON.stringify(request)));
 };

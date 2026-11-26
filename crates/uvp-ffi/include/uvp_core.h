@@ -7,6 +7,11 @@ extern "C" {
 
 char* uvp_compile_json(const char* request_json);
 char* uvp_parse_hook_json(const char* request_json);
+/* 静态 Dock 文档分析：请求为 {"dock": <Dock 文档>, "published": [{"uid":
+ * "zx-<32hex>", "definition": <Zhixu 文档>}...]}；响应信封同其余
+ * uvp_*_json，value 为 uvp.dock.v1 编译产物（dkid/docHash/from/to/signalMap
+ * 含 resolved ids、rawExpression、validWhen AST、dependencies 与 atoms）。 */
+char* uvp_analyze_dock_json(const char* request_json);
 char* uvp_eval_compiled_hook_json(const char* request_json);
 char* uvp_replay_json(const char* request_json);
 /* 云轨重放走带：请求为 {"ast": <cloudAst.v1>, "facts": [{"signalName":

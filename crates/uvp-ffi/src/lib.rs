@@ -55,6 +55,13 @@ pub extern "C" fn uvp_parse_hook_json(request_json: *const c_char) -> *mut c_cha
 }
 
 #[no_mangle]
+pub extern "C" fn uvp_analyze_dock_json(request_json: *const c_char) -> *mut c_char {
+    into_c_string(guard_ffi_panic("uvp_analyze_dock_json", || {
+        uvp_compiler::analyze_dock_json(&to_rust_string(request_json))
+    }))
+}
+
+#[no_mangle]
 pub extern "C" fn uvp_eval_compiled_hook_json(request_json: *const c_char) -> *mut c_char {
     into_c_string(guard_ffi_panic("uvp_eval_compiled_hook_json", || {
         uvp_hook_dsl::eval_compiled_hook_json(&to_rust_string(request_json))

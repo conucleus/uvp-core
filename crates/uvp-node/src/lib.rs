@@ -26,6 +26,13 @@ pub fn parse_hook_json(request_json: String) -> Result<String> {
 }
 
 #[napi]
+pub fn analyze_dock_json(request_json: String) -> Result<String> {
+    run_json("analyzeDockJson", || {
+        uvp_compiler::analyze_dock_json(&request_json)
+    })
+}
+
+#[napi]
 pub fn eval_compiled_hook_json(request_json: String) -> Result<String> {
     run_json("evalCompiledHookJson", || {
         uvp_hook_dsl::eval_compiled_hook_json(&request_json)

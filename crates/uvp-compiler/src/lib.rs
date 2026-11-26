@@ -1,8 +1,9 @@
 //! uvp-compiler：定义到中性分析（`analyze`）与云侧产物（`cloud artifact`）的
 //! 编译器。链轨 hook_plan lowering 归链轨 TS 编译器，本 crate 不产出该产物。
-//! crate 根只保留编译入口（compile_json/compile_request）、
+//! crate 根只保留编译入口（compile_json/compile_request/analyze_dock_json）、
 //! supplier 尺寸校验入口、请求信封与公共导出；生产逻辑见 `validate/`、
-//! `lower/`、`artifact/` 与 `lint.rs`。
+//! `lower/`、`artifact/`、`dock.rs`（Dock 文档校验与 `uvp.dock.v1` 产物）
+//! 与 `lint.rs`。
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -10,7 +11,9 @@ use thiserror::Error;
 
 pub use analysis::compile_zhixu_analysis;
 pub use artifact::compile_cloud_artifact;
+pub use dock::{compile_dock_artifact, DOCK_ARTIFACT_SCHEMA_VERSION};
 
+pub mod dock;
 pub mod lint;
 
 mod analysis;
@@ -65,6 +68,13 @@ pub struct CompileRequest {
     pub definition: Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AnalyzeDockRequest {
+    pub dock: Value,
+    pub published: Value,
+}
+
 fn default_target() -> String {
     "analyze".to_string()
 }
@@ -73,6 +83,16 @@ pub fn compile_json(input: &str) -> String {
     let result = serde_json::from_str::<CompileRequest>(input)
         .map_err(|err| CompilerError::Message(format!("invalid compile request: {err}")))
         .and_then(|req| compile_request(&req));
+    envelope_json(result)
+}
+
+pub fn analyze_dock_json(input: &str) -> String {
+    let result = serde_json::from_str::<AnalyzeDockRequest>(input)
+        .map_err(|err| CompilerError::Message(format!("invalid analyze dock request: {err}")))
+        .and_then(|req| {
+            dock::compile_dock_artifact(&req.dock, &req.published)
+                .map_err(|issues| dock::dock_error(&issues))
+        });
     envelope_json(result)
 }
 
